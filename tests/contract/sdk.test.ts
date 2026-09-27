@@ -287,3 +287,26 @@ test('TS events() accepts a custom pollIntervalMs and still streams events', asy
   }
   assert.equal(seen, 1);
 });
+
+test('TS events() waits pollIntervalMs between empty polls instead of the 50ms default', async (t) => {
+  const orch = await fixture(t);
+  let reads = 0;
+  const transport = orch as unknown as {
+    call: (...args: [string, ...unknown[]]) => Promise<unknown>;
+  };
+  const innerCall = transport.call.bind(orch);
+  transport.call = async (...args) => {
+    if (args[0] === 'events.read') reads += 1;
+    return innerCall(...args);
+  };
+  const abort = AbortSignal.timeout(300);
+  await assert.rejects(
+    (async () => {
+      for await (const _event of orch.events({ pollIntervalMs: 60000, signal: abort })) {
+        // unreachable: the store is empty, so the 300ms abort ends the loop
+      }
+    })(),
+    { code: 'ABORTED' },
+  );
+  assert.equal(reads, 1);
+});
