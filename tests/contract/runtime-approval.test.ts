@@ -11,6 +11,7 @@ for (const allow of [true, false])
     await mkdir(join(dir, 'workspace'));
     await mkdir(join(dir, 'state'));
     const adapter = createCodexAdapter({
+      executionStop: 'owner-reconcile',
       command: process.execPath,
       args: [fileURLToPath(new URL('../fixtures/codex-approval.ts', import.meta.url))],
     });

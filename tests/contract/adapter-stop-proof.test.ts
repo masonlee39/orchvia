@@ -66,7 +66,8 @@ test('0027-A02 owner reconciliation is an explicit choice and excludes an observ
 
 test('0027-A03 a writable Codex adapter needs the same proof', () => {
   assert.throws(() => codex({ permissionProfile: 'workspace-write' }), refused);
-  assert.equal(covers(codex({})), true);
+  // SPEC-0034 A01 supersedes the read-only coverage this test once asserted here.
+  assert.throws(() => codex({}), refused);
   assert.equal(
     covers(codex({ permissionProfile: 'workspace-write', observeExecutionStop: observer })),
     true,

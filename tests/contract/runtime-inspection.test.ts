@@ -13,6 +13,7 @@ test('AC-F11 Codex inspection reads original thread using owned stdio without re
   await mkdir(join(dir, 'workspace'));
   await mkdir(join(dir, 'state'));
   const adapter = createCodexAdapter({
+    executionStop: 'owner-reconcile',
     command: process.execPath,
     args: [fileURLToPath(new URL('../fixtures/codex-inspection.ts', import.meta.url))],
   });

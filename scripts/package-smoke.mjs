@@ -208,7 +208,7 @@ console.log('without-peers-ok');`,
         `import assert from 'node:assert/strict';
 import {createCodexAdapter} from '@orchvia/adapter-codex';
 import {ORCHESTRATION_TOOLS} from '@orchvia/engine/internal/tools';
-const adapter=createCodexAdapter({command:process.execPath,args:[${JSON.stringify(join(isolated, 'peer.mjs'))}]});
+const adapter=createCodexAdapter({executionStop:'owner-reconcile',command:process.execPath,args:[${JSON.stringify(join(isolated, 'peer.mjs'))}]});
 const calls=[];const events=[];
 try{for await(const event of adapter.execute({taskId:'task',sessionId:'session',dispatchId:'dispatch',providerSessionId:null,model:'fixture',workspace:${JSON.stringify(join(isolated, 'work'))},stateDir:${JSON.stringify(join(isolated, 'state'))},permissionProfile:'read-only',prompt:'offline tools',signal:new AbortController().signal,orchestrationTools:{definitions:ORCHESTRATION_TOOLS,async call(name){calls.push(name);return {ok:true};}}}))events.push(event);
 assert.equal(events.at(-1).type,'result',JSON.stringify(events));assert.equal(calls.length,4);console.log('bridge-ok');}finally{await adapter.close();}`,

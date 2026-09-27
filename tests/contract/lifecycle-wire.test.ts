@@ -437,6 +437,7 @@ for (const stalledAt of ['initialize', 'turn-start']) {
               requestTimeoutMs: 10000,
               turnTimeoutMs: 10000,
               closeTimeoutMs: 40,
+              executionStop: 'owner-reconcile',
             },
           },
           storage: { emergencyBytes: 4096 },

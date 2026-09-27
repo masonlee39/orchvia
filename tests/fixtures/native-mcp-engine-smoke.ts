@@ -41,6 +41,8 @@ const adapter =
           }),
       })
     : createCodexAdapter({
+        // Offline fixture commands never outlive their turn (SPEC-0034 A01).
+        observeExecutionStop: async () => true,
         command: process.execPath,
         args: [fileURLToPath(new URL('./codex-tools.ts', import.meta.url)), '--engine-tools'],
       });

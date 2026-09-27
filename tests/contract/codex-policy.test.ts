@@ -111,7 +111,14 @@ test('AC-P04 JSON CLI accepts explicit Codex network/search while host callbacks
   const base = {
     workspace,
     stateDir,
-    providers: { codex: { model: 'offline', networkAccess: true, webSearch: 'cached' } },
+    providers: {
+      codex: {
+        model: 'offline',
+        networkAccess: true,
+        webSearch: 'cached',
+        executionStop: 'owner-reconcile',
+      },
+    },
   };
   try {
     await writeFile(path, JSON.stringify(base));

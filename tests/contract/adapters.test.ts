@@ -177,7 +177,11 @@ readline.createInterface({input: process.stdin}).on('line', line => {
 });`;
 
 function codex(mode: string) {
-  return createCodexAdapter({ command: process.execPath, args: ['-e', fixture, mode] });
+  return createCodexAdapter({
+    executionStop: 'owner-reconcile',
+    command: process.execPath,
+    args: ['-e', fixture, mode],
+  });
 }
 
 test('AC adapter Codex: handshake, thread and turn ack, deduplicated usage, terminal result', async () => {
@@ -285,7 +289,10 @@ test('AC adapter Codex: interrupt requires observed interrupted terminal notific
 });
 
 test('AC adapter Codex: unsupported write profile does not spawn app-server', async () => {
-  const adapter = createCodexAdapter({ command: '/nonexistent/codex' });
+  const adapter = createCodexAdapter({
+    executionStop: 'owner-reconcile',
+    command: '/nonexistent/codex',
+  });
   assert.equal(adapter.capabilities().interrupt, true);
   assert.deepEqual(
     await collect(adapter.execute(input({ permissionProfile: 'workspace-write' }))),
@@ -298,6 +305,7 @@ test('AC adapter Codex: isolated managed home and defensive flags override inher
   const capture = join(dir, 'capture.json');
   try {
     const adapter = createCodexAdapter({
+      executionStop: 'owner-reconcile',
       command: process.execPath,
       args: ['-e', fixture, 'complete'],
       env: {
@@ -332,7 +340,10 @@ test('AC adapter Codex: refuses modified managed configuration before spawn', as
     await mkdir(home, { recursive: true });
     await writeFile(join(home, 'config.toml'), '[mcp_servers.writer]\ncommand="touch"\n');
     const events = await collect(
-      createCodexAdapter({ command: '/nonexistent/codex' }).execute(input({ stateDir: dir })),
+      createCodexAdapter({
+        executionStop: 'owner-reconcile',
+        command: '/nonexistent/codex',
+      }).execute(input({ stateDir: dir })),
     );
     assert.equal(events.length, 1);
     assert.equal((events[0] as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'failed');
@@ -351,6 +362,7 @@ async function stalledCodex(t: TestContext, mode: string) {
     capture = join(dir, 'child.json');
   const clock = controlledExecutionBudget();
   const adapter = createCodexAdapter({
+    executionStop: 'owner-reconcile',
     command: process.execPath,
     args: ['-e', fixture, mode],
     env: {
@@ -418,6 +430,7 @@ test('AC adapter Codex: request and terminal waits are bounded with unknown afte
 test('AC adapter Codex: excessive uncorrelated messages fail bounded queue', async () => {
   const events = await collect(
     createCodexAdapter({
+      executionStop: 'owner-reconcile',
       command: process.execPath,
       args: ['-e', fixture, 'flood'],
       requestTimeoutMs: 1000,

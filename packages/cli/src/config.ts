@@ -171,9 +171,15 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
           'requestTimeoutMs',
           'turnTimeoutMs',
           'closeTimeoutMs',
+          'executionStop',
         ],
         'codex provider',
       );
+      // SPEC-0034 A01: a JSON host cannot pass a stop observer, so it must choose owner reconcile.
+      if (settings.executionStop !== 'owner-reconcile')
+        invalid(
+          "codex.executionStop must be 'owner-reconcile': a Codex command can outlive its turn, so a JSON host releases leases by owner reconciliation",
+        );
       if (settings.permissionProfile === 'workspace-write')
         invalid(
           'Codex JSON host supports read-only; workspace-write requires embedded host stop observation',

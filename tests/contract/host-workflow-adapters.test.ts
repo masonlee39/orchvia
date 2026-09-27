@@ -33,11 +33,11 @@ const scripted = () =>
 
 test('0014-P01 adapters use a configured provider name everywhere', async () => {
   assert.equal(createClaudeAdapter().provider, 'claude');
-  assert.equal(createCodexAdapter().provider, 'codex');
+  assert.equal(createCodexAdapter({ executionStop: 'owner-reconcile' }).provider, 'codex');
   const claude = createClaudeAdapter({ provider: 'claude-write', query: scripted() });
   assert.equal(claude.provider, 'claude-write');
   assert.equal(claude.capabilities().provider, 'claude-write');
-  const codex = createCodexAdapter({ provider: 'codex.b' });
+  const codex = createCodexAdapter({ executionStop: 'owner-reconcile', provider: 'codex.b' });
   assert.equal(codex.provider, 'codex.b');
   assert.equal(codex.capabilities().provider, 'codex.b');
   for (const provider of ['', ' claude', '-claude', 'claude write', 'x'.repeat(129), 7])
@@ -243,7 +243,10 @@ test('0014-F02 read fence configuration is validated and declared', async () => 
       code: 'INVALID_ADAPTER_CONFIG',
     });
   assert.equal(createClaudeAdapter().capabilities().readFence, true);
-  assert.equal(createCodexAdapter().capabilities().readFence, false);
+  assert.equal(
+    createCodexAdapter({ executionStop: 'owner-reconcile' }).capabilities().readFence,
+    false,
+  );
 });
 
 test('0014-F03 the writable sandbox denies home reads except the workspace and read roots', async () => {

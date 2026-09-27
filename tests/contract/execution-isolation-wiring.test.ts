@@ -221,7 +221,12 @@ test('A2 CLI accepts and validates quarantine capacity without overriding explic
   );
   assert.equal((await loadConfig(path)).limits?.maxQuarantinedDispatches, 1);
   for (const provider of ['claude', 'codex']) {
-    const settings = { model: 'fixture', requestTimeoutMs: 100, turnTimeoutMs: 300000 };
+    const settings = {
+      model: 'fixture',
+      requestTimeoutMs: 100,
+      turnTimeoutMs: 300000,
+      ...(provider === 'codex' ? { executionStop: 'owner-reconcile' } : {}),
+    };
     await writeFile(path, JSON.stringify({ ...base, providers: { [provider]: settings } }));
     assert.deepEqual((await loadConfig(path)).providers[provider], settings);
   }
@@ -281,7 +286,13 @@ test(
         JSON.stringify({
           workspace: join(root, 'workspace'),
           stateDir: join(root, 'state'),
-          providers: { [provider]: { model: 'fixture', ...settings } },
+          providers: {
+            [provider]: {
+              model: 'fixture',
+              ...(provider === 'codex' ? { executionStop: 'owner-reconcile' } : {}),
+              ...settings,
+            },
+          },
         }),
       );
     await write('claude', { cleanupTimeoutMs: 17 });
