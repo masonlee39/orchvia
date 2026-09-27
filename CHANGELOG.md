@@ -2,7 +2,7 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [0.1.12] - 2026-09-27
+## [0.1.12] - 2026-09-28
 
 Stop marker proofs kept until the host acknowledges them, and one synchronous cleanup per host directory.
 
