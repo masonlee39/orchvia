@@ -2,9 +2,9 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.9] - 2026-09-27
 
-Claude Agent SDK 0.3.277 and later: usage of a resumed or forked Claude session.
+Usage of resumed and forked Claude sessions on Claude Agent SDK 0.3.277 and later, indexed cost queries, the retention status, cache write prices by duration, the TypeScript polling interval and typed Python results.
 
 ### Fixed
 
