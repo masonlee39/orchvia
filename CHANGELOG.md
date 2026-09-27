@@ -2,7 +2,7 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.11] - 2026-09-27
 
 Stop markers that survive a host restart.
 
