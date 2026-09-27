@@ -257,11 +257,16 @@ test(
     const markers = new StopMarkers();
     const marker = markers.prepare('refused', '/bin/sh', tmpdir());
     try {
-      assert.equal(spawnSync(marker.wrapper, ['exit 0']).status, 0);
-      await chmod(marker.path, 0o000);
-      assert.equal(spawnSync(marker.wrapper, ['exit 0']).status, 126);
-      await chmod(marker.path, 0o600);
-      assert.equal(spawnSync(marker.wrapper, ['exit 0', 'extra']).status, 126);
+      // Linux's /bin/sh is often dash, where a failed `exec` redirection ends the shell with 2.
+      const shells = ['/bin/sh', '/bin/dash'].filter((shell) => existsSync(shell));
+      for (const shell of shells) {
+        const status = (...args: string[]) => spawnSync(shell, [marker.wrapper, ...args]).status;
+        assert.equal(status('exit 0'), 0, shell);
+        await chmod(marker.path, 0o000);
+        assert.equal(status('exit 0'), 126, shell);
+        await chmod(marker.path, 0o600);
+        assert.equal(status('exit 0', 'extra'), 126, shell);
+      }
       assert.match(await readFile(marker.wrapper, 'utf8'), /exec 9</);
     } finally {
       assert.equal(await markers.endAll(2000), true);
@@ -343,7 +348,7 @@ test(
       await rm(elsewhere, { recursive: true, force: true });
     });
     const earlier = orphan(t, workspace);
-    await delay(2100);
+    await delay(3100);
     const markers = new StopMarkers();
     t.after(() => markers.endAll(1000));
     markers.prepare('before', '/bin/sh', workspace);

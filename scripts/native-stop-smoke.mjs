@@ -221,7 +221,11 @@ async function runCase(name, adapter, model, inspect, afterClose) {
     });
     record.toolOutput = toolOutput;
     // The scripted command must have run: a refused one proves nothing.
-    assert.doesNotMatch(toolOutput ?? '', /denied|tool_use_error|hook error/, name);
+    assert.doesNotMatch(
+      toolOutput ?? '',
+      /denied|tool_use_error|hook error|"is_error":true|exited with code [1-9]|bwrap:/,
+      name,
+    );
     await inspect(record, current);
   } finally {
     await orch.close({ mode: 'interrupt', timeoutMs: 10000 }).catch((error) => {

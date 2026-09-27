@@ -94,8 +94,9 @@ async function strays(marker: StopMarker, timeoutMs: number): Promise<number[] |
     }
     return false;
   };
-  // lstart has one-second resolution; count the whole second in which the dispatch began.
-  const since = Math.floor(marker.startedAt / 1000) * 1000;
+  // lstart has one-second resolution, and Linux derives it from a boot time truncated to the
+  // second, so it can read up to a second early: count from the second before the dispatch's.
+  const since = Math.floor(marker.startedAt / 1000) * 1000 - 1000;
   return candidates.filter((pid) => {
     const row = byPid.get(pid);
     if (!row) return false; // Gone since lsof listed it.
@@ -142,7 +143,8 @@ export class StopMarkers {
       [
         '#!/bin/sh',
         '[ "$#" -eq 1 ] || exit 126',
-        `exec 9<${quote(path)} || exit 126`,
+        // `command` keeps a failed redirection from ending the shell with its own status (dash).
+        `command exec 9<${quote(path)} || exit 126`,
         `exec ${quote(shell)} -c "$1"`,
         '',
       ].join('\n'),
