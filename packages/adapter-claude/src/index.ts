@@ -30,8 +30,12 @@ export { createClaudeMcpServer, type ClaudeMcpDependencies } from './mcp.ts';
 export { inspectClaudeSession, type ClaudeInspectionDependencies } from './inspection.ts';
 export { processGroupsStopped } from './process-groups.ts';
 export {
+  acknowledgeStopMarkers,
+  endStopMarkersSync,
   sweepStopMarkers,
   staleStopMarkers,
+  type StopMarkerAcknowledgement,
+  type StopMarkerRootSyncResult,
   type StopMarkerDispatch,
   type StopMarkerObservation,
   type StopMarkerReason,

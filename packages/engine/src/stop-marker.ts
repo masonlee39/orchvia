@@ -60,6 +60,8 @@ export interface StopMarkerDispatch {
   ended: number;
   strays: number[];
   stopped: boolean;
+  /** SPEC-0037 K: proven stopped by this or an earlier sweep with `keepProven`, and kept. */
+  proven?: true;
   reason?: StopMarkerReason;
 }
 
@@ -77,6 +79,19 @@ export interface StopMarkerSyncResult {
   ended: number;
 }
 
+/** SPEC-0037 Y02: a synchronous cleanup of every instance of this process under a root. */
+export interface StopMarkerRootSyncResult extends StopMarkerSyncResult {
+  /** The instances covered, with how many markers each had. */
+  instances: { instance: string; markers: number }[];
+}
+
+/** SPEC-0037 K03: what `acknowledgeStopMarkers` did with each dispatch it was given. */
+export interface StopMarkerAcknowledgement {
+  removed: string[];
+  refused: { dispatchId: string; reason: 'not_proven' }[];
+  missing: string[];
+}
+
 export interface StopMarkersOptions {
   /** A host directory that outlives the host; each instance works in a directory of its own. */
   root?: string;
@@ -89,6 +104,11 @@ export interface StopMarkersOptions {
 }
 
 export interface StopMarkerSweepOptions {
+  /**
+   * SPEC-0037 K01: keep the files of a dispatch the sweep proves stopped, with a `.proven`
+   * record, until `acknowledgeStopMarkers` removes them. Later sweeps report it proven at once.
+   */
+  keepProven?: boolean;
   /**
    * The whole sweep's time; 5,000 ms by default. A sweep that finds a process that may have
    * dropped a marker looks again every 200 ms while this lasts.
@@ -269,6 +289,77 @@ function listHoldersSync(paths: string[], since: number, timeoutMs: number): num
 }
 
 /**
+ * SPEC-0036 Y01: within `timeoutMs`, lists what holds any of `paths` among the processes started
+ * since `since`, sends SIGTERM, then SIGKILL, and lists again; `stopped` only when that last
+ * listing found none. Never throws.
+ */
+function endHoldersSync(
+  paths: string[],
+  since: number,
+  timeoutMs: number,
+  list: (paths: string[], since: number, timeoutMs: number) => number[] | null,
+): StopMarkerSyncResult {
+  // A little of the time is kept for returning, so that the call ends within `timeoutMs`.
+  const deadline = performance.now() + timeoutMs - 10;
+  const remaining = () => deadline - performance.now();
+  if (!paths.length) return { stopped: true, holders: 0, ended: 0 };
+  const find = (): number[] | null => {
+    if (remaining() < 5) return null;
+    try {
+      return list(paths, since, remaining());
+    } catch {
+      return null;
+    }
+  };
+  const listing = performance.now();
+  const found = find();
+  // What one listing costs; a round starts only when a listing still fits after it.
+  const cost = performance.now() - listing;
+  if (found === null) return { stopped: false, holders: 0, ended: 0 };
+  if (!found.length) return { stopped: true, holders: 0, ended: 0 };
+  const running = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+    }
+  };
+  // Wait only as long as something still runs.
+  const settle = (pids: number[], ms: number) => {
+    const until = Math.min(deadline, performance.now() + ms);
+    while (pids.some(running) && performance.now() < until) sleepSync(5);
+  };
+  const seen = new Set(found);
+  let left: number[] | null = found;
+  // A holder may start another before it ends, so list again until none is left or time is up.
+  for (let round = 0; left?.length; round++) {
+    if (round === 0) {
+      // An exit path: a short grace for SIGTERM, then SIGKILL.
+      signal(left, 'SIGTERM');
+      settle(left, Math.min(40, (remaining() - 2 * cost) / 3));
+    }
+    signal(left.filter(running), 'SIGKILL');
+    settle(left, Math.min(20, (remaining() - cost) / 3));
+    if (remaining() < cost + 5) {
+      // No time to list again: not verified. What is left of the time goes to seeing the
+      // signalled processes exit, so that `ended` counts them.
+      settle(left, remaining() - 2);
+      left = null;
+      break;
+    }
+    left = find();
+    for (const pid of left ?? []) seen.add(pid);
+  }
+  const gone = [...seen].filter((pid) => !running(pid) || (left !== null && !left.includes(pid)));
+  return {
+    stopped: left !== null && !left.length,
+    holders: found.length,
+    ended: Math.min(found.length, gone.filter((pid) => found.includes(pid)).length),
+  };
+}
+
+/**
  * SPEC-0036 D01: a host's marker directory, created private when missing. It must be absolute,
  * a directory and not a symbolic link, owned by this user and writable by no one else. Returns
  * its canonical path; throws otherwise.
@@ -332,6 +423,9 @@ export class StopMarkers {
           JSON.stringify({ version: 1, pid: process.pid, started: own.started }) + '\n',
           { mode: 0o600 },
         );
+        const members = StopMarkers.#byRoot.get(this.#root) ?? new Set<StopMarkers>();
+        members.add(this);
+        StopMarkers.#byRoot.set(this.#root, members);
       }
       this.#directory = directory;
     }
@@ -455,6 +549,7 @@ export class StopMarkers {
       if (!kept) {
         if (existsSync(this.#directory)) rmSync(this.#directory, { recursive: true, force: true });
         this.#directory = undefined;
+        if (this.#root !== undefined) StopMarkers.#byRoot.get(this.#root)?.delete(this);
       }
     }
     return results.every(Boolean);
@@ -467,78 +562,59 @@ export class StopMarkers {
    * stay, so that the next start's sweep can prove each dispatch, workspace check included.
    */
   endAllSync(timeoutMs: number): StopMarkerSyncResult {
-    // A little of the time is kept for returning, so that the call ends within `timeoutMs`.
-    const deadline = performance.now() + timeoutMs - 10;
-    const remaining = () => deadline - performance.now();
     const paths = [...this.#markers.values()].map((marker) => marker.path);
-    const finish = (result: StopMarkerSyncResult) => {
-      report(this.#notify, {
-        kind: 'sync',
-        dispatchId: null,
-        holders: result.holders,
-        ended: result.ended,
-        strays: 0,
-        stopped: result.stopped,
-        ...(result.stopped ? {} : { reason: 'holders_left' as const }),
-      });
-      return result;
-    };
-    if (!paths.length) return finish({ stopped: true, holders: 0, ended: 0 });
-    const since = earliest(this.#startedAt);
-    const find = (): number[] | null => {
-      if (remaining() < 5) return null;
-      try {
-        return this.#listHolders(paths, since, remaining());
-      } catch {
-        return null;
-      }
-    };
-    const listing = performance.now();
-    const found = find();
-    // What one listing costs; a round starts only when a listing still fits after it.
-    const cost = performance.now() - listing;
-    if (found === null) return finish({ stopped: false, holders: 0, ended: 0 });
-    if (!found.length) return finish({ stopped: true, holders: 0, ended: 0 });
-    const running = (pid: number) => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch (error) {
-        return (error as NodeJS.ErrnoException).code !== 'ESRCH';
-      }
-    };
-    // Wait only as long as something still runs.
-    const settle = (pids: number[], ms: number) => {
-      const until = Math.min(deadline, performance.now() + ms);
-      while (pids.some(running) && performance.now() < until) sleepSync(5);
-    };
-    const seen = new Set(found);
-    let left: number[] | null = found;
-    // A holder may start another before it ends, so list again until none is left or time is up.
-    for (let round = 0; left?.length; round++) {
-      if (round === 0) {
-        // An exit path: a short grace for SIGTERM, then SIGKILL.
-        signal(left, 'SIGTERM');
-        settle(left, Math.min(40, (remaining() - 2 * cost) / 3));
-      }
-      signal(left.filter(running), 'SIGKILL');
-      settle(left, Math.min(20, (remaining() - cost) / 3));
-      if (remaining() < cost + 5) {
-        // No time to list again: not verified. What is left of the time goes to seeing the
-        // signalled processes exit, so that `ended` counts them.
-        settle(left, remaining() - 2);
-        left = null;
-        break;
-      }
-      left = find();
-      for (const pid of left ?? []) seen.add(pid);
-    }
-    const gone = [...seen].filter((pid) => !running(pid) || (left !== null && !left.includes(pid)));
-    return finish({
-      stopped: left !== null && !left.length,
-      holders: found.length,
-      ended: Math.min(found.length, gone.filter((pid) => found.includes(pid)).length),
+    const result = endHoldersSync(paths, earliest(this.#startedAt), timeoutMs, this.#listHolders);
+    this.#reportSync(result);
+    return result;
+  }
+
+  #reportSync(result: StopMarkerSyncResult): void {
+    report(this.#notify, {
+      kind: 'sync',
+      dispatchId: null,
+      holders: result.holders,
+      ended: result.ended,
+      strays: 0,
+      stopped: result.stopped,
+      ...(result.stopped ? {} : { reason: 'holders_left' as const }),
     });
+  }
+
+  /** The default lister of `endAllSync`, for a test seam that wraps it. */
+  static readonly listHolders = listHoldersSync;
+
+  static readonly #byRoot = new Map<string, Set<StopMarkers>>();
+
+  /**
+   * SPEC-0037 Y02: `endAllSync` for every instance of this process under `root`, with one listing
+   * for all of their markers. Never throws.
+   */
+  static endAllSyncUnder(root: string, timeoutMs: number): StopMarkerRootSyncResult {
+    const none = { stopped: true, holders: 0, ended: 0, instances: [] };
+    let canonical: string;
+    try {
+      if (typeof root !== 'string' || !isAbsolute(root) || !existsSync(root)) return none;
+      canonical = realpathSync(root);
+    } catch {
+      return { ...none, stopped: false };
+    }
+    const members = [...(StopMarkers.#byRoot.get(canonical) ?? [])].filter(
+      (markers) => markers.#directory !== undefined,
+    );
+    if (!members.length) return none;
+    const paths = members.flatMap((markers) =>
+      [...markers.#markers.values()].map((marker) => marker.path),
+    );
+    const since = Math.min(...members.map((markers) => earliest(markers.#startedAt)));
+    const result = endHoldersSync(paths, since, timeoutMs, members[0]!.#listHolders);
+    for (const markers of members) markers.#reportSync(result);
+    return {
+      ...result,
+      instances: members.map((markers) => ({
+        instance: markers.#directory!,
+        markers: markers.#markers.size,
+      })),
+    };
   }
 }
 
@@ -605,6 +681,8 @@ async function examine(
     for (const tag of readdirSync(instance).filter((file) => file.endsWith('.tag'))) {
       const base = tag.slice(0, -'.tag'.length);
       const meta = dispatchRecord(readJson(join(instance, `${base}.json`)));
+      const proof = join(instance, `${base}.proven`);
+      const files = [tag, `${base}.sh`, `${base}.json`, `${base}.proven`];
       const found: StopMarkerDispatch = {
         dispatchId: meta?.dispatchId ?? null,
         instance,
@@ -616,7 +694,13 @@ async function examine(
       };
       // Without its record an instance may be one being created now: never signalled.
       if (!record) found.reason = 'instance_unknown';
-      else {
+      else if (meta && existsSync(proof)) {
+        // SPEC-0037 K02: proven before; nothing held it then, and no one can take it up now.
+        found.stopped = true;
+        found.proven = true;
+        if (end && !options.keepProven)
+          for (const file of files) rmSync(join(instance, file), { force: true });
+      } else {
         const held = await endHolders(join(instance, tag), remaining, end);
         let left = held.stopped && meta ? await strays(meta, remaining()) : [];
         // The dead host's own runtime, such as Claude Code, can take a moment to notice that its
@@ -641,9 +725,20 @@ async function examine(
                 : !meta
                   ? 'metadata_missing'
                   : 'strays';
-        if (end && found.stopped)
-          for (const file of [tag, `${base}.sh`, `${base}.json`])
-            rmSync(join(instance, file), { force: true });
+        if (end && found.stopped && options.keepProven) {
+          // Invariant 1 (SPEC-0037): the proof is written only once the dispatch is proven.
+          writeFileSync(
+            proof,
+            JSON.stringify({
+              version: 1,
+              dispatchId: meta!.dispatchId,
+              provenAt: new Date().toISOString(),
+            }) + '\n',
+            { mode: 0o600 },
+          );
+          found.proven = true;
+        } else if (end && found.stopped)
+          for (const file of files) rmSync(join(instance, file), { force: true });
       }
       result.dispatches.push(found);
       report(options.onObservation, {
@@ -661,6 +756,62 @@ async function examine(
       rmSync(instance, { recursive: true, force: true });
   }
   result.stopped = result.dispatches.every((dispatch) => dispatch.stopped);
+  return result;
+}
+
+/**
+ * SPEC-0037 K03: removes the files of dispatches that a sweep with `keepProven` proved stopped,
+ * once the host has acted on the proof, and the instance directory when nothing is left in it.
+ * A dispatch not proven is refused; one not found is missing. Removing the marker first means an
+ * interrupted call leaves either a proven dispatch or files without a marker, which the next
+ * sweep removes. Repeating a call changes nothing more. Needs no engine; never touches the root.
+ */
+export function acknowledgeStopMarkers(
+  directory: string,
+  dispatchIds: string[],
+): StopMarkerAcknowledgement {
+  const result: StopMarkerAcknowledgement = { removed: [], refused: [], missing: [] };
+  const wanted = new Set(dispatchIds);
+  const seen = new Set<string>();
+  if (typeof directory !== 'string' || !isAbsolute(directory))
+    throw new Error('The stop marker directory must be an absolute path');
+  if (existsSync(directory)) {
+    const root = checkStopMarkerRoot(directory);
+    let rows: Map<number, ProcessRow> | undefined;
+    try {
+      rows = new Map(processTable().map((row) => [row.pid, row]));
+    } catch {
+      rows = undefined; // Without it no instance is told dead, so none loses its directory.
+    }
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const instance = join(root, entry.name);
+      for (const tag of readdirSync(instance).filter((file) => file.endsWith('.tag'))) {
+        const base = tag.slice(0, -'.tag'.length);
+        const meta = dispatchRecord(readJson(join(instance, `${base}.json`)));
+        if (!meta || !wanted.has(meta.dispatchId)) continue;
+        seen.add(meta.dispatchId);
+        if (!existsSync(join(instance, `${base}.proven`))) {
+          result.refused.push({ dispatchId: meta.dispatchId, reason: 'not_proven' });
+          continue;
+        }
+        // Invariant 2 (SPEC-0037): the marker first, the proof last.
+        for (const file of [tag, `${base}.json`, `${base}.sh`, `${base}.proven`])
+          rmSync(join(instance, file), { force: true });
+        result.removed.push(meta.dispatchId);
+      }
+      const record = instanceRecord(readJson(join(instance, 'instance.json')));
+      // Only a dead instance loses its directory: a live one may mark its next dispatch there.
+      if (
+        record &&
+        rows &&
+        rows.get(record.pid)?.started !== record.started &&
+        !readdirSync(instance).some((file) => file.endsWith('.tag'))
+      )
+        rmSync(instance, { recursive: true, force: true });
+    }
+  }
+  result.missing = dispatchIds.filter((id) => !seen.has(id));
   return result;
 }
 
@@ -684,4 +835,13 @@ export function staleStopMarkers(
   options: StopMarkerSweepOptions = {},
 ): Promise<StopMarkerSweep> {
   return examine(directory, false, options);
+}
+
+/**
+ * SPEC-0037 Y02: for a host's synchronous exit path, `endStopMarkersSync` of every adapter of
+ * this process whose `stopMarker.directory` is `directory`, with one listing for all of them,
+ * within `timeoutMs`. Never throws.
+ */
+export function endStopMarkersSync(directory: string, timeoutMs: number): StopMarkerRootSyncResult {
+  return StopMarkers.endAllSyncUnder(directory, timeoutMs);
 }

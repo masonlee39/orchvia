@@ -85,6 +85,7 @@ Each specification has a matching TDD record of observed failures before the cha
 | [SPEC-0033](specs/0033-cost-retention-pricing-polling.md) | Indexed cost queries, the retention status, cache write prices by duration, the TypeScript polling interval and typed Python results (0.1.9) |
 | [SPEC-0034](specs/0034-background-command-stop-proof.md) | Stop proof for commands that outlive their turn: Codex coverage, process-tree cleanup, the `processGroupsStopped` deprecation and Claude's `stopMarker` (0.1.10) |
 | [SPEC-0036](specs/0036-stop-marker-restart.md) | Stop markers under a host directory, the sweep after a restart, the synchronous cleanup and observations |
+| [SPEC-0037](specs/0037-stop-marker-acknowledgement.md) | Stop marker proofs kept until acknowledged, and one synchronous cleanup per host directory |
 
 ## Claude and Codex baselines
 
