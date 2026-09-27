@@ -16,6 +16,7 @@ Found on the way:
 
 - **An acknowledgement removing a live instance's directory.** The first version removed any empty instance directory not of this process, including one of another running host with nothing marked at that moment, whose next dispatch would then have failed. It now removes only instances whose process is gone, and K03 keeps a live, empty instance.
 - **Shared workspaces.** K03 first put its proven and its open dispatch in one workspace, and the open dispatch's process that dropped its marker, running in that workspace since the proven dispatch began, rightly kept both unstopped. They now have workspaces of their own.
+- **Two Claude Code sandboxes in one workspace on Linux.** The first CI run of the two-adapter case failed on Ubuntu: both dispatches started in one workspace, and one command failed with `bwrap: Can't find source path …/workspace/.claude/settings.json`, apparently because one sandbox bound that file while the other created or removed it (inferred, not traced). macOS does not bind it. The case now gives each adapter its own workspace, which is what it tests; hosts that run two Claude members at once in one workspace on Linux can meet the same failed command.
 - **A surviving mutation.** Ignoring the directory in `endStopMarkersSync` survived while Y02's other instance had no host directory at all, and so was never registered; it now has another directory.
 
 ## GREEN
