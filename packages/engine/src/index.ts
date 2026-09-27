@@ -2499,7 +2499,8 @@ class LocalEngine implements Engine {
     switch (method) {
       case 'storage.status':
         fields(p, []);
-        return this.storage.status();
+        // SPEC-0033 S04: only the method computes what collection has left.
+        return { ...this.storage.status(), retention: this.storage.retentionStatus() };
       case 'state.snapshot':
         fields(p, ['snapshotId', 'offset', 'limit']);
         return this.storage.snapshot(p);

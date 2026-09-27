@@ -43,7 +43,8 @@ export function validatePricing(value: unknown): Pricing {
   if (!/^[A-Z]{3}$/.test(currency) || !['total', 'uncached'].includes(String(p.inputTokenMode)))
     fail('VALIDATION_ERROR', 'Invalid currency or token accounting mode');
   const rates = object(p.perMillion, 'perMillion');
-  fields(rates, ['input', 'cacheRead', 'cacheWrite', 'output']);
+  // SPEC-0033 C01: cache writes may also be priced by how long they live.
+  fields(rates, ['input', 'cacheRead', 'cacheWrite', 'cacheWrite5m', 'cacheWrite1h', 'output']);
   for (const key of ['input', 'output'])
     if (rates[key] === undefined) fail('VALIDATION_ERROR', `Missing ${key} price`);
   for (const value of Object.values(rates)) moneyUnits(string(value, 'price', 64), 12);
@@ -58,7 +59,12 @@ export function validatePricing(value: unknown): Pricing {
 }
 export type TokenUsage = Pick<
   UsageRecord,
-  'inputTokens' | 'cachedInputTokens' | 'cacheWriteInputTokens' | 'outputTokens'
+  | 'inputTokens'
+  | 'cachedInputTokens'
+  | 'cacheWriteInputTokens'
+  | 'outputTokens'
+  | 'cacheWrite5mInputTokens'
+  | 'cacheWrite1hInputTokens'
 >;
 export interface PricedUsage {
   currency: string;
@@ -69,6 +75,9 @@ export interface PricedUsage {
     ordinary: number | null;
     cached: number | null;
     cacheWrite: number | null;
+    /** The cache writes by duration, only for a record with the split (SPEC-0033 C02). */
+    cacheWrite5m?: number;
+    cacheWrite1h?: number;
     output: number | null;
   };
   completeness: 'estimated' | 'unknown';
@@ -86,15 +95,32 @@ export function priceUsage(usage: TokenUsage, rawPricing: Pricing): PricedUsage 
     if (usage[key] !== null) integer(usage[key], 'token count', 0);
   const cached = usage.cachedInputTokens,
     cacheWrite = usage.cacheWriteInputTokens;
+  const rates = pricing.perMillion;
+  // SPEC-0033 C02 to C04: cache writes leave ordinary input once any of their prices is set.
+  const writesPriced =
+    rates.cacheWrite !== undefined ||
+    rates.cacheWrite5m !== undefined ||
+    rates.cacheWrite1h !== undefined;
+  const split =
+    usage.cacheWrite5mInputTokens !== undefined && usage.cacheWrite1hInputTokens !== undefined;
   let ordinary = usage.inputTokens;
   if (pricing.inputTokenMode === 'total')
     ordinary =
-      ordinary === null ||
-      cached === null ||
-      (pricing.perMillion.cacheWrite !== undefined && cacheWrite === null)
+      ordinary === null || cached === null || (writesPriced && cacheWrite === null)
         ? null
-        : ordinary - cached - (pricing.perMillion.cacheWrite !== undefined ? cacheWrite! : 0);
-  const tokens = { ordinary, cached, cacheWrite, output: usage.outputTokens };
+        : ordinary - cached - (writesPriced ? cacheWrite! : 0);
+  const tokens = {
+    ordinary,
+    cached,
+    cacheWrite,
+    ...(split
+      ? {
+          cacheWrite5m: usage.cacheWrite5mInputTokens!,
+          cacheWrite1h: usage.cacheWrite1hInputTokens!,
+        }
+      : {}),
+    output: usage.outputTokens,
+  };
   const base = { currency: pricing.currency, pricingVersion: pricing.version, tokens };
   if (Object.values(tokens).some((value) => value !== null && value < 0))
     return {
@@ -104,28 +130,35 @@ export function priceUsage(usage: TokenUsage, rawPricing: Pricing): PricedUsage 
       completeness: 'unknown',
       reason: 'overlapping_or_inconsistent_usage',
     };
-  const buckets: [number | null, string | undefined][] = [
-    [ordinary, pricing.perMillion.input],
-    [cached, pricing.perMillion.cacheRead],
-    [
-      pricing.perMillion.cacheWrite === undefined && pricing.inputTokenMode === 'total'
-        ? 0
-        : cacheWrite,
-      pricing.perMillion.cacheWrite,
-    ],
-    [usage.outputTokens, pricing.perMillion.output],
+  // Each duration takes its own price, else cacheWrite's; a record without the split takes
+  // cacheWrite's. With no cache write price at all, total mode keeps them in ordinary input.
+  const writes: [number | null, string | undefined][] =
+    !writesPriced && pricing.inputTokenMode === 'total'
+      ? []
+      : split && writesPriced
+        ? [
+            [usage.cacheWrite5mInputTokens!, rates.cacheWrite5m ?? rates.cacheWrite],
+            [usage.cacheWrite1hInputTokens!, rates.cacheWrite1h ?? rates.cacheWrite],
+          ]
+        : [[cacheWrite, rates.cacheWrite]];
+  const buckets: [number | null, string | undefined, string][] = [
+    [ordinary, rates.input, 'missing_usage_or_price'],
+    [cached, rates.cacheRead, 'missing_usage_or_price'],
+    ...writes.map(
+      ([count, rate]) =>
+        [
+          count,
+          rate,
+          writesPriced && count !== null ? 'cache_write_rate_missing' : 'missing_usage_or_price',
+        ] as [number | null, string | undefined, string],
+    ),
+    [usage.outputTokens, rates.output, 'missing_usage_or_price'],
   ];
   let amount = 0n;
-  for (const [tokens, rate] of buckets) {
+  for (const [tokens, rate, reason] of buckets) {
     if (tokens === 0) continue;
     if (tokens === null || rate === undefined)
-      return {
-        ...base,
-        amount: null,
-        amountUnits: null,
-        completeness: 'unknown',
-        reason: 'missing_usage_or_price',
-      };
+      return { ...base, amount: null, amountUnits: null, completeness: 'unknown', reason };
     amount += BigInt(tokens) * moneyUnits(rate, 12);
   }
   return {

@@ -301,6 +301,11 @@ export class Store {
         this.db.exec(
           "CREATE INDEX IF NOT EXISTS dispatches_task ON dispatches(json_extract(data, '$.taskId'))",
         );
+        // Cost queries and budget checks read only the rows they concern (SPEC-0033 P01). The
+        // covering index lets the host-wide total read amounts without parsing any record.
+        this.db.exec(
+          "CREATE INDEX IF NOT EXISTS costs_owner ON costs(json_extract(data,'$.costOwnerTaskId')); CREATE INDEX IF NOT EXISTS costs_root ON costs(json_extract(data,'$.rootTaskId')); CREATE INDEX IF NOT EXISTS costs_dispatch ON costs(json_extract(data,'$.dispatchId')); CREATE INDEX IF NOT EXISTS costs_overhead ON costs(json_extract(data,'$.category')) WHERE json_extract(data,'$.category')='host_overhead'; CREATE INDEX IF NOT EXISTS costs_currency_units ON costs(json_extract(data,'$.currency'),json_extract(data,'$.amountUnits')); CREATE INDEX IF NOT EXISTS reservations_held ON budget_reservations(json_extract(data,'$.rootTaskId')) WHERE json_extract(data,'$.status')='held';",
+        );
         this.db.exec(
           "CREATE INDEX IF NOT EXISTS dispatches_lease ON dispatches(json_extract(data,'$.executionLease.status')); CREATE INDEX IF NOT EXISTS dispatches_quarantine ON dispatches(json_extract(data,'$.quarantined')); CREATE INDEX IF NOT EXISTS dispatches_verification ON dispatches(json_extract(data,'$.verificationPending')); CREATE INDEX IF NOT EXISTS conflicts_status ON execution_conflicts(json_extract(data,'$.status'));",
         );
@@ -319,14 +324,21 @@ export class Store {
           CREATE INDEX IF NOT EXISTS refs_target ON record_refs(target_id);
           CREATE TABLE IF NOT EXISTS snapshots (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, cursor TEXT NOT NULL, floor TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS snapshot_items (snapshot_id TEXT NOT NULL, ordinal INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(snapshot_id,ordinal));`);
-        if (
-          !(
-            this.db.prepare('PRAGMA table_info(retention_records)').all() as { name: string }[]
-          ).some((column) => column.name === 'active')
-        )
+        const retentionColumns = (
+          this.db.prepare('PRAGMA table_info(retention_records)').all() as { name: string }[]
+        ).map((column) => column.name);
+        if (!retentionColumns.includes('active'))
           this.db.exec(
             'ALTER TABLE retention_records ADD COLUMN active INTEGER NOT NULL DEFAULT 1',
           );
+        // SPEC-0033 S01: a record whose detail was collected leaves the candidates of later runs.
+        if (!retentionColumns.includes('collected'))
+          this.db.exec(
+            'ALTER TABLE retention_records ADD COLUMN collected INTEGER NOT NULL DEFAULT 0',
+          );
+        this.db.exec(
+          'CREATE INDEX IF NOT EXISTS retention_pending ON retention_records(table_name,terminal_at) WHERE collected=0',
+        );
         const set = this.db.prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES (?,?)');
         set.run('schemaVersion', '3');
         if (version && version !== '3')

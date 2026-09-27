@@ -62,7 +62,15 @@ export interface Pricing {
   currency: string;
   version: string;
   inputTokenMode: 'total' | 'uncached';
-  perMillion: { input: string; cacheRead?: string; cacheWrite?: string; output: string };
+  perMillion: {
+    input: string;
+    cacheRead?: string;
+    cacheWrite?: string;
+    /** Cache writes that live five minutes and one hour; each falls back to cacheWrite (0033-C02). */
+    cacheWrite5m?: string;
+    cacheWrite1h?: string;
+    output: string;
+  };
 }
 export type RoutingMode = 'continue' | 'parallel_tools' | 'reuse' | 'fork' | 'fresh';
 export interface ContextPlan {
@@ -244,6 +252,29 @@ export interface StorageStatus {
   backpressured: boolean;
   reasons: string[];
   retentionFloorCursor: string;
+  /** Only in the result of `storage.status` (SPEC-0033 S04). */
+  retention?: RetentionStatus;
+}
+/** What collection has left and where it stops, in `storage.status` (SPEC-0033 S02, S03). */
+export interface RetentionStatus {
+  /** Events older than `eventDays` among the oldest 10,001, at most 10,000. */
+  eventsPastAge: number;
+  eventsPastAgeCapped: boolean;
+  /** Records old enough for detail collection whose detail was not collected, at most 10,000. */
+  detailPending: number;
+  detailPendingCapped: boolean;
+  oldestCollectableAt: string | null;
+  /**
+   * The event at which the next collection of events stops, and why, from the oldest 500: its
+   * age, a task or operation that must be kept, or an active snapshot's cursor; `scan_limit` when
+   * all 500 can go, with the last one's cursor; null when there are no events.
+   */
+  eventPrefix: {
+    stoppedAtCursor: string | null;
+    reason: 'age' | 'task' | 'operation' | 'snapshot_lease' | 'scan_limit' | null;
+    taskId?: string;
+    operationId?: string;
+  };
 }
 /** One page of `state.snapshot` (SPEC-0027 T02). */
 export interface StateSnapshotPage {

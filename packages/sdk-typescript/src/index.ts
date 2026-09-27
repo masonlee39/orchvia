@@ -184,10 +184,21 @@ function boundedRead<T>(
     );
   });
 }
+/** The client's polling interval: an integer from 1 to 60000 milliseconds (SPEC-0033 T01). */
+function pollInterval(value: number | undefined): number {
+  if (value === undefined) return 50;
+  if (!Number.isSafeInteger(value) || value < 1 || value > 60000)
+    throw new OrchestratorError(
+      'INVALID_PARAMS',
+      'pollIntervalMs must be an integer from 1 to 60000',
+    );
+  return value;
+}
 async function waitFor<T extends { status: string }>(
   read: (options: RequestOptions) => Promise<T>,
   terminal: Set<string>,
   options: WaitOptions,
+  intervalMs: number,
 ): Promise<T> {
   if (
     options.timeoutMs !== undefined &&
@@ -203,7 +214,7 @@ async function waitFor<T extends { status: string }>(
     const remaining = deadline - Date.now();
     if (remaining <= 0)
       throw new OrchestratorError('TIMEOUT', 'Wait timed out; remote work was not cancelled');
-    await sleep(Math.min(50, remaining), options.signal);
+    await sleep(Math.min(intervalMs, remaining), options.signal);
   }
 }
 
@@ -220,7 +231,12 @@ export class TaskHandle {
     return this.client.tasks.get(this.id, options);
   }
   wait(options: WaitOptions = {}) {
-    return waitFor((request) => this.get(request), taskTerminal, options);
+    return waitFor(
+      (request) => this.get(request),
+      taskTerminal,
+      options,
+      this.client.pollIntervalMs,
+    );
   }
   cancel(options: MutationOptions = {}) {
     return this.client.tasks.cancel(this.id, options);
@@ -242,21 +258,36 @@ export class OperationHandle {
     return this.client.ops.get(this.id, options);
   }
   wait(options: WaitOptions = {}) {
-    return waitFor((request) => this.get(request), operationTerminal, options);
+    return waitFor(
+      (request) => this.get(request),
+      operationTerminal,
+      options,
+      this.client.pollIntervalMs,
+    );
   }
 }
 
+export interface ClientOptions {
+  /**
+   * How long `events()` waits after an empty page and a handle's `wait()` between reads, in
+   * milliseconds: an integer from 1 to 60000, 50 by default, as Python's `poll_interval`.
+   */
+  pollIntervalMs?: number;
+}
 export class Orchestrator {
   readonly info: InitializeResult;
+  /** SPEC-0033 T02, T03. */
+  readonly pollIntervalMs: number;
   private caller: Caller;
   private owner: boolean;
   private identities = new Map<string, RetryIdentity>();
   private closed = false;
   private closeResult?: { status: 'closed'; operationId: string };
-  constructor(caller: Caller, info: InitializeResult, owner: boolean) {
+  constructor(caller: Caller, info: InitializeResult, owner: boolean, pollIntervalMs = 50) {
     this.caller = caller;
     this.info = info;
     this.owner = owner;
+    this.pollIntervalMs = pollInterval(pollIntervalMs);
   }
   private call<T>(
     method: string,
@@ -803,7 +834,7 @@ export class Orchestrator {
         yield event;
       }
       cursor = page.cursor;
-      if (!page.events.length) await sleep(50, options.signal);
+      if (!page.events.length) await sleep(this.pollIntervalMs, options.signal);
     }
   }
   async close(
@@ -869,7 +900,7 @@ export class Orchestrator {
   }
 }
 
-async function initialize(caller: Caller, owner: boolean) {
+async function initialize(caller: Caller, owner: boolean, pollIntervalMs = 50) {
   try {
     const info = await caller.call<InitializeResult>(
       'initialize',
@@ -883,7 +914,7 @@ async function initialize(caller: Caller, owner: boolean) {
         'UNSUPPORTED_CAPABILITY',
         'Host must support namespace-bound writes',
       );
-    return new Orchestrator(caller, info, owner);
+    return new Orchestrator(caller, info, owner, pollIntervalMs);
   } catch (error) {
     caller.disconnect();
     throw error;
@@ -922,7 +953,12 @@ function hostError(error: unknown): OrchestratorError {
   failure.cause = error;
   return failure;
 }
-export async function createOrchestrator(config: EngineConfig): Promise<Orchestrator> {
+export async function createOrchestrator(
+  config: EngineConfig,
+  options: ClientOptions = {},
+): Promise<Orchestrator> {
+  // An invalid interval starts no engine (SPEC-0033 T01).
+  const intervalMs = pollInterval(options.pollIntervalMs);
   const engine = await createEngine(config);
   const caller: Caller = {
     call: async <T>(
@@ -941,7 +977,7 @@ export async function createOrchestrator(config: EngineConfig): Promise<Orchestr
     disconnect() {},
   };
   try {
-    return await initialize(caller, true);
+    return await initialize(caller, true, intervalMs);
   } catch (error) {
     await engine.close({ mode: 'interrupt', timeoutMs: 1000 }).catch(() => {});
     throw error;
@@ -1080,15 +1116,18 @@ export async function openOrchestratorReadOnly(options: {
   };
   return new ReadOnlyOrchestrator(caller, engine.storeId, () => engine.close());
 }
-export async function connectOrchestrator(options: {
-  socketPath: string;
-  timeoutMs?: number;
-  requestTimeoutMs?: number;
-}): Promise<Orchestrator> {
+export async function connectOrchestrator(
+  options: {
+    socketPath: string;
+    timeoutMs?: number;
+    requestTimeoutMs?: number;
+  } & ClientOptions,
+): Promise<Orchestrator> {
+  const intervalMs = pollInterval(options.pollIntervalMs);
   const caller = await UnixRpcClient.connect(
     options.socketPath,
     options.timeoutMs,
     options.requestTimeoutMs,
   );
-  return initialize(caller, false);
+  return initialize(caller, false, intervalMs);
 }

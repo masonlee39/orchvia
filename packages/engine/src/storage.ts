@@ -21,6 +21,7 @@ import type {
   StateSnapshotPage,
   StoragePolicy,
   StorageStatus,
+  RetentionStatus,
 } from './types.ts';
 export type { StoragePolicy } from './types.ts';
 
@@ -419,11 +420,77 @@ export class StorageGovernance {
         sizeBytes: record.sizeBytes,
         historyExpired: true,
       });
+      this.markCollected('artifacts', job.ref);
       this.store.put('gc_jobs', job.id, { ...job, status: 'completed' });
     });
     const journal = join(this.store.stateDir, 'file-commits', `${job.sha256}.json`);
     if (existsSync(journal)) unlinkSync(journal);
     this.store.options.fault?.('gc.registered');
+  }
+  /** SPEC-0033 S01: a record whose detail was collected is never a candidate again. */
+  private markCollected(table: string, id: string): void {
+    this.store.db
+      .prepare('UPDATE retention_records SET collected=1 WHERE table_name=? AND id=?')
+      .run(table, id);
+  }
+  /**
+   * What collection has left, for `storage.status` only (SPEC-0033 S02, S03): counts capped at
+   * 10,000, and where the next run would stop collecting events, from at most 500 events. The
+   * scheduler's own checks never compute it.
+   */
+  retentionStatus(): RetentionStatus {
+    const now = this.store.now();
+    const cap = 10000;
+    const eventCutoff = now - this.policy.eventDays * DAY;
+    const detailCutoff = now - this.policy.detailDays * DAY;
+    const events = this.store.db
+      .prepare(
+        `SELECT json_extract(data,'$.occurredAt') AS at FROM events ORDER BY cursor LIMIT ${cap + 1}`,
+      )
+      .all() as { at: string }[];
+    const pastAge = events.filter((row) => Date.parse(row.at) <= eventCutoff);
+    const pending = this.store.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM (SELECT 1 FROM retention_records WHERE collected=0 AND terminal_at<=? AND table_name IN ('operations','messages','artifacts','usage') LIMIT ${cap + 1})`,
+      )
+      .get(detailCutoff) as { n: number };
+    const oldestDetail = this.store.db
+      .prepare(
+        "SELECT MIN(terminal_at) AS at FROM retention_records WHERE collected=0 AND terminal_at<=? AND table_name IN ('operations','messages','artifacts','usage')",
+      )
+      .get(detailCutoff) as { at: number | null };
+    const oldestEvent = pastAge.length ? Date.parse(pastAge[0].at) : null;
+    const oldest = [oldestDetail.at, oldestEvent].filter((at): at is number => at !== null);
+    return {
+      eventsPastAge: Math.min(pastAge.length, cap),
+      eventsPastAgeCapped: pastAge.length > cap || (events.length > cap && pastAge.length === cap),
+      detailPending: Math.min(pending.n, cap),
+      detailPendingCapped: pending.n > cap,
+      oldestCollectableAt: oldest.length ? new Date(Math.min(...oldest)).toISOString() : null,
+      eventPrefix: this.eventPrefix(eventCutoff),
+    };
+  }
+  /** The event at which collection's continuous prefix stops, as `collect()` decides it. */
+  private eventPrefix(cutoff: number): RetentionStatus['eventPrefix'] {
+    const rows = this.store.db
+      .prepare('SELECT cursor,taskId,data FROM events ORDER BY cursor LIMIT 500')
+      .all() as { cursor: number; taskId: string | null; data: string }[];
+    if (!rows.length) return { stoppedAtCursor: null, reason: null };
+    const leases = this.store.db
+      .prepare('SELECT cursor FROM snapshots WHERE expires_at>?')
+      .all(this.store.now()) as { cursor: string }[];
+    for (const row of rows) {
+      const event = JSON.parse(row.data);
+      const at = String(row.cursor);
+      if (Date.parse(event.occurredAt) > cutoff) return { stoppedAtCursor: at, reason: 'age' };
+      if (row.taskId && this.isProtected(row.taskId))
+        return { stoppedAtCursor: at, reason: 'task', taskId: row.taskId };
+      if (event.operationId && this.isProtected(event.operationId))
+        return { stoppedAtCursor: at, reason: 'operation', operationId: event.operationId };
+      if (leases.some((lease) => row.cursor > Number(lease.cursor)))
+        return { stoppedAtCursor: at, reason: 'snapshot_lease' };
+    }
+    return { stoppedAtCursor: String(rows.at(-1)!.cursor), reason: 'scan_limit' };
   }
   collect() {
     this.store.assertWritable();
@@ -443,7 +510,7 @@ export class StorageGovernance {
         this.releaseSnapshot(lease.id);
     const candidates = this.store.db
       .prepare(
-        "SELECT rowid,table_name,id FROM retention_records WHERE rowid>? AND terminal_at<=? AND table_name IN ('operations','messages','artifacts','usage') ORDER BY rowid LIMIT 500",
+        "SELECT rowid,table_name,id FROM retention_records WHERE rowid>? AND terminal_at<=? AND collected=0 AND table_name IN ('operations','messages','artifacts','usage') ORDER BY rowid LIMIT 500",
       )
       .all(Number(this.store.metadata('gcScanCursor') ?? 0), cutoff) as {
       rowid: number;
@@ -461,7 +528,11 @@ export class StorageGovernance {
         candidate.table_name === 'operations'
           ? this.store.findOperationById(candidate.id)
           : this.store.get<any>(candidate.table_name as Table, candidate.id);
-      if (!value || value.historyExpired) continue;
+      if (!value || value.historyExpired) {
+        // Collected before its record was marked (S02), or gone: never a candidate again.
+        this.markCollected(candidate.table_name, candidate.id);
+        continue;
+      }
       const size =
         Buffer.byteLength(JSON.stringify(value)) +
         (candidate.table_name === 'artifacts' ? Number(value.sizeBytes ?? 0) : 0);
@@ -518,6 +589,7 @@ export class StorageGovernance {
                 : { raw: {} }),
               historyExpired: true,
             });
+          this.markCollected(candidate.table_name, candidate.id);
         });
       }
       records++;
