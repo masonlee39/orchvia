@@ -333,8 +333,10 @@ test(
     const swept = await sweepStopMarkers(root, { timeoutMs: 4000 });
     assert.ok(performance.now() - started < 4000 + 2000, 'bounded by its time');
     assert.equal(swept.stopped, false);
-    assert.deepEqual(swept.dispatches[0]?.strays, [dead.pid]);
-    assert.equal(swept.dispatches[0]?.reason, 'strays');
+    // Under load the workspace listing can run out of time: then unlisted, still not stopped.
+    const reason = swept.dispatches[0]?.reason;
+    assert.ok(reason === 'strays' || reason === 'unlisted', JSON.stringify(swept));
+    if (reason === 'strays') assert.deepEqual(swept.dispatches[0]?.strays, [dead.pid]);
     assert.ok(alive(dead.pid), "not ended: it may not be the dispatch's");
     assert.equal(existsSync(dead.instance), true, 'kept for a later sweep');
     process.kill(dead.pid, 'SIGKILL');

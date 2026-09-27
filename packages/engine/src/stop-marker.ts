@@ -524,7 +524,10 @@ export class StopMarkers {
       signal(left.filter(running), 'SIGKILL');
       settle(left, Math.min(20, (remaining() - cost) / 3));
       if (remaining() < cost + 5) {
-        left = null; // No time to list again: not verified.
+        // No time to list again: not verified. What is left of the time goes to seeing the
+        // signalled processes exit, so that `ended` counts them.
+        settle(left, remaining() - 2);
+        left = null;
         break;
       }
       left = find();
