@@ -30,11 +30,12 @@ The new tests ran on the base with only the tests added.
 - **The real binary (C).**
   - `scripts/native-usage-smoke.mjs` runs five dispatches on one native session: C02, C03, C04, C05, then C01.
   - It takes an optional SDK module path, so CI runs it with 0.3.283 and with 0.3.274.
-- **Pins (B04).** The root development dependency, the lockfile's nine SDK entries, `offline.yml`, `scripts/check-native-protocol.mjs` and the native plan template use Claude Agent SDK 0.3.283 and Codex CLI 0.157.1.
+- **Pins (B04).** The root development dependency, the lockfile's nine SDK entries, `offline.yml`, `scripts/check-native-protocol.mjs`, `scripts/package-bundles-smoke.mjs`, `scripts/native-acceptance.mjs` and the native plan template use Claude Agent SDK 0.3.283 and Codex CLI 0.157.1.
 
 Found on the way:
 
 - **The lockfile.** `npm install` rewrote the lockfile and dropped the five workspace link entries. The lockfile was restored from the base and only the nine SDK entries were replaced.
+- **The package smoke.** The first CI run on the branch failed in all four contract jobs at the clean offline installation step: `scripts/package-bundles-smoke.mjs` still asserted SDK 0.3.274. The search for pins had read only the first lines of its output. With it and `scripts/native-acceptance.mjs` updated, `npm run test:packages` passed all nine modes locally, the CJS and ESM bundles with SDK 0.3.283. The three pinned native jobs of that run passed, Codex 0.157.1 and the usage check with SDK 0.3.274 included.
 - **The version guard.** `0021-P08`, which keeps package versions out of package source, flagged the comments that name Claude Code 2.1.277. Its list of other software's versions, the zod peer and the Jev model, now includes Claude Code.
 - **Engine test E03.** It first forked from an earlier task's artifact, which `sessions.fork` refuses; a fork takes the session's latest completed task's artifact. Its running source first held before reporting usage, so the source's latest dispatch had no totals and the guard for a running source went untested; the source now holds after reporting its totals.
 - **Transcripts from before 2.1.277.** The SDK's declaration says a resumed session continues from the totals its transcript saved, "when it has them". A session whose last dispatch ran before the upgrade has a non-cumulative baseline, so its first dispatch after the upgrade is unknown outside its main loop, and the ones after it are exact.
