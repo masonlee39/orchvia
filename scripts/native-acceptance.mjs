@@ -17,7 +17,7 @@ if (mode === 'prepare') {
     language: 'typescript',
     model: null,
     identitySourceLabel: null,
-    expectedVersions: { node: process.versions.node, claudeSdk: '0.3.274', codexCli: '0.153.4' },
+    expectedVersions: { node: process.versions.node, claudeSdk: '0.3.283', codexCli: '0.157.1' },
     budget: { currency: 'USD', maxCost: '1', reservePerDispatch: '1' },
     pricing: null,
     limits: { maxActiveSessions: 1, maxTurnsPerTask: 1 },

@@ -19,7 +19,7 @@ export async function smokeClaudeBundles({ root, isolated, run }) {
   const native = JSON.parse(
     await readFile(join(modules, '@anthropic-ai/claude-agent-sdk/package.json'), 'utf8'),
   );
-  assert.equal(native.version, '0.3.274');
+  assert.equal(native.version, '0.3.283');
   const peer = await build({
     entryPoints: [join(root, 'tests/fixtures/claude-mcp-child.ts')],
     bundle: true,

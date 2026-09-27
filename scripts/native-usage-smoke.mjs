@@ -1,9 +1,12 @@
 /**
- * SPEC-0031 C01 and C02: the real Claude Code binary against a loopback-only scripted gateway; no
- * credentials, no paid models. The gateway answers each kind of call with its own token counts, so
- * that the usage records show which calls the engine recorded.
+ * SPEC-0031 C01, C02 and SPEC-0032 C03 to C05: the real Claude Code binary against a loopback-only
+ * scripted gateway; no credentials, no paid models. The gateway answers each kind of call with its
+ * own token counts, so that the usage records show which calls the engine recorded. One native
+ * session runs five dispatches in turn, so every dispatch after the first is a resumed one, and the
+ * records must be the same whether the SDK's totals start again (before Claude Code 2.1.277) or
+ * continue (from 2.1.277 on).
  *
- * Usage: node scripts/native-usage-smoke.mjs EVIDENCE.json
+ * Usage: node scripts/native-usage-smoke.mjs EVIDENCE.json [SDK_MODULE_PATH]
  */
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -11,11 +14,13 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { createOrchestrator } from '../packages/sdk-typescript/src/index.ts';
 import { createClaudeAdapter } from '../packages/adapter-claude/src/index.ts';
 
-const [outputPath] = process.argv.slice(2);
-if (!outputPath) throw new Error('Usage: node scripts/native-usage-smoke.mjs EVIDENCE.json');
+const [outputPath, sdkPath] = process.argv.slice(2);
+if (!outputPath)
+  throw new Error('Usage: node scripts/native-usage-smoke.mjs EVIDENCE.json [SDK_MODULE_PATH]');
 const MODEL = 'claude-sonnet-4-6';
 const root = await realpath(await mkdtemp(join(tmpdir(), 'orch-native-usage-')));
 const workspace = join(root, 'workspace'),
@@ -61,7 +66,11 @@ const split = {
   compact: [300, 0],
 };
 const calls = [];
-let autoReadDone = false;
+// Each marker makes one main-loop call read the file with an almost full context (C02, C04).
+const readMarkers = new Map([
+  ['ORCH_AUTO_COMPACT', false],
+  ['ORCH_AGAIN_COMPACT', false],
+]);
 const send = (response, type, data) =>
   response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
 const server = createServer(async (request, response) => {
@@ -80,12 +89,13 @@ const server = createServer(async (request, response) => {
     if (calls.length >= 40) throw new Error('Bounded gateway request count exhausted');
     const body = JSON.parse(raw);
     const history = JSON.stringify(body.messages ?? []);
+    const marker = [...readMarkers].find(([name, done]) => !done && history.includes(name))?.[0];
     const kind = history.includes('create a detailed summary')
       ? 'compact'
-      : history.includes('ORCH_AUTO_COMPACT') && !autoReadDone
+      : marker
         ? 'read'
         : 'answer';
-    if (kind === 'read') autoReadDone = true;
+    if (kind === 'read') readMarkers.set(marker, true);
     calls.push({ kind, model: body.model });
     const usage = {
       ...usageOf[kind],
@@ -146,14 +156,10 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${server.address().port}`;
 
 const require = createRequire(import.meta.url);
-const sdk = await import('@anthropic-ai/claude-agent-sdk');
+const sdkModule = sdkPath ?? require.resolve('@anthropic-ai/claude-agent-sdk');
+const sdk = await import(pathToFileURL(sdkModule).href);
 const evidence = {
-  sdk: JSON.parse(
-    await readFile(
-      join(dirname(require.resolve('@anthropic-ai/claude-agent-sdk')), 'package.json'),
-      'utf8',
-    ),
-  ).version,
+  sdk: JSON.parse(await readFile(join(dirname(sdkModule), 'package.json'), 'utf8')).version,
   node: process.version,
   startedAt: new Date().toISOString(),
   responseSource: 'scripted-loopback-gateway',
@@ -167,6 +173,8 @@ const adapter = createClaudeAdapter({
     return {
       async *[Symbol.asyncIterator]() {
         for await (const message of native) {
+          if (message.type === 'system' && message.subtype === 'init')
+            evidence.claudeCode ??= message.claude_code_version;
           if (message.type === 'result')
             evidence.results.push({ usage: message.usage, modelUsage: message.modelUsage });
           yield message;
@@ -214,15 +222,44 @@ const create = (goal) =>
   });
 let exitCode = 0;
 try {
-  // C02: Claude Code compacts in the middle of a dispatch.
-  const auto = await create('ORCH_AUTO_COMPACT: read notes.txt, then answer ORCH_OK');
-  await until(auto.id, 'waiting_approval');
-  const compactions = calls.filter((call) => call.kind === 'compact').length;
-  assert.ok(compactions >= 1, `Claude Code did not compact: ${JSON.stringify(calls)}`);
-  const autoRecords = await records(auto.id);
-  evidence.autoCompact = { calls: [...calls], records: autoRecords };
-  assert.deepEqual(autoRecords, [
-    { kind: 'main', input: 191000, output: 50, cacheRead: 5, cacheWrite: 12, model: MODEL },
+  const target = (value) => ({
+    sessionId: value.id,
+    expectedGeneration: value.generation,
+    expectedRevision: value.revision,
+    expectedState: value.status,
+    expectedDispatchId: value.activeDispatchId,
+  });
+  const approve = async (taskId) => {
+    const delivered = await orch.tasks.get(taskId);
+    const approval = await orch.approvals.get(delivered.approvalId);
+    await orch.approvals.decide(delivered.approvalId, {
+      choice: 'approve',
+      expectedRevision: approval.revision,
+    });
+    return until(taskId, 'completed');
+  };
+  // A later task continues a given session: a resumed dispatch, or a fork's first one.
+  const resumed = async (parentTaskId, sessionId, goal) => {
+    const handle = await orch.tasks.create({
+      goal,
+      runtime: { provider: 'claude', model: MODEL },
+      acceptance: { mode: 'human', criteria: ['Scripted response'] },
+      parentTaskId,
+      contextPlan: {
+        requestedMode: 'reuse',
+        independent: true,
+        candidateSessionId: sessionId,
+        maxQueueWaitMs: 1000,
+        fallbackModes: [],
+        dependencyTaskIds: [],
+        contextRefs: [],
+      },
+    });
+    await until(handle.id, 'waiting_approval');
+    return handle;
+  };
+  const compacted = (compactions, main) => [
+    main,
     {
       kind: 'outside',
       input: 7000 * compactions,
@@ -231,19 +268,74 @@ try {
       cacheWrite: 300 * compactions,
       model: MODEL,
     },
-  ]);
-  evidence.cases.push('auto-compaction-in-a-dispatch-recorded-under-the-dispatch-model');
+  ];
+  const readTurn = {
+    kind: 'main',
+    input: 191000,
+    output: 50,
+    cacheRead: 5,
+    cacheWrite: 12,
+    model: MODEL,
+  };
+  const plainTurn = {
+    kind: 'main',
+    input: 1000,
+    output: 30,
+    cacheRead: 5,
+    cacheWrite: 12,
+    model: MODEL,
+  };
+  const compactionsSince = (before) =>
+    calls.slice(before).filter((call) => call.kind === 'compact').length;
 
-  // C01: the engine's own compaction.
-  const delivered = await orch.tasks.get(auto.id);
-  const approval = await orch.approvals.get(delivered.approvalId);
-  await orch.approvals.decide(delivered.approvalId, {
-    choice: 'approve',
-    expectedRevision: approval.revision,
-  });
-  await until(auto.id, 'completed');
-  const session = await orch.sessions.get(delivered.sessionId);
-  const before = calls.length;
+  // C02: Claude Code compacts in the middle of the session's first dispatch.
+  const auto = await create('ORCH_AUTO_COMPACT: read notes.txt, then answer ORCH_OK');
+  await until(auto.id, 'waiting_approval');
+  const autoCompactions = compactionsSince(0);
+  assert.ok(autoCompactions >= 1, `Claude Code did not compact: ${JSON.stringify(calls)}`);
+  const autoRecords = await records(auto.id);
+  evidence.autoCompact = { calls: [...calls], records: autoRecords };
+  assert.deepEqual(autoRecords, compacted(autoCompactions, readTurn));
+  evidence.cases.push('auto-compaction-in-a-dispatch-recorded-under-the-dispatch-model');
+  const first = await approve(auto.id);
+  const sessionId = first.sessionId;
+
+  // C03 (SPEC-0032): a plain second dispatch; nothing ran outside its main loop.
+  const plain = await resumed(auto.id, sessionId, 'ORCH_PLAIN: answer ORCH_OK');
+  const plainRecords = await records(plain.id);
+  evidence.resumedPlain = { records: plainRecords };
+  assert.deepEqual(plainRecords, [plainTurn]);
+  await approve(plain.id);
+  evidence.cases.push('resumed-dispatch-records-only-its-own-calls');
+
+  // C04 (SPEC-0032): the session compacts again in the middle of a resumed dispatch.
+  let before = calls.length;
+  const again = await resumed(
+    auto.id,
+    sessionId,
+    'ORCH_AGAIN_COMPACT: read notes.txt, then answer ORCH_OK',
+  );
+  const againCompactions = compactionsSince(before);
+  assert.ok(againCompactions >= 1, `Claude Code did not compact again: ${JSON.stringify(calls)}`);
+  const againRecords = await records(again.id);
+  evidence.resumedAutoCompact = { calls: calls.slice(before), records: againRecords };
+  assert.deepEqual(againRecords, compacted(againCompactions, readTurn));
+  const latest = await approve(again.id);
+  evidence.cases.push('resumed-auto-compaction-records-only-its-own-compaction');
+
+  // C05 (SPEC-0032): a fork continues from its source's totals; its first dispatch is its own.
+  const source = await orch.sessions.get(sessionId);
+  const fork = await orch.sessions.fork(target(source), latest.artifactRefs[0]);
+  const branch = await resumed(auto.id, fork.id, 'ORCH_PLAIN branch: answer ORCH_OK');
+  const branchRecords = await records(branch.id);
+  evidence.forkFirstDispatch = { records: branchRecords };
+  assert.deepEqual(branchRecords, [plainTurn]);
+  await approve(branch.id);
+  evidence.cases.push('fork-first-dispatch-records-only-its-own-calls');
+
+  // C01: the engine's own compaction, the session's fourth dispatch.
+  const session = await orch.sessions.get(sessionId);
+  before = calls.length;
   const compact = await orch.sessions.compact({
     sessionId: session.id,
     expectedGeneration: session.generation,
@@ -251,26 +343,25 @@ try {
     expectedState: session.status,
     expectedDispatchId: session.activeDispatchId,
   });
-  const compacted = await compact.wait({ timeoutMs: 65000 });
-  assert.equal(compacted.status, 'completed', JSON.stringify(compacted));
+  const done = await compact.wait({ timeoutMs: 65000 });
+  assert.equal(done.status, 'completed', JSON.stringify(done));
   const compactionTask = (await orch.tasks.list({ sessionId: session.id })).tasks.find(
     (task) => task.kind === 'compaction',
   );
   assert.ok(compactionTask, 'the compaction has a task');
-  const manualCalls = calls.slice(before).filter((call) => call.kind === 'compact').length;
   const manualRecords = await records(compactionTask.id);
   evidence.manualCompact = { calls: calls.slice(before), records: manualRecords };
-  assert.deepEqual(manualRecords, [
-    { kind: 'main', input: 0, output: 0, cacheRead: 0, cacheWrite: 0, model: MODEL },
-    {
-      kind: 'outside',
-      input: 7000 * manualCalls,
-      output: 700 * manualCalls,
+  assert.deepEqual(
+    manualRecords,
+    compacted(compactionsSince(before), {
+      kind: 'main',
+      input: 0,
+      output: 0,
       cacheRead: 0,
-      cacheWrite: 300 * manualCalls,
+      cacheWrite: 0,
       model: MODEL,
-    },
-  ]);
+    }),
+  );
   evidence.cases.push('manual-compaction-recorded-under-the-session-model');
   evidence.status = 'passed';
 } catch (error) {

@@ -82,7 +82,7 @@ jobs:
           python-version: 3.11.9
       - run: npm ci --ignore-scripts
       - name: Install exact native development dependencies (no login or model calls)
-        run: npm install --ignore-scripts --no-save --package-lock=false @anthropic-ai/claude-agent-sdk@0.3.274 @openai/codex@0.153.4
+        run: npm install --ignore-scripts --no-save --package-lock=false @anthropic-ai/claude-agent-sdk@0.3.283 @openai/codex@0.157.1
       - run: node scripts/check-native-protocol.mjs
       # The writable Claude profile requires the OS sandbox; on Linux that is bubblewrap and socat.
       # The benchmark's stop proof lists processes with lsof.
@@ -94,6 +94,12 @@ jobs:
       - name: Usage outside the main loop with the real Claude binary and a scripted loopback gateway (no paid models)
         if: ${{ !cancelled() }}
         run: node scripts/native-usage-smoke.mjs dist/verification/native-usage.json
+      # SPEC-0032 C06: the same records on a Claude Code whose session totals start again at resume.
+      - name: Usage outside the main loop with Claude SDK 0.3.274 (no paid models)
+        if: ${{ !cancelled() }}
+        run: |
+          npm install --prefix "$RUNNER_TEMP/claude-sdk-0.3.274" --ignore-scripts --no-save --package-lock=false --no-audit --no-fund @anthropic-ai/claude-agent-sdk@0.3.274
+          node scripts/native-usage-smoke.mjs dist/verification/native-usage-0.3.274.json "$RUNNER_TEMP/claude-sdk-0.3.274/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"
       - name: README quickstart with the real Claude binary and a scripted loopback gateway (no paid models)
         if: ${{ !cancelled() }}
         run: node scripts/quickstart-claude-smoke.mjs

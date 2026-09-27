@@ -2,6 +2,18 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+Claude Agent SDK 0.3.277 and later: usage of a resumed or forked Claude session.
+
+### Fixed
+
+- From Claude Agent SDK 0.3.277 (Claude Code 2.1.277) on, a resumed or forked session's `modelUsage` continues from its earlier dispatches, so 0.1.8 recorded every earlier dispatch again in the records outside the main loop of a session's second and later dispatches and of a fork's first dispatch. The adapter now reports each dispatch's session totals with its main observation, the engine keeps them with the dispatch and hands them to the next dispatch on the same native session, and the adapter subtracts them. Without such totals, or without Claude Code's version, what a resumed dispatch ran outside its main loop is recorded as unknown. Records already written are not changed (SPEC-0032).
+
+### Changed
+
+- CI and the development dependencies use Claude Agent SDK 0.3.283 and Codex CLI 0.157.1. The usage check with the real Claude binary also runs with SDK 0.3.274 (SPEC-0032 B04, C06).
+
 ## [0.1.8] - 2026-09-27
 
 The usage and cost of what Claude Code runs outside a dispatch's main loop, such as a compaction.

@@ -26,7 +26,7 @@ Updated 2026-09-21 for SPEC-0012; the publication gate was updated on 2026-09-25
 
 ## Reproduce native runtime verification without paid models
 
-Install the pinned development dependencies, including Codex 0.153.4 for the second command. Use a new evidence path for every run; existing evidence is never overwritten.
+Install the pinned development dependencies, including Codex 0.157.1 for the second command (SPEC-0032 B04). Use a new evidence path for every run; existing evidence is never overwritten.
 
 ```sh
 node scripts/native-gateway-smoke.mjs claude dist/verification/native-claude-new.json

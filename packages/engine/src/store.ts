@@ -730,6 +730,15 @@ export class Store {
         .get(taskId) as { count: number }
     ).count;
   }
+  /** A session's most recently created dispatch other than `except`, through dispatches_session. */
+  latestDispatch(sessionId: string, except: string): { id: string } | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT data FROM dispatches WHERE json_extract(data,'$.sessionId')=? AND id<>? ORDER BY rowid DESC LIMIT 1",
+      )
+      .get(sessionId, except) as { data: string } | undefined;
+    return row ? (JSON.parse(row.data) as { id: string }) : undefined;
+  }
   activeDispatches(sessionId?: string): Record<string, unknown>[] {
     const predicate =
       "(json_extract(data, '$.executionLease.status')='held' OR json_extract(data, '$.quarantined')=1 OR json_extract(data, '$.verificationPending')=1)";
