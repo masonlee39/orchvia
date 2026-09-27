@@ -331,10 +331,16 @@ try {
     reset(2);
     const record = (evidence.cases.rootSync = {});
     const { directory, workspace, stateDir } = await space('root-sync');
+    // A workspace each: on Linux two Claude Code sandboxes starting at once in one workspace can
+    // race on binding its .claude/settings.json, and the command then does not run.
+    const second = `${workspace}-2`;
+    await mkdir(second, { recursive: true });
     const adapters = [await adapterFor(directory), await adapterFor(directory)];
     const running = adapters.map(async (adapter, i) => {
       const events = [];
-      for await (const event of adapter.execute(input(workspace, stateDir, `root-${i}`)))
+      for await (const event of adapter.execute(
+        input(i ? second : workspace, stateDir, `root-${i}`),
+      ))
         events.push(event);
       return events;
     });
