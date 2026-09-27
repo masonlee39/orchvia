@@ -422,6 +422,15 @@ Pull request #51 set the version to 0.1.9 on top of SPEC-0032 (#49) and SPEC-003
 - P04 passed on the Ubuntu and macOS runners, and the whole run, 13 jobs, passed at its first attempt.
 - The npm registry lists 0.1.9 as the `latest` version of all five packages, with provenance attestations, and `@orchvia/adapter-claude@0.1.9` declares the Claude SDK peer `>=0.3.241 <1`. PyPI lists `orchvia` 0.1.9 with its wheel and sdist.
 
+## The ninth release, 0.1.10
+
+Pull request #53 set the version to 0.1.10 on top of SPEC-0034 (#52). A local Claude Code session pushed the tag `v0.1.10` on its merge commit `c3c4799`, on the owner's authorization, which started the release workflow ([36313642053](https://github.com/masonlee39/orchvia/actions/runs/36313642053)) on 2026-09-27.
+
+- The offline matrix and the build passed at the first attempt, with the new stop smokes of the real Claude and Codex binaries on Ubuntu and macOS.
+- The owner approved the `npm` and `pypi` deployments. Both jobs passed, and the GitHub release "Orchvia 0.1.10" followed with the five npm archives, the wheel, the sdist, both manifests and `SHA256SUMS`; its notes are the changelog's 0.1.10 section.
+- P04 passed on the Ubuntu and macOS runners, and the whole run, 13 jobs, passed at its first attempt.
+- The npm registry lists 0.1.10 as the `latest` version of all five packages, with provenance attestations, and `@orchvia/adapter-claude@0.1.10` declares the Claude SDK peer `>=0.3.241 <1`. PyPI lists `orchvia` 0.1.10 with its wheel and sdist.
+
 ## P10: no document names the latest release (D-rel-3)
 
 On 2026-09-27 the owner chose D-rel-3: a release is recorded by the next release pull request, and no document names the latest release.
