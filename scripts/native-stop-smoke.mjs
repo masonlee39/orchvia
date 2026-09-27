@@ -8,7 +8,7 @@ import { createServer } from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createOrchestrator } from '../packages/sdk-typescript/src/index.ts';
 import { createClaudeAdapter, processGroupsStopped } from '../packages/adapter-claude/src/index.ts';
 import { createCodexAdapter } from '../packages/adapter-codex/src/index.ts';
@@ -296,7 +296,8 @@ try {
     );
     groups.missedBackground = groups.processGroupsStopped === true && groups.backgroundAlive;
   } else {
-    const binary = executable ?? 'codex';
+    // The adapter starts Codex in each case's workspace, so a relative path must be resolved here.
+    const binary = executable?.includes('/') ? resolve(executable) : (executable ?? 'codex');
     evidence.binary = execFileSync(binary, ['--version'], {
       encoding: 'utf8',
       timeout: 5000,
