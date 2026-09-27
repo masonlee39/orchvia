@@ -215,8 +215,9 @@ try {
       release.resolve();
       break restart;
     }
+    // Under load Claude Code can run the scripted command twice; each copy must end.
     record.before = pids();
-    assert.equal(record.before.length, 1, 'COMMAND left one sleep 600');
+    assert.ok(record.before.length >= 1, 'COMMAND left sleep 600');
     host.kill('SIGKILL');
     await new Promise((resolve) => host.once('exit', resolve));
     release.resolve();
@@ -229,8 +230,13 @@ try {
       reason,
     }));
     assert.equal(stale.dispatches[0]?.dispatchId, 'restart-dispatch');
-    assert.deepEqual(stale.dispatches[0]?.holders, record.before, 'the stale check finds it');
-    assert.deepEqual(pids(), record.before, 'the stale check ends nothing');
+    const sorted = (list) => [...(list ?? [])].sort((a, b) => a - b);
+    assert.deepEqual(
+      sorted(stale.dispatches[0]?.holders),
+      sorted(record.before),
+      'the stale check finds it',
+    );
+    assert.deepEqual(sorted(pids()), sorted(record.before), 'the stale check ends nothing');
     // Each sweep is recorded. The killed host's Claude Code stays in the workspace until it sees
     // its input close, and the sweep waits for it within its time; one sweep should do.
     const observed = [];
@@ -282,18 +288,27 @@ try {
       break sync;
     }
     record.before = pids();
-    assert.equal(record.before.length, 1);
+    assert.ok(record.before.length >= 1);
     const started = performance.now();
     record.result = adapter.endStopMarkersSync(300);
     record.elapsedMs = Math.round(performance.now() - started);
+    // A killed process is gone once the system has reaped it, which can take a moment.
+    for (let i = 0; i < 40 && pids().length; i++) await new Promise((r) => setTimeout(r, 50));
     record.after = pids();
     release.resolve();
     record.lastEvent = (await running).at(-1);
     await adapter.close().catch((error) => (record.closeError = String(error)));
     record.observed = observed;
+    // The host's criterion: within 300 ms, and what is not verified in time is left to the next
+    // start's sweep. Everywhere: within the time, the command ended, and never stopped while it
+    // runs. That the last listing fits as well is asserted on Apple silicon only; the slower
+    // x86-64 macOS runner may not verify in time, which the result then says (SPEC-0036 Y01).
     assert.ok(record.elapsedMs < 300, `${record.elapsedMs} ms`);
-    assert.equal(record.result.stopped, true, JSON.stringify(record.result));
-    assert.deepEqual(record.after, []);
+    assert.equal(record.result.holders, record.before.length, JSON.stringify(record.result));
+    assert.deepEqual(record.after, [], 'the command was ended');
+    if (process.arch === 'arm64')
+      assert.equal(record.result.stopped, true, JSON.stringify(record.result));
+    else record.verifiedInTime = record.result.stopped;
   }
   evidence.passed = true;
 } finally {

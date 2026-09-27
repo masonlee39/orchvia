@@ -81,6 +81,11 @@ export interface StopMarkersOptions {
   /** A host directory that outlives the host; each instance works in a directory of its own. */
   root?: string;
   onObservation?: (observation: StopMarkerObservation) => void;
+  /**
+   * Test seam for `endAllSync`: lists what holds `paths` among the processes started since
+   * `since`, within `timeoutMs`, or null when that cannot be shown. Hosts leave it out.
+   */
+  listHolders?: (paths: string[], since: number, timeoutMs: number) => number[] | null;
 }
 
 export interface StopMarkerSweepOptions {
@@ -231,6 +236,39 @@ async function endHolders(
 }
 
 /**
+ * SPEC-0036 Y01: synchronously, what holds any of `paths` among the processes started since
+ * `since` (`ps`, then `lsof -a -p` over those alone, which is several times faster than over every
+ * process), within `timeoutMs`; null when that cannot be shown.
+ */
+function listHoldersSync(paths: string[], since: number, timeoutMs: number): number[] | null {
+  const deadline = performance.now() + timeoutMs;
+  const remaining = () => deadline - performance.now();
+  const candidates = processTable(remaining())
+    .filter((row) => {
+      const started = Date.parse(row.started);
+      return row.pid !== process.pid && (!Number.isFinite(started) || started >= since);
+    })
+    .map((row) => row.pid);
+  if (!candidates.length) return [];
+  if (remaining() < 5) return null;
+  let out: string;
+  try {
+    out = execFileSync('lsof', ['-a', '-p', candidates.join(','), '-t', '-w', '--', ...paths], {
+      encoding: 'utf8',
+      timeout: Math.ceil(remaining()),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    const failure = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
+    // Exit 1 without a complaint: some candidate or file had nothing open.
+    if (failure.status !== 1 || String(failure.stderr ?? '').trim()) return null;
+    out = String(failure.stdout ?? '');
+  }
+  const pids = [...new Set(out.split('\n').filter(Boolean).map(Number))];
+  return pids.every((pid) => Number.isSafeInteger(pid) && pid > 0) ? pids : null;
+}
+
+/**
  * SPEC-0036 D01: a host's marker directory, created private when missing. It must be absolute,
  * a directory and not a symbolic link, owned by this user and writable by no one else. Returns
  * its canonical path; throws otherwise.
@@ -264,6 +302,7 @@ export function checkStopMarkerRoot(root: unknown): string {
 export class StopMarkers {
   readonly #root: string | undefined;
   readonly #notify: StopMarkersOptions['onObservation'];
+  readonly #listHolders: NonNullable<StopMarkersOptions['listHolders']>;
   #directory: string | undefined;
   #startedAt = 0;
   readonly #markers = new Map<string, StopMarker>();
@@ -271,6 +310,7 @@ export class StopMarkers {
   constructor(options: StopMarkersOptions = {}) {
     this.#root = options.root === undefined ? undefined : checkStopMarkerRoot(options.root);
     this.#notify = options.onObservation;
+    this.#listHolders = options.listHolders ?? listHoldersSync;
   }
 
   /** The directory that holds the markers; commands must be able to read it. */
@@ -446,35 +486,9 @@ export class StopMarkers {
     if (!paths.length) return finish({ stopped: true, holders: 0, ended: 0 });
     const since = earliest(this.#startedAt);
     const find = (): number[] | null => {
+      if (remaining() < 5) return null;
       try {
-        if (remaining() < 5) return null;
-        const candidates = processTable(remaining())
-          .filter((row) => {
-            const started = Date.parse(row.started);
-            return row.pid !== process.pid && (!Number.isFinite(started) || started >= since);
-          })
-          .map((row) => row.pid);
-        if (!candidates.length) return [];
-        if (remaining() < 5) return null;
-        let out: string;
-        try {
-          out = execFileSync(
-            'lsof',
-            ['-a', '-p', candidates.join(','), '-t', '-w', '--', ...paths],
-            {
-              encoding: 'utf8',
-              timeout: Math.ceil(remaining()),
-              stdio: ['ignore', 'pipe', 'pipe'],
-            },
-          );
-        } catch (error) {
-          const failure = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
-          // Exit 1 without a complaint: some candidate or file had nothing open.
-          if (failure.status !== 1 || String(failure.stderr ?? '').trim()) return null;
-          out = String(failure.stdout ?? '');
-        }
-        const pids = [...new Set(out.split('\n').filter(Boolean).map(Number))];
-        return pids.every((pid) => Number.isSafeInteger(pid) && pid > 0) ? pids : null;
+        return this.#listHolders(paths, since, remaining());
       } catch {
         return null;
       }
@@ -510,7 +524,10 @@ export class StopMarkers {
       signal(left.filter(running), 'SIGKILL');
       settle(left, Math.min(20, (remaining() - cost) / 3));
       if (remaining() < cost + 5) {
-        left = null; // No time to list again: not verified.
+        // No time to list again: not verified. What is left of the time goes to seeing the
+        // signalled processes exit, so that `ended` counts them.
+        settle(left, remaining() - 2);
+        left = null;
         break;
       }
       left = find();
@@ -606,7 +623,10 @@ async function examine(
         // input closed; a sweep looks again while its time lasts. A stale check does not wait.
         while (end && meta && left?.length && remaining() > 400) {
           await wait(200);
-          left = await strays(meta, remaining());
+          // A look that fails keeps what the last one found: still not stopped, and still named.
+          const again = await strays(meta, remaining());
+          if (again === null) break;
+          left = again;
         }
         found.holders = held.holders ?? [];
         found.ended = held.ended;
