@@ -10,6 +10,7 @@ import type {
   RuntimeInspection,
 } from '../../engine/src/types.ts';
 import type { RuntimeTools } from '../../engine/src/tools.ts';
+import type { StopMarkerObservation } from '../../engine/src/stop-marker.ts';
 
 export interface ClaudeSpawnOptions {
   command: string;
@@ -108,7 +109,18 @@ export interface ClaudeAdapterConfig<Extra extends object = object> {
    * (SPEC-0034 B01). Supplies the stop observer, so it excludes `observeExecutionStop` and
    * `executionStop`, and a host that sets `CLAUDE_CODE_SHELL_PREFIX` cannot use it.
    */
-  stopMarker?: boolean;
+  stopMarker?:
+    | boolean
+    | {
+        /**
+         * SPEC-0036: an absolute directory that outlives the host, private to this user and
+         * outside every workspace and state directory. Each adapter instance works in a directory
+         * of its own under it, whose markers `sweepStopMarkers` can end after a restart.
+         */
+        directory: string;
+        /** Each stop observation's result, for the host's diagnostics; exceptions are ignored. */
+        onObservation?: (observation: StopMarkerObservation) => void;
+      };
   requestTimeoutMs?: number;
   turnTimeoutMs?: number;
   cleanupTimeoutMs?: number;

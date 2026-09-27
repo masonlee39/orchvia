@@ -15,11 +15,11 @@ export interface ProcessRow {
   started: string;
 }
 
-/** The process table now; throws when it cannot be read. */
-export function processTable(): ProcessRow[] {
+/** The process table now; throws when it cannot be read within `timeoutMs`. */
+export function processTable(timeoutMs = 5000): ProcessRow[] {
   const out = execFileSync('ps', ['-axo', 'pid=,ppid=,pgid=,lstart='], {
     encoding: 'utf8',
-    timeout: 5000,
+    timeout: Math.max(1, Math.ceil(timeoutMs)),
     maxBuffer: 16 * 1024 * 1024,
     env: { ...process.env, LC_ALL: 'C' },
   });

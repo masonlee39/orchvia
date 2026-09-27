@@ -84,6 +84,7 @@ Each specification has a matching TDD record of observed failures before the cha
 | [SPEC-0032](specs/0032-claude-session-totals.md) | Claude session totals that continue across dispatches, and the Claude SDK 0.3.283 and Codex 0.157.1 pins (0.1.9) |
 | [SPEC-0033](specs/0033-cost-retention-pricing-polling.md) | Indexed cost queries, the retention status, cache write prices by duration, the TypeScript polling interval and typed Python results (0.1.9) |
 | [SPEC-0034](specs/0034-background-command-stop-proof.md) | Stop proof for commands that outlive their turn: Codex coverage, process-tree cleanup, the `processGroupsStopped` deprecation and Claude's `stopMarker` |
+| [SPEC-0036](specs/0036-stop-marker-restart.md) | Stop markers under a host directory, the sweep after a restart, the synchronous cleanup and observations |
 
 ## Claude and Codex baselines
 

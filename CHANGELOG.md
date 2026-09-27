@@ -2,6 +2,17 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+Stop markers that survive a host restart.
+
+### Added
+
+- `stopMarker: { directory, onObservation? }`: markers under a host directory that outlives the host, one directory per adapter instance, with each dispatch's workspace recorded; the files of a dispatch not proven stopped stay after the host exits (SPEC-0036 D).
+- `sweepStopMarkers(directory)` and `staleStopMarkers(directory)` from `@orchvia/adapter-claude`, without an engine: after a restart, end what earlier instances' commands left running and prove each dispatch stopped, with the workspace check of SPEC-0034; or only report it (SPEC-0036 S).
+- `adapter.endStopMarkersSync(timeoutMs)`: a bounded synchronous cleanup for a host's exit path that never throws (SPEC-0036 Y).
+- `onObservation`: each stop observation's holders, ended processes, workspace strays and result, for the host's diagnostics (SPEC-0036 O).
+
 ## [0.1.10] - 2026-09-27
 
 Commands that Claude Code or Codex leave running after a turn no longer let a dispatch release its execution lease.
