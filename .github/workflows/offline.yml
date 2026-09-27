@@ -126,6 +126,10 @@ jobs:
       - name: Stop proof with the real Codex binary and a scripted loopback gateway (no paid models)
         if: ${{ !cancelled() }}
         run: node scripts/native-stop-smoke.mjs codex dist/verification/native-stop-codex.json ./node_modules/.bin/codex
+      # SPEC-0036: a killed host's leftover command is ended by the next host's sweep.
+      - name: Stop markers across a host restart with the real Claude binary (no paid models)
+        if: ${{ !cancelled() }}
+        run: node scripts/native-stop-restart-smoke.mjs dist/verification/native-stop-restart.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ !cancelled() }}
         with:

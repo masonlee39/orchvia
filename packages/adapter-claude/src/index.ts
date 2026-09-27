@@ -11,7 +11,11 @@ import { performance } from 'node:perf_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { observeRuntimeStop, requireStopProof } from '../../engine/src/stop-observation.ts';
-import { StopMarkers } from '../../engine/src/stop-marker.ts';
+import {
+  StopMarkers,
+  type StopMarkerObservation,
+  type StopMarkerSyncResult,
+} from '../../engine/src/stop-marker.ts';
 import { existsSync } from 'node:fs';
 import { adapterProviderName } from '../../engine/src/runtime.ts';
 import {
@@ -25,6 +29,16 @@ import { inspectClaudeSession } from './inspection.ts';
 export { createClaudeMcpServer, type ClaudeMcpDependencies } from './mcp.ts';
 export { inspectClaudeSession, type ClaudeInspectionDependencies } from './inspection.ts';
 export { processGroupsStopped } from './process-groups.ts';
+export {
+  sweepStopMarkers,
+  staleStopMarkers,
+  type StopMarkerDispatch,
+  type StopMarkerObservation,
+  type StopMarkerReason,
+  type StopMarkerSweep,
+  type StopMarkerSweepOptions,
+  type StopMarkerSyncResult,
+} from '../../engine/src/stop-marker.ts';
 import { killProcessGroup, signalProcessGroup } from './process-groups.ts';
 import type {
   ClaudeAdapterConfig,
@@ -236,6 +250,12 @@ function nativeTerminal(message: RecordValue, sessionId: string): RuntimeTermina
 export interface ClaudeRuntimeAdapter extends RuntimeAdapter {
   hasActiveResources(sessionId: string): boolean;
   close(): Promise<void>;
+  /**
+   * SPEC-0036 Y01: for a host's synchronous exit path, ends within `timeoutMs` what holds this
+   * adapter's markers and never throws. `stopped` only when a last listing found none; without
+   * `stopMarker`, nothing is marked and it is true.
+   */
+  endStopMarkersSync(timeoutMs: number): StopMarkerSyncResult;
 }
 interface ActiveQuery {
   sessionId: string;
@@ -348,14 +368,30 @@ const hostEnv = (options: object): Record<string, string | undefined> | undefine
   return env !== null && typeof env === 'object' ? (env as Record<string, string>) : undefined;
 };
 
-/** SPEC-0034 B01: the markers that `stopMarker: true` asks for, or undefined. */
+/** SPEC-0034 B01, SPEC-0036: the markers that `stopMarker` asks for, or undefined. */
 function stopMarkers(
   config: Pick<ClaudeAdapterConfig, 'stopMarker' | 'observeExecutionStop' | 'executionStop'>,
   options: object,
 ): StopMarkers | undefined {
-  if (config.stopMarker === undefined || config.stopMarker === false) return undefined;
-  if (config.stopMarker !== true)
-    throw invalidConfig('Claude adapter: stopMarker must be a boolean');
+  const choice: unknown = config.stopMarker;
+  if (choice === undefined || choice === false) return undefined;
+  let host:
+    | { directory: string; onObservation?: (item: StopMarkerObservation) => void }
+    | undefined;
+  if (choice !== true) {
+    const value = choice as Record<string, unknown> | null;
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      Array.isArray(value) ||
+      Object.keys(value).some((key) => key !== 'directory' && key !== 'onObservation') ||
+      (value.onObservation !== undefined && typeof value.onObservation !== 'function')
+    )
+      throw invalidConfig(
+        'Claude adapter: stopMarker must be true or { directory, onObservation? }',
+      );
+    host = value as typeof host;
+  }
   if (process.platform === 'win32')
     throw invalidConfig('Claude adapter: stopMarker needs macOS or Linux');
   if (config.observeExecutionStop !== undefined || config.executionStop !== undefined)
@@ -366,7 +402,11 @@ function stopMarkers(
     throw invalidConfig(
       `Claude adapter: the host already sets ${SHELL_PREFIX}, so stopMarker cannot wrap commands; keep the host's own stop observer`,
     );
-  return new StopMarkers();
+  try {
+    return new StopMarkers(host ? { root: host.directory, onObservation: host.onObservation } : {});
+  } catch (error) {
+    throw invalidConfig(`Claude adapter: ${errorMessage(error)}`);
+  }
 }
 
 /** Runs every Bash command of the dispatch through its marker wrapper (SPEC-0034 B01). */
@@ -374,6 +414,7 @@ function markCommands(
   markers: StopMarkers,
   dispatchId: string,
   workspace: string,
+  stateDir: string,
   options: object,
 ): void {
   const target = options as Record<string, unknown>;
@@ -382,7 +423,7 @@ function markCommands(
     throw new Error(`The host sets ${SHELL_PREFIX}, which stopMarker owns`);
   const shell = env.CLAUDE_CODE_SHELL ?? ['/bin/bash', '/bin/zsh'].find((path) => existsSync(path));
   if (!shell) throw new Error('stopMarker needs bash or zsh');
-  const marker = markers.prepare(dispatchId, shell, workspace);
+  const marker = markers.prepare(dispatchId, shell, workspace, stateDir);
   target.env = { ...env, [SHELL_PREFIX]: marker.wrapper, CLAUDE_CODE_SHELL: shell };
   const sandbox = target.sandbox as { filesystem?: { allowRead?: string[] } } | undefined;
   if (sandbox?.filesystem)
@@ -621,6 +662,9 @@ export function createClaudeAdapter<Extra extends object = object>(
             'Host-provided query requires a matching config.inspectSession reader; no default SDK was loaded',
         };
       return (config.inspectSession ?? inspectClaudeSession)(input);
+    },
+    endStopMarkersSync(timeoutMs: number): StopMarkerSyncResult {
+      return markers?.endAllSync(timeoutMs) ?? { stopped: true, holders: 0, ended: 0 };
     },
     async close(): Promise<void> {
       closed = true;
@@ -1014,7 +1058,8 @@ export function createClaudeAdapter<Extra extends object = object>(
           options = { ...options, mcpServers: { ...record(host.mcpServers), agent_orch: server } };
         }
         request.options = buildClaudeOptions(input, options, request.options, readPolicy);
-        if (markers) markCommands(markers, input.dispatchId, input.workspace, request.options);
+        if (markers)
+          markCommands(markers, input.dispatchId, input.workspace, input.stateDir, request.options);
         if (input.orchestrationTools) {
           request.options.allowedTools = [
             ...new Set([
