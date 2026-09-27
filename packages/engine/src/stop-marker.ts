@@ -620,7 +620,10 @@ async function examine(
         // input closed; a sweep looks again while its time lasts. A stale check does not wait.
         while (end && meta && left?.length && remaining() > 400) {
           await wait(200);
-          left = await strays(meta, remaining());
+          // A look that fails keeps what the last one found: still not stopped, and still named.
+          const again = await strays(meta, remaining());
+          if (again === null) break;
+          left = again;
         }
         found.holders = held.holders ?? [];
         found.ended = held.ended;

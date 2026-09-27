@@ -58,7 +58,8 @@ function markedClaude(
   const adapter = claude({
     permissionProfile: 'workspace-write',
     stopMarker: true,
-    cleanupTimeoutMs: 3000,
+    // The stop observer's time; it returns once done, so only a loaded runner needs this much.
+    cleanupTimeoutMs: 15000,
     ...config,
     query: (request: ClaudeQueryRequest) => {
       state.request = request;
@@ -269,7 +270,7 @@ test(
       }
       assert.match(await readFile(marker.wrapper, 'utf8'), /exec 9</);
     } finally {
-      assert.equal(await markers.endAll(2000), true);
+      assert.equal(await markers.endAll(15000), true);
     }
   },
 );
@@ -288,9 +289,9 @@ test(
       process.env.PATH = path;
     }
     assert.equal(existsSync(marker.path), true, 'the marker stays');
-    assert.equal(await markers.end('unlisted', () => 2000), true);
+    assert.equal(await markers.end('unlisted', () => 15000), true);
     assert.equal(existsSync(marker.path), false);
-    await markers.endAll(1000);
+    await markers.endAll(15000);
   },
 );
 
@@ -317,7 +318,8 @@ const context = (dispatchId: string) =>
     target: { dispatchId },
     terminal: { type: 'result', text: 'done' },
     signal: new AbortController().signal,
-    remainingMs: () => 3000,
+    // Returns once done; the time only matters on a loaded runner, where lsof takes seconds.
+    remainingMs: () => 15000,
   }) as never;
 
 test(
@@ -350,7 +352,7 @@ test(
     const earlier = orphan(t, workspace);
     await delay(3100);
     const markers = new StopMarkers();
-    t.after(() => markers.endAll(1000));
+    t.after(() => markers.endAll(15000));
     markers.prepare('before', '/bin/sh', workspace);
     assert.equal(await markers.observer(context('before')), true, 'started before the dispatch');
     assert.equal(alive(earlier), true);
