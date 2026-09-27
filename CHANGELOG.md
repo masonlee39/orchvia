@@ -2,7 +2,7 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.10] - 2026-09-27
 
 Commands that Claude Code or Codex leave running after a turn no longer let a dispatch release its execution lease.
 
