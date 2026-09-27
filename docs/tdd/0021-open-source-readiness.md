@@ -431,6 +431,15 @@ Pull request #53 set the version to 0.1.10 on top of SPEC-0034 (#52). A local Cl
 - P04 passed on the Ubuntu and macOS runners, and the whole run, 13 jobs, passed at its first attempt.
 - The npm registry lists 0.1.10 as the `latest` version of all five packages, with provenance attestations, and `@orchvia/adapter-claude@0.1.10` declares the Claude SDK peer `>=0.3.241 <1`. PyPI lists `orchvia` 0.1.10 with its wheel and sdist.
 
+## The tenth release, 0.1.11
+
+Pull request #55 set the version to 0.1.11 on top of SPEC-0036 (#54). A local Claude Code session pushed the tag `v0.1.11` on its merge commit `9004b34`, on the owner's authorization. That run ([36321112536](https://github.com/masonlee39/orchvia/actions/runs/36321112536)) failed in its tests on the x86-64 macOS runner, before the build could publish anything: the new restart smoke required a verified synchronous stop that the slower runner could not fit in 300 ms. npm, PyPI and GitHub Releases had no 0.1.11. After the fixes of pull request #56, which also made the new contract tests robust on loaded runners, the owner chose to move the tag (D-0036-4): it was deleted and pushed again on `a21833d`, which started the release workflow ([36327186872](https://github.com/masonlee39/orchvia/actions/runs/36327186872)).
+
+- The offline matrix and the build passed at the first attempt, with the restart smoke on Ubuntu and both macOS runners.
+- The owner approved the `npm` and `pypi` deployments. Both jobs passed, and the GitHub release "Orchvia 0.1.11" followed with the five npm archives, the wheel, the sdist, both manifests and `SHA256SUMS`; its notes are the changelog's 0.1.11 section.
+- P04 passed on the Ubuntu and macOS runners, and the whole run, 13 jobs, passed at its first attempt.
+- The npm registry lists 0.1.11 as the `latest` version of all five packages, with provenance attestations, and the published `@orchvia/adapter-claude` declares `sweepStopMarkers`, `staleStopMarkers` and `endStopMarkersSync`. PyPI lists `orchvia` 0.1.11 with its wheel and sdist.
+
 ## P10: no document names the latest release (D-rel-3)
 
 On 2026-09-27 the owner chose D-rel-3: a release is recorded by the next release pull request, and no document names the latest release.
