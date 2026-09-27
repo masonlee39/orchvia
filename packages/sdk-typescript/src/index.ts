@@ -77,6 +77,12 @@ export interface EventOptions extends RequestOptions {
   storeId?: string;
   taskId?: string;
   limit?: number;
+  /**
+   * Delay between empty `events.read` polls, in milliseconds.
+   * Must be a finite positive number. Defaults to 50, matching the Python
+   * SDK's `poll_interval` default of 0.05 seconds.
+   */
+  pollIntervalMs?: number;
 }
 export interface InitializeResult {
   protocolVersion: string;
@@ -781,10 +787,18 @@ export class Orchestrator {
     },
   );
   readonly events = Object.assign((options: EventOptions = {}) => this.iterateEvents(options), {
-    read: (options: Omit<EventOptions, 'signal' | 'timeoutMs'> = {}, request?: RequestOptions) =>
-      this.call<EventPage>('events.read', options, request),
+    read: (
+      options: Omit<EventOptions, 'signal' | 'timeoutMs' | 'pollIntervalMs'> = {},
+      request?: RequestOptions,
+    ) => this.call<EventPage>('events.read', options, request),
   });
   private async *iterateEvents(options: EventOptions): AsyncGenerator<EventEnvelope> {
+    const pollIntervalMs = options.pollIntervalMs ?? 50;
+    if (!Number.isFinite(pollIntervalMs) || pollIntervalMs <= 0)
+      throw new OrchestratorError(
+        'INVALID_PARAMS',
+        'pollIntervalMs must be a finite positive number',
+      );
     let cursor = options.afterCursor ?? '0';
     let storeId = options.storeId;
     while (!this.closed) {
@@ -803,7 +817,7 @@ export class Orchestrator {
         yield event;
       }
       cursor = page.cursor;
-      if (!page.events.length) await sleep(50, options.signal);
+      if (!page.events.length) await sleep(pollIntervalMs, options.signal);
     }
   }
   async close(
@@ -1001,8 +1015,10 @@ export class ReadOnlyOrchestrator {
       this.call<UsageByTaskResult>('usage.byTask', { taskIds }, options),
   };
   readonly events = {
-    read: (options: Omit<EventOptions, 'signal' | 'timeoutMs'> = {}, request?: RequestOptions) =>
-      this.call<EventPage>('events.read', options, request),
+    read: (
+      options: Omit<EventOptions, 'signal' | 'timeoutMs' | 'pollIntervalMs'> = {},
+      request?: RequestOptions,
+    ) => this.call<EventPage>('events.read', options, request),
   };
   readonly operations = {
     get: (operationId: string, options?: RequestOptions) =>

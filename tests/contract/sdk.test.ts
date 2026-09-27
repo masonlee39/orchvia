@@ -257,3 +257,33 @@ test('AC02 every mutation failure exposes its exact lookup scope and key', async
     );
   }
 });
+
+test('TS events() rejects a non-positive pollIntervalMs like the Python SDK', async (t) => {
+  const orch = await fixture(t);
+  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    await assert.rejects(
+      (async () => {
+        for await (const _event of orch.events({ pollIntervalMs: bad })) {
+          // unreachable: validation throws before the first poll
+        }
+      })(),
+      { code: 'INVALID_PARAMS' },
+    );
+  }
+});
+
+test('TS events() accepts a custom pollIntervalMs and still streams events', async (t) => {
+  const orch = await fixture(t);
+  const task = await orch.tasks.create(spec, { idempotencyKey: 'sdk-poll-interval' });
+  const abort = AbortSignal.timeout(3000);
+  let seen = 0;
+  for await (const _event of orch.events({
+    taskId: task.id,
+    signal: abort,
+    pollIntervalMs: 5,
+  })) {
+    seen += 1;
+    break;
+  }
+  assert.equal(seen, 1);
+});
