@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
   chmod,
   mkdir,
@@ -495,35 +495,36 @@ test(
 );
 
 test(
-  '0036-Y01 the synchronous cleanup is not stopped while holders keep starting',
+  '0036-Y01 the synchronous cleanup is not stopped while holders keep starting, or unlisted',
   { skip: !posix },
   async (t) => {
     const { workspace } = await roots(t);
-    const markers = new StopMarkers();
-    t.after(() => markers.endAll(2000));
-    const marker = markers.prepare('respawn', '/bin/sh', workspace);
-    // A parent that does not hold the marker keeps starting processes that do.
-    const inner = `exec 9<${JSON.stringify(marker.path)}; sleep 1`;
-    const parent = Number(
-      spawnSync(
-        '/bin/sh',
-        [
-          '-c',
-          `sh -c 'while :; do sh -c ${JSON.stringify(inner).replaceAll("'", '')} & sleep 0.01; done' >/dev/null 2>&1 & echo $!`,
-        ],
-        { cwd: workspace, encoding: 'utf8' },
-      ).stdout.trim(),
-    );
-    t.after(() => {
-      try {
-        process.kill(parent, 'SIGKILL');
-      } catch {}
-    });
-    await delay(200);
-    const result = markers.endAllSync(300);
-    assert.equal(result.stopped, false, JSON.stringify(result));
-    assert.ok(result.holders > 0);
-    process.kill(parent, 'SIGKILL');
-    await delay(1200);
+    // Through the listing seam: a holder that is always there again, as when each one starts
+    // another before it ends, and a listing that fails after the holders were signalled.
+    const lists: [string, (pid: number) => () => number[] | null][] = [
+      ['respawning', (pid) => () => [pid]],
+      [
+        'unlisted',
+        (pid) => {
+          let calls = 0;
+          return () => (calls++ ? null : [pid]);
+        },
+      ],
+    ];
+    for (const [name, answers] of lists) {
+      const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+      t.after(() => child.kill('SIGKILL'));
+      const list = answers(child.pid!);
+      const markers = new StopMarkers({ listHolders: list });
+      t.after(() => markers.endAll(1000));
+      markers.prepare(name, '/bin/sh', workspace);
+      const started = performance.now();
+      const result = markers.endAllSync(300);
+      assert.ok(performance.now() - started < 300, name);
+      assert.equal(result.stopped, false, `${name} ${JSON.stringify(result)}`);
+      assert.equal(result.holders, 1, name);
+      await new Promise((resolve) => child.once('exit', resolve));
+      assert.equal(child.signalCode, 'SIGTERM', `${name}: the holder was signalled`);
+    }
   },
 );
