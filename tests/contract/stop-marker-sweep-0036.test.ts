@@ -555,3 +555,23 @@ test(
     }
   },
 );
+
+test(
+  '0036-Y01 the listing is given less than the whole time, leaving time to return',
+  { skip: !posix },
+  async (t) => {
+    const { workspace } = await roots(t);
+    const given: number[] = [];
+    const markers = new StopMarkers({
+      listHolders: (_paths, _since, timeoutMs) => {
+        given.push(timeoutMs);
+        return [];
+      },
+    });
+    t.after(() => markers.endAll(15000));
+    markers.prepare('budget', '/bin/sh', workspace);
+    markers.endAllSync(300);
+    // A child process killed at its timeout still takes a moment to be reaped; 10% is kept.
+    assert.ok(given[0]! <= 300 * 0.9, JSON.stringify(given));
+  },
+);

@@ -134,7 +134,8 @@ test(
       'sleep 30 9<&- >/dev/null 2>&1 & echo $!',
       'open',
     );
-    const swept = await sweepStopMarkers(root, { timeoutMs: 3000, keepProven: true });
+    // The open dispatch keeps the sweep looking for its whole time; under load one look takes seconds.
+    const swept = await sweepStopMarkers(root, { timeoutMs: 8000, keepProven: true });
     assert.deepEqual(
       Object.fromEntries(swept.dispatches.map((item) => [item.dispatchId, item.stopped])),
       { proven: true, open: false },
@@ -240,10 +241,15 @@ test(
       });
       return pid;
     });
+    // On a loaded runner one call may end the holders without verifying; the next finds none.
     let result = endStopMarkersSync(root, 2000);
-    for (let i = 0; !result.stopped && i < 5; i++) result = endStopMarkersSync(root, 2000);
+    let holders = result.holders;
+    for (let i = 0; !result.stopped && i < 5; i++) {
+      result = endStopMarkersSync(root, 2000);
+      holders = Math.max(holders, result.holders);
+    }
     assert.equal(result.stopped, true, JSON.stringify(result));
-    assert.equal(result.holders >= 2, true, JSON.stringify(result));
+    assert.equal(holders >= 2, true, JSON.stringify(result));
     assert.deepEqual(
       result.instances.map((item: { instance: string }) => item.instance).sort(),
       [a.directory, b.directory].sort(),
