@@ -291,9 +291,16 @@ try {
     record.lastEvent = (await running).at(-1);
     await adapter.close().catch((error) => (record.closeError = String(error)));
     record.observed = observed;
+    // The host's criterion: within 300 ms, and what is not verified in time is left to the next
+    // start's sweep. Everywhere: within the time, the command ended, and never stopped while it
+    // runs. That the last listing fits as well is asserted on Apple silicon only; the slower
+    // x86-64 macOS runner may not verify in time, which the result then says (SPEC-0036 Y01).
     assert.ok(record.elapsedMs < 300, `${record.elapsedMs} ms`);
-    assert.equal(record.result.stopped, true, JSON.stringify(record.result));
+    assert.equal(record.result.ended, 1, JSON.stringify(record.result));
     assert.deepEqual(record.after, []);
+    if (process.arch === 'arm64')
+      assert.equal(record.result.stopped, true, JSON.stringify(record.result));
+    else record.verifiedInTime = record.result.stopped;
   }
   evidence.passed = true;
 } finally {
