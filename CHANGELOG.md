@@ -10,6 +10,16 @@ Claude Agent SDK 0.3.277 and later: usage of a resumed or forked Claude session.
 
 - From Claude Agent SDK 0.3.277 (Claude Code 2.1.277) on, a resumed or forked session's `modelUsage` continues from its earlier dispatches, so 0.1.8 recorded every earlier dispatch again in the records outside the main loop of a session's second and later dispatches and of a fork's first dispatch. The adapter now reports each dispatch's session totals with its main observation, the engine keeps them with the dispatch and hands them to the next dispatch on the same native session, and the adapter subtracts them. Without such totals, or without Claude Code's version, what a resumed dispatch ran outside its main loop is recorded as unknown. Records already written are not changed (SPEC-0032).
 
+- Automatic collection scanned the records whose detail it had already collected again on every pass, so after everything was collected each run collected nothing, and a newly collectable record waited until the scan had passed every older one. A collected record now leaves the candidates; records collected before 0.1.9 are marked the first time a run meets them (SPEC-0033 S01, [#44](https://github.com/masonlee39/orchvia/issues/44)).
+
+### Added
+
+- `costs.get`, budget checks and settlement read only the records they concern, through new indexes, instead of whole tables; with 50,000 records each, a task's costs and a root budget check went from about 65 ms to under 0.1 ms in a synthetic benchmark. Results are unchanged (SPEC-0033 P, [#43](https://github.com/masonlee39/orchvia/issues/43)).
+- `storage.status` returns `retention`: what collection has left and where the collection of events stops, and why (SPEC-0033 S, [#44](https://github.com/masonlee39/orchvia/issues/44)).
+- Pricing may set `cacheWrite5m` and `cacheWrite1h`, the prices of cache writes that live five minutes and one hour (SPEC-0033 C, [#45](https://github.com/masonlee39/orchvia/issues/45)).
+- The TypeScript client takes `pollIntervalMs` for `events()` and `wait()`, as Python's `poll_interval` (SPEC-0033 T, [#46](https://github.com/masonlee39/orchvia/issues/46)).
+- Python results are typed: `orchvia.views` holds read-only views generated from the schema; 25 methods and the handles of mutations return them, mutations with their receipt fields. Results are still `Snapshot`s at run time. CI checks the types with mypy (SPEC-0033 Y, [#47](https://github.com/masonlee39/orchvia/issues/47)).
+
 ### Changed
 
 - CI and the development dependencies use Claude Agent SDK 0.3.283 and Codex CLI 0.157.1. The usage check with the real Claude binary also runs with SDK 0.3.274 (SPEC-0032 B04, C06).

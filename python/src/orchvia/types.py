@@ -114,6 +114,10 @@ _WIRE_TO_PYTHON = {
     "backupId": "backup_id", "rolloverId": "rollover_id", "oldStoreId": "old_store_id", "newStoreId": "new_store_id",
     "archiveId": "archive_id", "manifestDigest": "manifest_digest",
     "snapshotId": "snapshot_id", "nextOffset": "next_offset", "retentionFloorCursor": "retention_floor_cursor",
+    "eventsPastAge": "events_past_age", "eventsPastAgeCapped": "events_past_age_capped",
+    "detailPending": "detail_pending", "detailPendingCapped": "detail_pending_capped",
+    "oldestCollectableAt": "oldest_collectable_at", "eventPrefix": "event_prefix",
+    "stoppedAtCursor": "stopped_at_cursor",
     "quotaBytes": "quota_bytes", "minFreeBytes": "min_free_bytes", "emergencyBytes": "emergency_bytes",
     "maxRecords": "max_records", "settlementReserveRecords": "settlement_reserve_records",
     "maxSettlementPerTarget": "max_settlement_per_target", "eventDays": "event_days", "detailDays": "detail_days", "usageDays": "usage_days",
@@ -149,7 +153,7 @@ _PYTHON_TO_WIRE = {value: key for key, value in _WIRE_TO_PYTHON.items()}
 _OBJECT_FIELDS = {"spec", "runtime", "acceptance", "target", "data", "error", "capabilities",
                   "lifecycle", "resolution", "evidence", "timeouts", "executionIsolation",
                   "execution", "lease", "budget", "routing", "contextPlan", "sessionLifecycle", "retryIdentity", "storeNamespaces",
-                  "workflow", "revisionRequest", "blockedBy", "pausedByClose"}
+                  "workflow", "revisionRequest", "blockedBy", "pausedByClose", "retention", "eventPrefix"}
 _OBJECT_LIST_FIELDS = {"records", "events", "occupants", "conflicts", "tasks", "handoffs", "rules", "byModel"}
 
 

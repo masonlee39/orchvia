@@ -4,7 +4,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Mapping, Sequence
 import math
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from .identity import request_digest
@@ -12,6 +12,13 @@ from .errors import OrchestrationError, ShutdownIncomplete, unsupported
 from .transport import RpcTransport
 from .types import ReconcileEvidence, Snapshot, TaskSpec, snapshot, to_wire
 from ._version import VERSION as SDK_VERSION
+# SPEC-0033 Y02: results are Snapshots at run time; their views describe them to type checkers.
+from .views import (ApprovalRequestView, ExecutionConflictView, HandoffListResultView, HandoffRequestView,
+                    InitializeResultView, MessageReceiptView, MessageSnapshotView, OperationReceiptView,
+                    OperationSnapshotView, RuleListResultView, SessionReceiptView, TaskReceiptView,
+                    RuntimeInspectionView, SchedulerSnapshotView, SessionSnapshotView, SnapshotPageView,
+                    TaskGetManyResultView, TaskListResultView, TaskSnapshotView, UsageByTaskResultView,
+                    UsageRecordView, UsageSummaryView)
 
 
 PROTOCOL_VERSION = "2.0"
@@ -27,13 +34,21 @@ def _duration(value: float, name: str, *, zero: bool = False) -> float:
     return float(value)
 
 
-class TaskHandle(Snapshot):
+if TYPE_CHECKING:
+    # Only for type checkers: at run time a Protocol base would hide the Snapshot's fields.
+    class _TaskBase(Snapshot, TaskReceiptView): ...
+    class _OperationBase(Snapshot, OperationReceiptView): ...
+else:
+    _TaskBase = _OperationBase = Snapshot
+
+
+class TaskHandle(_TaskBase):
     __slots__ = ("_client",)
     def __init__(self, client: "Orchestrator", value: Snapshot):
         super().__init__(value)
         self._client = client
 
-    async def get(self) -> Snapshot:
+    async def get(self) -> TaskSnapshotView:
         return await self._client.tasks.get(self.id)
 
     async def cancel(self, *, idempotency_key: str | None = None):
@@ -42,18 +57,18 @@ class TaskHandle(Snapshot):
     async def resume(self, *, idempotency_key: str | None = None):
         return await self._client.tasks.resume(self.id, idempotency_key=idempotency_key)
 
-    async def wait(self, *, timeout: float | None = None) -> Snapshot:
-        return await self._client._wait(lambda: self._client.tasks.get(self.id), _TASK_TERMINAL, timeout)
+    async def wait(self, *, timeout: float | None = None) -> TaskSnapshotView:
+        return cast(TaskSnapshotView, await self._client._wait(lambda: self._client.tasks.get(self.id), _TASK_TERMINAL, timeout))
 
 
-class OperationHandle(Snapshot):
+class OperationHandle(_OperationBase):
     __slots__ = ("_client",)
     def __init__(self, client: "Orchestrator", value: Snapshot):
         super().__init__(value)
         self._client = client
 
-    async def wait(self, *, timeout: float | None = None) -> Snapshot:
-        return await self._client._wait(lambda: self._client.operations.get(self.id), _OPERATION_TERMINAL, timeout)
+    async def wait(self, *, timeout: float | None = None) -> OperationSnapshotView:
+        return cast(OperationSnapshotView, await self._client._wait(lambda: self._client.operations.get(self.id), _OPERATION_TERMINAL, timeout))
 
 
 # Engine errors that can follow a commit, or whose commit is unknown: a retry identity that meets
@@ -79,12 +94,12 @@ class _Tasks:
             await self._client._require_workflow("labels")
         return TaskHandle(self._client, await self._client._mutate("tasks.create", {"spec": wire}, idempotency_key))
 
-    async def get(self, task_id: str) -> Snapshot:
-        return await self._client._call("tasks.get", {"taskId": task_id})
+    async def get(self, task_id: str) -> TaskSnapshotView:
+        return cast(TaskSnapshotView, await self._client._call("tasks.get", {"taskId": task_id}))
 
     async def list(self, *, parent_task_id: str | None = None, session_id: str | None = None,
                    label: str | None = None, status: Sequence[str] | None = None, order: str | None = None,
-                   limit: int | None = None, after_cursor: str | None = None) -> Snapshot:
+                   limit: int | None = None, after_cursor: str | None = None) -> TaskListResultView:
         """A page in creation order, or newest first with order="desc"; set at most one of
         parent_task_id, session_id and label, and optionally status (SPEC-0028 P01)."""
         await self._client._require_workflow("task_list")
@@ -95,12 +110,12 @@ class _Tasks:
         params = {"parentTaskId": parent_task_id, "sessionId": session_id, "label": label,
                   "status": None if status is None else list(status), "order": order,
                   "limit": limit, "afterCursor": after_cursor}
-        return await self._client._call("tasks.list", {k: v for k, v in params.items() if v is not None})
+        return cast(TaskListResultView, await self._client._call("tasks.list", {k: v for k, v in params.items() if v is not None}))
 
-    async def get_many(self, task_ids: Sequence[str]) -> Snapshot:
+    async def get_many(self, task_ids: Sequence[str]) -> TaskGetManyResultView:
         """1 to 100 tasks by ID, in the order requested, and the IDs not found (SPEC-0028 P02)."""
         await self._client._require_workflow("task_queries")
-        return await self._client._call("tasks.getMany", {"taskIds": list(task_ids)})
+        return cast(TaskGetManyResultView, await self._client._call("tasks.getMany", {"taskIds": list(task_ids)}))
 
     async def resume(self, task_id: str, *, idempotency_key: str | None = None) -> OperationHandle:
         return OperationHandle(self._client, await self._client._mutate("tasks.resume", {"taskId": task_id}, idempotency_key))
@@ -113,11 +128,11 @@ class _Sessions:
     def __init__(self, client: "Orchestrator"):
         self._client = client
 
-    async def get(self, session_id: str) -> Snapshot:
-        return await self._client._call("sessions.get", {"sessionId": session_id})
+    async def get(self, session_id: str) -> SessionSnapshotView:
+        return cast(SessionSnapshotView, await self._client._call("sessions.get", {"sessionId": session_id}))
 
-    async def inspect(self, session_id: str, *, timeout_ms: int = 5000, limit: int = 16) -> Snapshot:
-        return await self._client._call("sessions.inspect", {"sessionId": session_id, "timeoutMs": timeout_ms, "limit": limit})
+    async def inspect(self, session_id: str, *, timeout_ms: int = 5000, limit: int = 16) -> RuntimeInspectionView:
+        return cast(RuntimeInspectionView, await self._client._call("sessions.inspect", {"sessionId": session_id, "timeoutMs": timeout_ms, "limit": limit}))
 
     async def control(self, target: Mapping[str, Any], command: Mapping[str, Any], *,
                       idempotency_key: str | None = None) -> OperationHandle:
@@ -140,7 +155,7 @@ class _Sessions:
         return OperationHandle(self._client, await self._client._mutate(
             "sessions.reconcile", {"target": to_wire(target), "evidence": to_wire(evidence)}, idempotency_key))
 
-    async def open(self, spec: Mapping[str, Any], *, idempotency_key: str | None = None) -> Snapshot:
+    async def open(self, spec: Mapping[str, Any], *, idempotency_key: str | None = None) -> SessionReceiptView:
         await self._client.start()
         capability = self._client.info.capabilities.get("session_lifecycle", {})
         if not isinstance(capability, Mapping) or capability.get("open") is not True:
@@ -150,10 +165,10 @@ class _Sessions:
             await self._client._require_workflow("write_path")
         if "label" in wire or "metadata" in wire:
             await self._client._require_workflow("labels")
-        return await self._client._mutate("sessions.open", {"spec": wire}, idempotency_key)
+        return cast(SessionReceiptView, await self._client._mutate("sessions.open", {"spec": wire}, idempotency_key))
 
     async def fork(self, target: Mapping[str, Any], snapshot_ref: str | None = None, *, model: str | None = None,
-                   acknowledge_cache_loss: bool | None = None, idempotency_key: str | None = None) -> Snapshot:
+                   acknowledge_cache_loss: bool | None = None, idempotency_key: str | None = None) -> SessionReceiptView:
         """Prepare a fork; another allowed model loses prompt-cache reuse and must be acknowledged."""
         await self._client.start()
         capability = self._client.info.capabilities.get("session_lifecycle", {})
@@ -166,7 +181,7 @@ class _Sessions:
             params["model"] = model
         if acknowledge_cache_loss is not None:
             params["acknowledgeCacheLoss"] = acknowledge_cache_loss
-        return await self._client._mutate("sessions.fork", params, idempotency_key)
+        return cast(SessionReceiptView, await self._client._mutate("sessions.fork", params, idempotency_key))
 
     async def compact(self, target: Mapping[str, Any], *, idempotency_key: str | None = None) -> OperationHandle:
         return OperationHandle(self._client, await self._client._mutate("sessions.compact", {"target": to_wire(target)}, idempotency_key))
@@ -194,13 +209,13 @@ class _Scheduler:
             raise OrchestrationError("UNSUPPORTED_CAPABILITY",
                 "Host has not negotiated execution isolation version 1 with budget policy version 2")
 
-    async def get(self) -> Snapshot:
+    async def get(self) -> SchedulerSnapshotView:
         await self._require_capability()
-        return await self._client._call("scheduler.get", {})
+        return cast(SchedulerSnapshotView, await self._client._call("scheduler.get", {}))
 
-    async def get_conflict(self, conflict_id: str) -> Snapshot:
+    async def get_conflict(self, conflict_id: str) -> ExecutionConflictView:
         await self._require_capability()
-        return await self._client._call("scheduler.getConflict", {"conflictId": conflict_id})
+        return cast(ExecutionConflictView, await self._client._call("scheduler.getConflict", {"conflictId": conflict_id}))
 
     async def resolve_conflict(self, conflict_id: str, evidence: ReconcileEvidence | Mapping[str, Any], *,
                                expected_revision: int, idempotency_key: str | None = None) -> OperationHandle:
@@ -215,33 +230,33 @@ class _Messages:
     def __init__(self, client: "Orchestrator"):
         self._client = client
 
-    async def send(self, spec: Mapping[str, Any], *, idempotency_key: str | None = None) -> Snapshot:
-        return await self._client._mutate("messages.send", {"spec": to_wire(spec)}, idempotency_key)
+    async def send(self, spec: Mapping[str, Any], *, idempotency_key: str | None = None) -> MessageReceiptView:
+        return cast(MessageReceiptView, await self._client._mutate("messages.send", {"spec": to_wire(spec)}, idempotency_key))
 
-    async def get(self, message_id: str) -> Snapshot:
-        return await self._client._call("messages.get", {"messageId": message_id})
+    async def get(self, message_id: str) -> MessageSnapshotView:
+        return cast(MessageSnapshotView, await self._client._call("messages.get", {"messageId": message_id}))
 
 
 class _Operations:
     def __init__(self, client: "Orchestrator"):
         self._client = client
 
-    async def get(self, operation_id: str) -> Snapshot:
-        return await self._client._call("operations.get", {"operationId": operation_id})
+    async def get(self, operation_id: str) -> OperationSnapshotView:
+        return cast(OperationSnapshotView, await self._client._call("operations.get", {"operationId": operation_id}))
 
     async def lookup(self, key_spec: Mapping[str, Any] | None = None, *, method: str | None = None,
-                     scope: str = "local", idempotency_key: str | None = None) -> Snapshot:
+                     scope: str = "local", idempotency_key: str | None = None) -> OperationSnapshotView:
         params = to_wire(key_spec) if key_spec is not None else {
             "method": method, "scope": scope, "idempotencyKey": idempotency_key}
-        return await self._client._call("operations.lookup", params)
+        return cast(OperationSnapshotView, await self._client._call("operations.lookup", params))
 
 
 class _Approvals:
     def __init__(self, client: "Orchestrator"):
         self._client = client
 
-    async def get(self, approval_id: str) -> Snapshot:
-        return await self._client._call("approvals.get", {"approvalId": approval_id})
+    async def get(self, approval_id: str) -> ApprovalRequestView:
+        return cast(ApprovalRequestView, await self._client._call("approvals.get", {"approvalId": approval_id}))
 
     async def decide(self, approval_id: str, decision: Mapping[str, Any], *,
                      idempotency_key: str | None = None) -> OperationHandle:
@@ -258,16 +273,16 @@ class _Handoffs:
     def __init__(self, client: "Orchestrator"):
         self._client = client
 
-    async def get(self, handoff_id: str) -> Snapshot:
+    async def get(self, handoff_id: str) -> HandoffRequestView:
         await self._client._require_workflow("handoffs")
-        return await self._client._call("handoffs.get", {"handoffId": handoff_id})
+        return cast(HandoffRequestView, await self._client._call("handoffs.get", {"handoffId": handoff_id}))
 
     async def list(self, *, status: str | None = None, target_session_id: str | None = None,
-                   limit: int | None = None, after_cursor: str | None = None) -> Snapshot:
+                   limit: int | None = None, after_cursor: str | None = None) -> HandoffListResultView:
         await self._client._require_workflow("handoffs")
         params = {"status": status, "targetSessionId": target_session_id, "limit": limit,
                   "afterCursor": after_cursor}
-        return await self._client._call("handoffs.list", {k: v for k, v in params.items() if v is not None})
+        return cast(HandoffListResultView, await self._client._call("handoffs.list", {k: v for k, v in params.items() if v is not None}))
 
     async def resolve(self, handoff_id: str, *, expected_revision: int, outcome: str, task_id: str | None = None,
                       comment: str | None = None, idempotency_key: str | None = None) -> OperationHandle:
@@ -297,13 +312,13 @@ class _Rules:
         return OperationHandle(self._client, await self._client._mutate(
             "rules.retire", {"id": rule_id, "version": version}, idempotency_key))
 
-    async def list(self, *, include_retired: bool | None = None) -> Snapshot:
+    async def list(self, *, include_retired: bool | None = None) -> RuleListResultView:
         """The effective rules; with include_retired, the retired ones after them (SPEC-0028 U04)."""
         await self._client._require_workflow("runtime_rules")
         if include_retired is None:
-            return await self._client._call("rules.list", {})
+            return cast(RuleListResultView, await self._client._call("rules.list", {}))
         await self._client._require_workflow("rule_retirement")
-        return await self._client._call("rules.list", {"includeRetired": include_retired})
+        return cast(RuleListResultView, await self._client._call("rules.list", {"includeRetired": include_retired}))
 
 
 class _Usage:
@@ -313,22 +328,22 @@ class _Usage:
     async def get(self, task_id: str) -> Snapshot:
         return await self._client._call("usage.get", {"taskId": task_id})
 
-    async def get_record(self, usage_record_id: str) -> Snapshot:
-        return await self._client._call("usage.getRecord", {"usageRecordId": usage_record_id})
+    async def get_record(self, usage_record_id: str) -> UsageRecordView:
+        return cast(UsageRecordView, await self._client._call("usage.getRecord", {"usageRecordId": usage_record_id}))
 
-    async def summary(self, root_task_id: str) -> Snapshot:
+    async def summary(self, root_task_id: str) -> UsageSummaryView:
         """Token totals of a root task and every task under it, by model (SPEC-0028 P03)."""
         await self._client._require_workflow("task_queries")
         result = await self._client._call("usage.summary", {"rootTaskId": root_task_id})
-        return Snapshot({**result, "totals": snapshot(result["totals"])})
+        return cast(UsageSummaryView, Snapshot({**result, "totals": snapshot(result["totals"])}))
 
-    async def by_task(self, task_ids: Sequence[str]) -> Snapshot:
+    async def by_task(self, task_ids: Sequence[str]) -> UsageByTaskResultView:
         """Each of 1 to 100 tasks' own token totals by model, in order, and the missing IDs
         (SPEC-0029 A)."""
         await self._client._require_workflow("usage_by_task")
         result = await self._client._call("usage.byTask", {"taskIds": list(task_ids)})
-        return Snapshot({**result, "tasks": [Snapshot({**entry, "totals": snapshot(entry["totals"])})
-                                             for entry in result["tasks"]]})
+        return cast(UsageByTaskResultView, Snapshot({**result, "tasks": [Snapshot({**entry, "totals": snapshot(entry["totals"])})
+                                             for entry in result["tasks"]]}))
 
 
 class _Costs:
@@ -410,8 +425,8 @@ class State:
     def __init__(self, client):
         self._client = client
 
-    async def snapshot(self, *, snapshot_id=None, offset=0, limit=64):
-        return await self._client._call("state.snapshot", {"offset": offset, "limit": limit, **({"snapshotId": snapshot_id} if snapshot_id is not None else {})})
+    async def snapshot(self, *, snapshot_id=None, offset=0, limit=64) -> SnapshotPageView:
+        return cast(SnapshotPageView, await self._client._call("state.snapshot", {"offset": offset, "limit": limit, **({"snapshotId": snapshot_id} if snapshot_id is not None else {})}))
 
     async def release_snapshot(self, snapshot_id):
         return await self._client._call("state.releaseSnapshot", {"snapshotId": snapshot_id})
@@ -432,7 +447,7 @@ class Orchestrator:
         self._lifecycle_lock = asyncio.Lock()
         self._closed = False
         self._shutdown_operation_id: str | None = None
-        self.info: Snapshot | None = None
+        self.info: InitializeResultView | None = None
         self._identities: dict[tuple[str, str, str], dict[str, Any]] = {}
         self.stores = Stores(self)
         self.archives = Archives(self)
@@ -524,7 +539,7 @@ class Orchestrator:
                     raise OrchestrationError("PROTOCOL_ERROR", "Handshake is missing instance/store identity")
                 if type(result.get("capabilities", {}).get("storeNamespaces", {}).get("version")) is not int or result["capabilities"]["storeNamespaces"]["version"] != 1:
                     raise OrchestrationError("UNSUPPORTED_CAPABILITY", "Host must support namespace-bound writes")
-                self.info = snapshot(result)
+                self.info = cast(InitializeResultView, snapshot(result))
             except BaseException as startup_error:
                 cleanup = asyncio.create_task(self._cleanup_failed_start(opening),
                                               name="orchvia-start-cleanup")
@@ -658,12 +673,12 @@ class Orchestrator:
             error.scope = scope
             raise
 
-    async def refresh(self) -> Snapshot:
+    async def refresh(self) -> InitializeResultView:
         info = await self._call("initialize", {"protocolVersion": PROTOCOL_VERSION, "sdkVersion": SDK_VERSION})
         if info.protocol_version != PROTOCOL_VERSION or info.capabilities.store_namespaces.version != 1:
             raise OrchestrationError("PROTOCOL_MISMATCH", "Refreshed host lacks namespace support")
         self.info = info
-        return info
+        return cast(InitializeResultView, info)
 
     def forget_idempotency_key(self, idempotency_key: str) -> int:
         """Forget the retry identities of a key for every method and scope; return how many there were.

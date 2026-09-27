@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 706a4d4990d898e1738f1f5cd0c9ecd12fc30667885fef9e8fd9ab13283cf907. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 0524bce8cafa4d79a54c06f249090cf30577ee57a5df9aac905e4e13eadb2de3. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -564,7 +564,14 @@ export type Pricing = {
   currency: string;
   version: string;
   inputTokenMode: 'total' | 'uncached';
-  perMillion: { input: string; output: string; cacheRead?: string; cacheWrite?: string };
+  perMillion: {
+    input: string;
+    output: string;
+    cacheRead?: string;
+    cacheWrite?: string;
+    cacheWrite5m?: string;
+    cacheWrite1h?: string;
+  };
 };
 export type RuntimeInspection = {
   status: 'found' | 'not_found' | 'unavailable' | 'mismatch';

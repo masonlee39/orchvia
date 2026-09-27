@@ -50,24 +50,25 @@ export class CostLedger {
   private root(task: TaskSnapshot): TaskSnapshot {
     return this.store.require('tasks', task.rootTaskId ?? task.id);
   }
-  private costs(): Cost[] {
-    return this.store.all<Cost>('costs');
-  }
+  /**
+   * The amounts in `currency` spent and still reserved, host-wide or under one root task. Each
+   * reads its rows through an index (SPEC-0033 P02, P03); amounts are summed as integers of
+   * 10^-18, which exceed SQLite's integers, so the sum stays in JavaScript.
+   */
   private occupied(currency: string, rootTaskId?: string): bigint {
     let total = 0n;
-    for (const row of this.costs())
-      if (
-        row.currency === currency &&
-        row.amountUnits !== null &&
-        (!rootTaskId || row.rootTaskId === rootTaskId)
-      )
-        total += BigInt(row.amountUnits);
-    for (const row of this.store.all<Reservation>('budget_reservations'))
-      if (
-        row.currency === currency &&
-        row.status === 'held' &&
-        (!rootTaskId || row.rootTaskId === rootTaskId)
-      )
+    if (rootTaskId) {
+      for (const row of costRows(this.store, 'rootTaskId', rootTaskId))
+        if (row.currency === currency && row.amountUnits !== null) total += BigInt(row.amountUnits);
+    } else
+      for (const { units } of this.store.db
+        .prepare(
+          "SELECT json_extract(data,'$.amountUnits') AS units FROM costs WHERE json_extract(data,'$.currency')=? AND json_extract(data,'$.amountUnits') IS NOT NULL",
+        )
+        .all(currency) as { units: string }[])
+        total += BigInt(units);
+    for (const row of heldReservations(this.store))
+      if (row.currency === currency && (!rootTaskId || row.rootTaskId === rootTaskId))
         total += BigInt(row.remainingUnits);
     return total;
   }
@@ -113,11 +114,10 @@ export class CostLedger {
       return { reason: 'TASK_BUDGET_EXHAUSTED' };
     if (task.id !== root.id && task.spec.budget) {
       let direct = 0n;
-      for (const row of this.costs())
-        if (row.costOwnerTaskId === task.id && row.amountUnits !== null)
-          direct += BigInt(row.amountUnits);
-      for (const row of this.store.all<Reservation>('budget_reservations'))
-        if (row.taskId === task.id && row.status === 'held') direct += BigInt(row.remainingUnits);
+      for (const row of costRows(this.store, 'costOwnerTaskId', task.id))
+        if (row.amountUnits !== null) direct += BigInt(row.amountUnits);
+      for (const row of heldReservations(this.store))
+        if (row.taskId === task.id) direct += BigInt(row.remainingUnits);
       if (direct + reserve > moneyUnits(task.spec.budget.maxCost))
         return { reason: 'TASK_BUDGET_EXHAUSTED' };
     }
@@ -189,7 +189,7 @@ export class CostLedger {
     const reserve = this.store.get<Reservation>('budget_reservations', dispatchId);
     if (!reserve) return;
     const dispatch = this.store.require<Record<string, unknown>>('dispatches', dispatchId);
-    const records = this.costs().filter((cost) => cost.dispatchId === dispatchId);
+    const records = costRows(this.store, 'dispatchId', dispatchId);
     const spent = records.reduce((n, row) => n + BigInt(row.amountUnits ?? '0'), 0n);
     const terminal = dispatch.terminalEvidence as { usageComplete?: boolean } | undefined;
     const complete =
@@ -211,6 +211,33 @@ export class CostLedger {
     return costSummary(this.store, taskId, scope);
   }
 }
+/** The cost records whose `field` is `value`, in recording order, through its index (P01). */
+function costRows(
+  store: Store,
+  field: 'costOwnerTaskId' | 'rootTaskId' | 'dispatchId',
+  value: string,
+): Cost[] {
+  return (
+    store.db
+      .prepare(`SELECT data FROM costs WHERE json_extract(data,'$.${field}')=? ORDER BY rowid`)
+      .all(value) as { data: string }[]
+  ).map((row) => JSON.parse(row.data) as Cost);
+}
+/**
+ * Reservations still held, in creation order, through the partial index `reservations_held`. The
+ * few held rows are ordered here: `ORDER BY rowid` makes SQLite scan the table instead.
+ */
+function heldReservations(store: Store): Reservation[] {
+  return (
+    store.db
+      .prepare(
+        "SELECT rowid AS ordinal, data FROM budget_reservations WHERE json_extract(data,'$.status')='held'",
+      )
+      .all() as { ordinal: number; data: string }[]
+  )
+    .sort((a, b) => a.ordinal - b.ordinal)
+    .map((row) => JSON.parse(row.data) as Reservation);
+}
 /** The result of `costs.get`, for the engine and a read-only view (SPEC-0027 R03). */
 export function costSummary(
   store: Store,
@@ -218,42 +245,42 @@ export function costSummary(
   scope: 'direct' | 'tree' | 'host_overhead',
 ): CostSummary {
   if (taskId) store.require('tasks', taskId);
+  // SPEC-0033 P02: a task's tree at any depth through tasks_parent, then the records of its tasks
+  // through costs_owner, in recording order.
+  const tree =
+    "WITH RECURSIVE tree(id) AS (SELECT ? UNION SELECT t.id FROM tasks t JOIN tree ON json_extract(t.data,'$.spec.parentTaskId')=tree.id)";
   const descendants = new Set<string>(taskId ? [taskId] : []);
-  if (taskId && scope === 'tree') {
-    const tasks = store.all<TaskSnapshot>('tasks');
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const task of tasks)
-        if (
-          task.spec.parentTaskId &&
-          descendants.has(task.spec.parentTaskId) &&
-          !descendants.has(task.id)
-        ) {
-          descendants.add(task.id);
-          changed = true;
-        }
-    }
-  }
-  const rows = store
-    .all<Cost>('costs')
-    .filter((row) =>
-      scope === 'host_overhead'
-        ? row.category === 'host_overhead'
-        : row.category === 'task' && (!taskId || descendants.has(row.costOwnerTaskId!)),
+  if (taskId && scope === 'tree')
+    for (const { id } of store.db.prepare(`${tree} SELECT id FROM tree`).all(taskId) as {
+      id: string;
+    }[])
+      descendants.add(id);
+  const parsed = (statement: string, ...args: string[]) =>
+    (store.db.prepare(statement).all(...args) as { data: string }[]).map(
+      (row) => JSON.parse(row.data) as Cost,
     );
+  const rows =
+    scope === 'host_overhead'
+      ? parsed(
+          "SELECT data FROM costs WHERE json_extract(data,'$.category')='host_overhead' ORDER BY rowid",
+        )
+      : !taskId
+        ? store.all<Cost>('costs').filter((row) => row.category === 'task')
+        : (scope === 'tree'
+            ? parsed(
+                `${tree} SELECT data FROM costs WHERE json_extract(data,'$.costOwnerTaskId') IN (SELECT id FROM tree) ORDER BY rowid`,
+                taskId,
+              )
+            : costRows(store, 'costOwnerTaskId', taskId)
+          ).filter((row) => row.category === 'task');
   const totals: Record<string, bigint> = {};
   for (const row of rows)
     if (row.amountUnits !== null && row.currency)
       totals[row.currency] = (totals[row.currency] ?? 0n) + BigInt(row.amountUnits);
-  const reservations = store
-    .all<Reservation>('budget_reservations')
-    .filter(
-      (row) =>
-        scope !== 'host_overhead' &&
-        (!taskId || descendants.has(row.taskId)) &&
-        row.status === 'held',
-    );
+  const reservations =
+    scope === 'host_overhead'
+      ? []
+      : heldReservations(store).filter((row) => !taskId || descendants.has(row.taskId));
   return {
     scope,
     totals: Object.fromEntries(

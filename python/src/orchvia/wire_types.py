@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 706a4d4990d898e1738f1f5cd0c9ecd12fc30667885fef9e8fd9ab13283cf907. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 0524bce8cafa4d79a54c06f249090cf30577ee57a5df9aac905e4e13eadb2de3. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -563,6 +563,8 @@ class PricingPerMillion(TypedDict):
     output: str
     cacheRead: NotRequired[str]
     cacheWrite: NotRequired[str]
+    cacheWrite5m: NotRequired[str]
+    cacheWrite1h: NotRequired[str]
 
 class Pricing(TypedDict):
     provider: str

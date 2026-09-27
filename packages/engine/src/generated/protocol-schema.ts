@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 706a4d4990d898e1738f1f5cd0c9ecd12fc30667885fef9e8fd9ab13283cf907. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 0524bce8cafa4d79a54c06f249090cf30577ee57a5df9aac905e4e13eadb2de3. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -2600,6 +2600,20 @@ export const protocolSchema = {
               type: 'string',
               minLength: 1,
               maxLength: 128,
+            },
+            cacheWrite5m: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 128,
+              description:
+                'Cache writes that live five minutes; without it, cacheWrite (SPEC-0033 C02).',
+            },
+            cacheWrite1h: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 128,
+              description:
+                'Cache writes that live one hour; without it, cacheWrite (SPEC-0033 C02).',
             },
           },
           required: ['input', 'output'],

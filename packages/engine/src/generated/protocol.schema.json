@@ -2587,6 +2587,18 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 128
+            },
+            "cacheWrite5m": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "description": "Cache writes that live five minutes; without it, cacheWrite (SPEC-0033 C02)."
+            },
+            "cacheWrite1h": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "description": "Cache writes that live one hour; without it, cacheWrite (SPEC-0033 C02)."
             }
           },
           "required": ["input", "output"],
