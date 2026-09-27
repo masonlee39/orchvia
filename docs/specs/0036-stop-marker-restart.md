@@ -23,7 +23,7 @@ With `stopMarker: true` the markers live in a random temporary directory and exi
 
 ## Y. The synchronous cleanup
 
-- **Y01** `adapter.endStopMarkersSync(timeoutMs)` returns `{ stopped, holders, ended }` within `timeoutMs`, keeping 10 ms of it for returning, and never throws. It lists the holders of this instance's markers among the processes started since the instance began (`ps`, then `lsof -a -p <candidates>`, about 75 ms on macOS), sends SIGTERM and waits at most 40 ms while any runs, sends SIGKILL, and lists again. A holder may start another before it ends, so it repeats SIGKILL and the listing while a listing still fits in the time. `stopped` is true only when the last listing found none. It does not apply the workspace check, and it leaves every file for the next start's sweep. Without `stopMarker` it returns `{ stopped: true, holders: 0, ended: 0 }`.
+- **Y01** `adapter.endStopMarkersSync(timeoutMs)` returns `{ stopped, holders, ended }` within `timeoutMs`, keeping a tenth of it, at least 10 ms, for returning (0.1.12; 10 ms before), and never throws. It lists the holders of this instance's markers among the processes started since the instance began (`ps`, then `lsof -a -p <candidates>`, about 75 ms on macOS), sends SIGTERM and waits at most 40 ms while any runs, sends SIGKILL, and lists again. A holder may start another before it ends, so it repeats SIGKILL and the listing while a listing still fits in the time. `stopped` is true only when the last listing found none. It does not apply the workspace check, and it leaves every file for the next start's sweep. Without `stopMarker` it returns `{ stopped: true, holders: 0, ended: 0 }`.
 
 ## O. Observations
 

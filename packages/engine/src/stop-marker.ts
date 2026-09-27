@@ -299,8 +299,9 @@ function endHoldersSync(
   timeoutMs: number,
   list: (paths: string[], since: number, timeoutMs: number) => number[] | null,
 ): StopMarkerSyncResult {
-  // A little of the time is kept for returning, so that the call ends within `timeoutMs`.
-  const deadline = performance.now() + timeoutMs - 10;
+  // A tenth of the time, at least 10 ms, is kept for returning: a child process killed at its
+  // timeout still takes a moment to be reaped, more so on a loaded machine.
+  const deadline = performance.now() + timeoutMs - Math.max(10, timeoutMs * 0.1);
   const remaining = () => deadline - performance.now();
   if (!paths.length) return { stopped: true, holders: 0, ended: 0 };
   const find = (): number[] | null => {
