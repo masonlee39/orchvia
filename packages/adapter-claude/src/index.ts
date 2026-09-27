@@ -11,6 +11,8 @@ import { performance } from 'node:perf_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { observeRuntimeStop, requireStopProof } from '../../engine/src/stop-observation.ts';
+import { StopMarkers } from '../../engine/src/stop-marker.ts';
+import { existsSync } from 'node:fs';
 import { adapterProviderName } from '../../engine/src/runtime.ts';
 import {
   buildClaudeOptions,
@@ -338,6 +340,57 @@ async function loadDefaultQuery(): Promise<ClaudeQueryFactory> {
   return sdk.query;
 }
 
+const invalidConfig = (message: string) =>
+  Object.assign(new Error(message), { code: 'INVALID_ADAPTER_CONFIG' });
+const SHELL_PREFIX = 'CLAUDE_CODE_SHELL_PREFIX';
+const hostEnv = (options: object): Record<string, string | undefined> | undefined => {
+  const env = (options as { env?: unknown }).env;
+  return env !== null && typeof env === 'object' ? (env as Record<string, string>) : undefined;
+};
+
+/** SPEC-0034 B01: the markers that `stopMarker: true` asks for, or undefined. */
+function stopMarkers(
+  config: Pick<ClaudeAdapterConfig, 'stopMarker' | 'observeExecutionStop' | 'executionStop'>,
+  options: object,
+): StopMarkers | undefined {
+  if (config.stopMarker === undefined || config.stopMarker === false) return undefined;
+  if (config.stopMarker !== true)
+    throw invalidConfig('Claude adapter: stopMarker must be a boolean');
+  if (process.platform === 'win32')
+    throw invalidConfig('Claude adapter: stopMarker needs macOS or Linux');
+  if (config.observeExecutionStop !== undefined || config.executionStop !== undefined)
+    throw invalidConfig(
+      'Claude adapter: stopMarker supplies the stop observer; leave out observeExecutionStop and executionStop',
+    );
+  if ((hostEnv(options) ?? process.env)[SHELL_PREFIX] !== undefined)
+    throw invalidConfig(
+      `Claude adapter: the host already sets ${SHELL_PREFIX}, so stopMarker cannot wrap commands; keep the host's own stop observer`,
+    );
+  return new StopMarkers();
+}
+
+/** Runs every Bash command of the dispatch through its marker wrapper (SPEC-0034 B01). */
+function markCommands(
+  markers: StopMarkers,
+  dispatchId: string,
+  workspace: string,
+  options: object,
+): void {
+  const target = options as Record<string, unknown>;
+  const env = hostEnv(target) ?? process.env;
+  if (env[SHELL_PREFIX] !== undefined)
+    throw new Error(`The host sets ${SHELL_PREFIX}, which stopMarker owns`);
+  const shell = env.CLAUDE_CODE_SHELL ?? ['/bin/bash', '/bin/zsh'].find((path) => existsSync(path));
+  if (!shell) throw new Error('stopMarker needs bash or zsh');
+  const marker = markers.prepare(dispatchId, shell, workspace);
+  target.env = { ...env, [SHELL_PREFIX]: marker.wrapper, CLAUDE_CODE_SHELL: shell };
+  const sandbox = target.sandbox as { filesystem?: { allowRead?: string[] } } | undefined;
+  if (sandbox?.filesystem)
+    sandbox.filesystem.allowRead = [
+      ...new Set([...(sandbox.filesystem.allowRead ?? []), markers.directory]),
+    ];
+}
+
 export function createClaudeAdapter<Extra extends object = object>(
   config: ClaudeAdapterConfig<Extra> = {},
 ): ClaudeRuntimeAdapter {
@@ -363,7 +416,9 @@ export function createClaudeAdapter<Extra extends object = object>(
   const initialOptions = copyClaudeOptions(config.options ?? ({} as ClaudeHostOptions<Extra>));
   const coversExecution =
     profile === 'read-only' && config.options === undefined && config.extendOptions === undefined;
-  requireStopProof('Claude adapter', coversExecution, config);
+  const markers = stopMarkers(config, initialOptions);
+  const observeExecutionStop = markers?.observer ?? config.observeExecutionStop;
+  requireStopProof('Claude adapter', coversExecution, { ...config, observeExecutionStop });
   const requestTimeoutMs = deadlineOption(config.requestTimeoutMs, 'requestTimeoutMs', 30_000);
   const turnTimeoutMs = deadlineOption(config.turnTimeoutMs, 'turnTimeoutMs', 1_800_000);
   const cleanupTimeoutMs = deadlineOption(config.cleanupTimeoutMs, 'cleanupTimeoutMs', 1_000);
@@ -551,7 +606,7 @@ export function createClaudeAdapter<Extra extends object = object>(
       },
       executionEvidence: {
         version: 1,
-        terminalCoversExecution: coversExecution || config.observeExecutionStop !== undefined,
+        terminalCoversExecution: coversExecution || observeExecutionStop !== undefined,
       },
     }),
     async inspect(input) {
@@ -570,6 +625,7 @@ export function createClaudeAdapter<Extra extends object = object>(
     async close(): Promise<void> {
       closed = true;
       const results = await Promise.all([...active].map(cleanup));
+      if (markers && !(await markers.endAll(cleanupTimeoutMs))) results.push(false);
       if (results.some((result) => !result) || [...active].some((handle) => !handle.cleaned))
         throw new Error('Claude SDK cleanup unconfirmed; adapter resources may still be active');
     },
@@ -741,7 +797,7 @@ export function createClaudeAdapter<Extra extends object = object>(
                 child.pid === undefined ? [] : [{ pid: child.pid, processGroupId: child.pid }],
               );
         stopObservation = observeRuntimeStop(
-          config.observeExecutionStop,
+          observeExecutionStop,
           {
             target: {
               taskId: input.taskId,
@@ -958,6 +1014,7 @@ export function createClaudeAdapter<Extra extends object = object>(
           options = { ...options, mcpServers: { ...record(host.mcpServers), agent_orch: server } };
         }
         request.options = buildClaudeOptions(input, options, request.options, readPolicy);
+        if (markers) markCommands(markers, input.dispatchId, input.workspace, request.options);
         if (input.orchestrationTools) {
           request.options.allowedTools = [
             ...new Set([
@@ -1168,6 +1225,8 @@ export function createClaudeAdapter<Extra extends object = object>(
           [cleanupConfirmed] = await Promise.all([cleanup(handle), stopObservation]);
           handle.observationEnded = true;
         }
+        // SPEC-0034 A03: whatever a dispatch left behind ends with it, proven stopped or not.
+        if (markers) await markers.end(input.dispatchId, () => cleanupTimeoutMs);
       }
       // Usage is an observation, independent of business success and resource-stop certainty.
       if (receivedUsage) yield receivedUsage;

@@ -61,6 +61,7 @@ async function setup(t: TestContext, mode: string, closeTimeoutMs = 300) {
   const remaining = () =>
     180 - (deadlineStarted === undefined ? 0 : performance.now() - deadlineStarted);
   const adapter = createCodexAdapter({
+    executionStop: 'owner-reconcile',
     command: process.execPath,
     args: ['-e', fixtureSource, mode],
     env: { FIXTURE_STATE: capturePath },

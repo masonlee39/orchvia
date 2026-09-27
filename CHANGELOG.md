@@ -2,6 +2,23 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+Commands that Claude Code or Codex leave running after a turn no longer let a dispatch release its execution lease.
+
+### Fixed
+
+- A command that Codex runs can outlive its turn: one that `exec_command` returns from early, or that a shell backgrounds, runs in a process group of its own and survives `turn/completed` and a stop of the app-server's group. The read-only Codex profile nevertheless claimed that its terminal ended execution, so its dispatches released their leases while such commands ran. No Codex profile claims that any more, and each dispatch ends what is left of its app-server's process tree (SPEC-0034 A01, A03).
+- `processGroupsStopped` checks only the Claude Code process's group, but Claude Code runs each Bash command in a group of its own and hands backgrounded ones to the init process, so it cannot see them. It is deprecated, warns once, and the error for a missing stop proof no longer suggests it (SPEC-0034 A02).
+
+### Added
+
+- `createClaudeAdapter({ stopMarker: true })` on macOS and Linux: every Bash command of a dispatch runs through a wrapper that holds a marker file open, and the observer ends what still holds it and releases the lease only when nothing does. A process in the workspace started during the dispatch outside the host's process tree, such as a daemon started by Python, which drops the marker, keeps the lease held and is left running. Linux needs `lsof` (SPEC-0034 B).
+
+### Breaking
+
+- Every `createCodexAdapter` now needs `observeExecutionStop` or `executionStop: 'owner-reconcile'`; read-only ones without either fail with `INVALID_ADAPTER_CONFIG`. A JSON CLI `codex` provider must set `"executionStop": "owner-reconcile"`, and its tasks then wait blocked for `sessions.reconcile`. Hosts that use `processGroupsStopped` should move to `stopMarker: true` or their own observer; a host that sets `CLAUDE_CODE_SHELL_PREFIX` itself cannot use `stopMarker` (SPEC-0034).
+
 ## [0.1.9] - 2026-09-27
 
 Usage of resumed and forked Claude sessions on Claude Agent SDK 0.3.277 and later, indexed cost queries, the retention status, cache write prices by duration, the TypeScript polling interval and typed Python results.

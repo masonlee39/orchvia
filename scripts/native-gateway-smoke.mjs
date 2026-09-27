@@ -366,6 +366,9 @@ try {
       requestTimeoutMs: 30000,
       turnTimeoutMs: 60000,
       closeTimeoutMs: 5000,
+      // SPEC-0034 A01: the scripted turns run no command, so nothing can outlive them; this
+      // attests only that, for the exact target. A real host observes the stop.
+      observeExecutionStop: async ({ target }) => target.provider === 'codex',
     });
   }
   evidence.binary = execFileSync(binary, ['--version'], {

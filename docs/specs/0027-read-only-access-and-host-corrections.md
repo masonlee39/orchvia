@@ -66,7 +66,7 @@ A desktop host that embeds the engine in its main process reported seven gaps in
 
 - **A01** `createClaudeAdapter` fails with `INVALID_ADAPTER_CONFIG` when it cannot vouch that its terminal event ends execution, because it has `options`, `extendOptions` or the `workspace-write` profile, and no `observeExecutionStop` is given, unless `executionStop: 'owner-reconcile'` is set. The message names both ways out.
 - **A02** `executionStop: 'owner-reconcile'` keeps the behavior of 0.1.3: `terminalCoversExecution` is false, and the owner's reconciliation releases the lease. Giving it together with `observeExecutionStop` fails with `INVALID_ADAPTER_CONFIG`.
-- **A03** `createCodexAdapter` applies the same rule to the `workspace-write` profile.
+- **A03** `createCodexAdapter` applies the same rule to the `workspace-write` profile. ([SPEC-0034](./0034-background-command-stop-proof.md) A01 extends it to every Codex profile.)
 
 ## Tests
 

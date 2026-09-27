@@ -71,6 +71,6 @@ export function requireStopProof(
     );
   if (!coversExecution && config.observeExecutionStop === undefined && !config.executionStop)
     throw invalid(
-      `${adapter}: this configuration cannot prove that a dispatch stopped, so no execution lease could be released. Give observeExecutionStop (on macOS and Linux, processGroupsStopped from @orchvia/adapter-claude can serve), or set executionStop: 'owner-reconcile' to release leases by owner reconciliation`,
+      `${adapter}: this configuration cannot prove that a dispatch stopped, so no execution lease could be released. Give observeExecutionStop${/claude/i.test(adapter) ? ' (on macOS and Linux, stopMarker: true supplies one)' : ''}, or set executionStop: 'owner-reconcile' to release leases by owner reconciliation`,
     );
 }

@@ -316,7 +316,13 @@ test('AC-F14 doctor checks actual offline dependencies without opening state or 
     configPath,
     JSON.stringify({
       ...config,
-      providers: { codex: { model: 'fixture', command: '/nonexistent/orchvia-codex' } },
+      providers: {
+        codex: {
+          model: 'fixture',
+          command: '/nonexistent/orchvia-codex',
+          executionStop: 'owner-reconcile',
+        },
+      },
     }),
   );
   const missing = await command(['doctor', '--config', configPath]);

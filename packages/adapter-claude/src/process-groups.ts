@@ -1,16 +1,27 @@
 import type { ChildProcess } from 'node:child_process';
 import type { RuntimeStopContext } from '../../engine/src/types.ts';
 
+let warned = false;
 /**
  * SPEC-0023 P03: true only when the context lists at least one process and none of the listed
  * process groups has a member left. Any error other than "no such process group" counts as not
- * stopped, so the check can err only toward "not stopped". A descendant that left its group, such
- * as a daemon that called setsid, is not seen. `kill` is replaceable for tests.
+ * stopped. `kill` is replaceable for tests.
+ *
+ * @deprecated SPEC-0034 A02: only the Claude Code process's own group is checked. Claude Code runs
+ * each Bash command in a group of its own, and a backgrounded command outlives it, so this can
+ * answer true while such a command runs. Use the adapter's `stopMarker: true` instead.
  */
 export function processGroupsStopped(
   context: Pick<RuntimeStopContext, 'processes'>,
   kill: (pid: number, signal: number) => unknown = process.kill,
 ): boolean {
+  if (!warned) {
+    warned = true;
+    process.emitWarning(
+      'processGroupsStopped checks only the Claude Code process group; Bash commands run in their own group and a backgrounded one is not seen. Use stopMarker: true (SPEC-0034).',
+      'DeprecationWarning',
+    );
+  }
   const processes = context.processes ?? [];
   if (processes.length === 0) return false;
   for (const { processGroupId } of processes) {

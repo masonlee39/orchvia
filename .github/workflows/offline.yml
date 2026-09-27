@@ -115,6 +115,13 @@ jobs:
       - name: Real Codex binary with a scripted loopback gateway (no paid models)
         if: ${{ !cancelled() }}
         run: node scripts/native-gateway-smoke.mjs codex dist/verification/native-codex.json ./node_modules/.bin/codex
+      # SPEC-0034: a command the runtime leaves running must not release the execution lease.
+      - name: Stop proof with the real Claude binary and a scripted loopback gateway (no paid models)
+        if: ${{ !cancelled() }}
+        run: node scripts/native-stop-smoke.mjs claude dist/verification/native-stop-claude.json
+      - name: Stop proof with the real Codex binary and a scripted loopback gateway (no paid models)
+        if: ${{ !cancelled() }}
+        run: node scripts/native-stop-smoke.mjs codex dist/verification/native-stop-codex.json ./node_modules/.bin/codex
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ !cancelled() }}
         with:

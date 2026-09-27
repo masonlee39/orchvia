@@ -102,6 +102,13 @@ export interface ClaudeAdapterConfig<Extra extends object = object> {
    * reconciliation, as before SPEC-0027. Cannot be combined with `observeExecutionStop` (A02).
    */
   executionStop?: 'owner-reconcile';
+  /**
+   * macOS and Linux: run every Bash command through a wrapper that holds a per-dispatch marker
+   * file open, and prove a stop when nothing holds it; leftovers are ended at the terminal
+   * (SPEC-0034 B01). Supplies the stop observer, so it excludes `observeExecutionStop` and
+   * `executionStop`, and a host that sets `CLAUDE_CODE_SHELL_PREFIX` cannot use it.
+   */
+  stopMarker?: boolean;
   requestTimeoutMs?: number;
   turnTimeoutMs?: number;
   cleanupTimeoutMs?: number;

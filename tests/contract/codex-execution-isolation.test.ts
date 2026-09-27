@@ -108,6 +108,8 @@ async function setup(
     requestsPath = join(dir, 'requests'),
     gatePath = join(dir, 'gate');
   const adapter = createCodexAdapter({
+    // A fixture command never outlives its turn, so the host observer may vouch (SPEC-0034 A01).
+    observeExecutionStop: async () => true,
     command: process.execPath,
     args: ['-e', fixtureSource, mode],
     closeTimeoutMs: 20,
@@ -189,17 +191,20 @@ async function setup(
   };
 }
 
-test('A2 Codex advertises only explicit provider caps and the read-only terminal coverage contract', () => {
-  const defaults = createCodexAdapter().capabilities();
+test('A2 Codex advertises only explicit provider caps and, since 0034-A01, no terminal coverage', () => {
+  const defaults = createCodexAdapter({ executionStop: 'owner-reconcile' }).capabilities();
   assert.deepEqual(defaults.executionBudget, {
     version: 2,
     acceptanceCapMs: null,
     turnCapMs: null,
   });
-  assert.deepEqual(defaults.executionEvidence, { version: 1, terminalCoversExecution: true });
+  assert.deepEqual(defaults.executionEvidence, { version: 1, terminalCoversExecution: false });
   assert.deepEqual(
-    createCodexAdapter({ requestTimeoutMs: 123, turnTimeoutMs: 456 }).capabilities()
-      .executionBudget,
+    createCodexAdapter({
+      executionStop: 'owner-reconcile',
+      requestTimeoutMs: 123,
+      turnTimeoutMs: 456,
+    }).capabilities().executionBudget,
     { version: 2, acceptanceCapMs: 123, turnCapMs: 456 },
   );
 });
@@ -333,7 +338,8 @@ test('A2 Codex reports a matching terminal and native checkpoint before full sto
     last = f.reports.at(-1);
   assert.equal(first?.source, 'runtime_terminal');
   assert.equal(first?.localResources, 'unknown');
-  assert.equal(first?.remoteExecution, 'stopped');
+  // SPEC-0034 A01: the terminal alone no longer shows that execution stopped; the observer does.
+  assert.equal(first?.remoteExecution, 'unknown');
   assert.deepEqual(first?.terminal, {
     type: 'result',
     text: 'isolated result',

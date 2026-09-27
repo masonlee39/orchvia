@@ -26,6 +26,7 @@ import { workspacePath } from '../../engine/src/verification.ts';
 import { createToolBridge } from '../../engine/src/tool-bridge.ts';
 import { TOOL_NAMES } from '../../engine/src/tools.ts';
 import { VERSION } from '../../engine/src/version.ts';
+import { descendantsOf, endProcesses } from '../../engine/src/process-tree.ts';
 
 type Message = Record<string, unknown>;
 function record(value: unknown): Message | null {
@@ -243,6 +244,14 @@ class AppServerConnection {
     });
   }
   private async stop(): Promise<boolean> {
+    // SPEC-0034 A03: the commands the app-server started run in groups of their own and outlive
+    // it, so they are listed before it exits and ended after.
+    const started = this.child.pid === undefined ? [] : descendantsOf(this.child.pid);
+    const exited = await this.stopServer();
+    await endProcesses(started, this.closeTimeoutMs);
+    return exited;
+  }
+  private async stopServer(): Promise<boolean> {
     this.child.stdin.end();
     if (await this.waitForExit(0)) return true;
     this.child.kill('SIGTERM');
@@ -365,7 +374,9 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
     throw Object.assign(new Error('Invalid Codex host policy configuration'), {
       code: 'INVALID_ADAPTER_CONFIG',
     });
-  const coversExecution = profile === 'read-only';
+  // SPEC-0034 A01: a command can outlive the turn and the app-server in either profile, so the
+  // terminal never shows that execution stopped.
+  const coversExecution = false;
   requireStopProof('Codex adapter', coversExecution, config);
   const acceptanceCapMs = timeout(config.requestTimeoutMs, 0) || null;
   const turnCapMs = timeout(config.turnTimeoutMs, 0) || null;
@@ -867,9 +878,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
               report(
                 'runtime_terminal',
                 connection.hasActiveResources() ? 'unknown' : 'stopped',
-                coversExecution
-                  ? 'Matching native thread and turn terminal covers this read-only execution'
-                  : 'Matching native terminal; expanded execution still requires the host stop observer',
+                'Matching native terminal; execution still requires the host stop observer',
               );
             const stopObservation =
               !coversExecution && observedTerminal

@@ -471,7 +471,10 @@ test('0013-M03 model-changing forks require the declared runtime capability', as
     { code: 'INVALID_RUNTIME_CONTRACT' },
   );
   assert.equal(createClaudeAdapter().capabilities().forkModelChange, true);
-  assert.notEqual(createCodexAdapter().capabilities().forkModelChange, true);
+  assert.notEqual(
+    createCodexAdapter({ executionStop: 'owner-reconcile' }).capabilities().forkModelChange,
+    true,
+  );
   assert.equal(createFakeAdapter().capabilities().forkModelChange, true);
 });
 

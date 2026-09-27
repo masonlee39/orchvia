@@ -50,6 +50,7 @@ for (const provider of ['claude', 'codex'])
             },
           })
         : createCodexAdapter({
+            executionStop: 'owner-reconcile',
             command: process.execPath,
             args: [fileURLToPath(new URL('../fixtures/codex-tools.ts', import.meta.url))],
           });
