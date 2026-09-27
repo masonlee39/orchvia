@@ -12,7 +12,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  acknowledgeStopMarkers,
   createClaudeAdapter,
+  endStopMarkersSync,
   staleStopMarkers,
   sweepStopMarkers,
 } from '../packages/adapter-claude/src/index.ts';
@@ -91,10 +93,13 @@ const evidence = {
 };
 
 // The first request runs COMMAND; the one carrying its result waits until `release` is called.
-let ran, release;
-const reset = () => {
+// `ran` resolves once `expected` dispatches have run the command.
+let ran, release, expected, arrived;
+const reset = (count = 1) => {
   ran = Promise.withResolvers();
   release = Promise.withResolvers();
+  expected = count;
+  arrived = 0;
 };
 reset();
 let requests = 0;
@@ -116,7 +121,7 @@ const server = createServer(async (request, response) => {
     const done = history.includes('tool_result');
     if (done) {
       const at = history.indexOf('tool_result');
-      ran.resolve(history.slice(at, at + 400));
+      if (++arrived >= expected) ran.resolve(history.slice(at, at + 400));
       await release.promise;
     }
     const block = done
@@ -243,7 +248,12 @@ try {
     record.sweeps = [];
     let swept;
     for (const end = performance.now() + 15000; performance.now() < end; ) {
-      swept = await sweepStopMarkers(directory, { onObservation: (item) => observed.push(item) });
+      // SPEC-0037 K01: the proof is kept until the host acknowledges it.
+      swept = await sweepStopMarkers(directory, {
+        timeoutMs: 15000,
+        keepProven: true,
+        onObservation: (item) => observed.push(item),
+      });
       const described = swept.dispatches.flatMap(({ strays }) =>
         strays.map((pid) => {
           try {
@@ -264,6 +274,12 @@ try {
     assert.equal(swept.stopped, true, JSON.stringify(swept));
     record.after = pids();
     assert.deepEqual(record.after, [], 'the sweep ended sleep 600');
+    assert.equal(swept.dispatches[0]?.proven, true, 'kept as proven');
+    // SPEC-0037 K03: once the host has acted on the proof, it acknowledges it.
+    record.acknowledged = acknowledgeStopMarkers(directory, ['restart-dispatch']);
+    assert.deepEqual(record.acknowledged.removed, ['restart-dispatch']);
+    const again = await sweepStopMarkers(directory, { timeoutMs: 15000 });
+    assert.deepEqual(again.dispatches, [], 'nothing left after the acknowledgement');
   }
   // 0036-Y01: the synchronous cleanup of a live host, while its dispatch still runs.
   sync: {
@@ -306,6 +322,48 @@ try {
     assert.ok(record.elapsedMs < 300, `${record.elapsedMs} ms`);
     assert.equal(record.result.holders, record.before.length, JSON.stringify(record.result));
     assert.deepEqual(record.after, [], 'the command was ended');
+    if (process.arch === 'arm64')
+      assert.equal(record.result.stopped, true, JSON.stringify(record.result));
+    else record.verifiedInTime = record.result.stopped;
+  }
+  // 0037-Y02: one synchronous cleanup for two adapters under the same directory.
+  rootSync: {
+    reset(2);
+    const record = (evidence.cases.rootSync = {});
+    const { directory, workspace, stateDir } = await space('root-sync');
+    const adapters = [await adapterFor(directory), await adapterFor(directory)];
+    const running = adapters.map(async (adapter, i) => {
+      const events = [];
+      for await (const event of adapter.execute(input(workspace, stateDir, `root-${i}`)))
+        events.push(event);
+      return events;
+    });
+    record.toolOutput = await Promise.race([
+      ran.promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('COMMAND never ran')), 90000)),
+    ]);
+    assert.ok(toolRan(record.toolOutput), record.toolOutput);
+    if (linuxSandbox()) {
+      record.sandboxEndedBackground = true;
+      release.resolve();
+      await Promise.all(running);
+      for (const adapter of adapters) await adapter.close();
+      break rootSync;
+    }
+    record.before = pids();
+    assert.ok(record.before.length >= 2, JSON.stringify(record.before));
+    const started = performance.now();
+    record.result = endStopMarkersSync(directory, 300);
+    record.elapsedMs = Math.round(performance.now() - started);
+    for (let i = 0; i < 40 && pids().length; i++) await new Promise((r) => setTimeout(r, 50));
+    record.after = pids();
+    release.resolve();
+    record.lastEvents = (await Promise.all(running)).map((events) => events.at(-1)?.type);
+    for (const adapter of adapters) await adapter.close().catch(() => {});
+    assert.ok(record.elapsedMs < 300, `${record.elapsedMs} ms`);
+    assert.equal(record.result.instances.length, 2, JSON.stringify(record.result));
+    assert.equal(record.result.holders, record.before.length, JSON.stringify(record.result));
+    assert.deepEqual(record.after, [], 'both commands were ended');
     if (process.arch === 'arm64')
       assert.equal(record.result.stopped, true, JSON.stringify(record.result));
     else record.verifiedInTime = record.result.stopped;

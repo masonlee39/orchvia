@@ -2,6 +2,15 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+Stop marker proofs kept until the host acknowledges them, and one synchronous cleanup per host directory.
+
+### Added
+
+- `sweepStopMarkers(directory, { keepProven: true })` keeps a proven dispatch's files with a `.proven` record, and later sweeps report it `proven` at once; `acknowledgeStopMarkers(directory, dispatchIds)` removes proven dispatches after the host has reconciled them and refuses unproven ones (SPEC-0037 K).
+- `endStopMarkersSync(directory, timeoutMs)` from `@orchvia/adapter-claude`: the synchronous cleanup of every adapter of this process under a host directory, with one listing (SPEC-0037 Y02).
+
 ## [0.1.11] - 2026-09-27
 
 Stop markers that survive a host restart.

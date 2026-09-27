@@ -188,6 +188,8 @@ const claude = createClaudeAdapter({ permissionProfile: 'workspace-write', stopM
 process.on('exit', () => claude.endStopMarkersSync(300));
 ```
 
+With `sweepStopMarkers(directory, { keepProven: true })` a proven dispatch keeps its files with a `.proven` record, and later sweeps report it `proven` at once, so that a host that crashes before it reconciles the dispatch still finds the proof; after `sessions.reconcile` the host calls `acknowledgeStopMarkers(directory, dispatchIds)`, which removes only proven dispatches and refuses the others. `endStopMarkersSync(directory, timeoutMs)` from `@orchvia/adapter-claude` cleans up every adapter of this process under the directory with one listing ([SPEC-0037](./specs/0037-stop-marker-acknowledgement.md)).
+
 When the adapter has to end a Claude process that did not stop by itself, it sends SIGTERM to the whole group and, when the cleanup window ends, SIGKILL to what is left of it. Because the processes no longer share the host's process group, a terminal's Ctrl-C or hang-up reaches only the host; `orchvia host` shuts down in order on SIGINT, SIGTERM and SIGHUP.
 
 The writable Claude profile always requires the runtime's OS sandbox (`enabled` and `failIfUnavailable`, with no unsandboxed fallback). It works only where Claude Code can sandbox Bash. macOS uses its built-in sandbox; Linux needs `bubblewrap` and `socat` installed. Without them a writable task fails at its first dispatch with the runtime's `Sandbox required but unavailable` reason, and nothing runs unsandboxed. The engine's native checks cover macOS and Ubuntu CI with those packages. Other platforms are unverified; check Claude Code's sandbox support before enabling the writable profile there.
