@@ -53,6 +53,45 @@ export function usageRecord(
       'INVALID_RUNTIME_CONTRACT',
       'Cache writes by duration must be two counts that add up to cacheWriteInputTokens',
     );
+  let raw: Json;
+  try {
+    raw = boundedJson(event.usage.raw, 512 * 1024);
+  } catch {
+    invalid();
+  }
+  return {
+    ...identity,
+    id: `${identity.dispatchId}:${event.usageId}`,
+    inputTokens: event.usage.inputTokens,
+    cachedInputTokens: event.usage.cachedInputTokens,
+    cacheWriteInputTokens: event.usage.cacheWriteInputTokens,
+    ...(split
+      ? {
+          cacheWrite5mInputTokens: event.usage.cacheWrite5mInputTokens,
+          cacheWrite1hInputTokens: event.usage.cacheWrite1hInputTokens,
+        }
+      : {}),
+    outputTokens: event.usage.outputTokens,
+    ...(model !== undefined ? { model } : {}),
+    raw,
+  };
+}
+
+/**
+ * A detached copy of the native session totals an observation carries, at most 64 KiB, or
+ * undefined when it carries none (SPEC-0032 E05).
+ */
+export function usageTotals(event: RuntimeUsageEvent): Json | undefined {
+  if (event.sessionTotals === undefined) return undefined;
+  try {
+    return boundedJson(event.sessionTotals, 64 * 1024);
+  } catch {
+    invalid();
+  }
+}
+
+/** Plain JSON only: no cycles, prototypes, holes or non-finite numbers, and at most `bytes`. */
+function boundedJson(input: unknown, bytes: number): Json {
   const ancestors = new Set<object>();
   let count = 0;
   function copy(value: unknown, depth = 0): Json {
@@ -81,29 +120,9 @@ export function usageRecord(
       ancestors.delete(value);
     }
   }
-  let raw: Json;
-  try {
-    raw = copy(event.usage.raw);
-    if (Buffer.byteLength(JSON.stringify(raw)) > 512 * 1024) invalid();
-  } catch {
-    invalid();
-  }
-  return {
-    ...identity,
-    id: `${identity.dispatchId}:${event.usageId}`,
-    inputTokens: event.usage.inputTokens,
-    cachedInputTokens: event.usage.cachedInputTokens,
-    cacheWriteInputTokens: event.usage.cacheWriteInputTokens,
-    ...(split
-      ? {
-          cacheWrite5mInputTokens: event.usage.cacheWrite5mInputTokens,
-          cacheWrite1hInputTokens: event.usage.cacheWrite1hInputTokens,
-        }
-      : {}),
-    outputTokens: event.usage.outputTokens,
-    ...(model !== undefined ? { model } : {}),
-    raw,
-  };
+  const copied = copy(input);
+  if (Buffer.byteLength(JSON.stringify(copied)) > bytes) invalid();
+  return copied;
 }
 
 /**

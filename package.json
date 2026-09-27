@@ -24,7 +24,7 @@
     "native:prepare": "node scripts/native-acceptance.mjs prepare"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.274",
+    "@anthropic-ai/claude-agent-sdk": "0.3.283",
     "@types/node": "24.13.6",
     "esbuild": "0.28.2",
     "prettier": "3.6.2",

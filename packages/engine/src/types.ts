@@ -735,6 +735,12 @@ export interface RuntimeInput {
   metadata?: { readonly [key: string]: Json } | null;
   sessionLabel?: string | null;
   sessionMetadata?: { readonly [key: string]: Json } | null;
+  /**
+   * The native session totals that the dispatch before this one on the same native session
+   * reported, or null when there is none to rely on (SPEC-0032 E01 to E03). The engine only
+   * carries them; the adapter that reported them reads them.
+   */
+  usageBaseline?: { dispatchId: string; totals: Json } | null;
 }
 export interface RuntimePermissionRequest {
   requestId: string;
@@ -764,6 +770,11 @@ export type RuntimeEvent =
       type: 'usage';
       usage: Omit<UsageRecord, 'id' | 'taskId' | 'dispatchId' | 'provider'>;
       usageId: string;
+      /**
+       * The native session's totals after this dispatch, kept with the dispatch and handed to the
+       * next one as its `usageBaseline`; never part of the usage record (SPEC-0032 E01, E04).
+       */
+      sessionTotals?: Json;
     }
   | { type: 'interrupted' }
   | { type: 'error'; message: string; outcome: 'failed' | 'unknown' };

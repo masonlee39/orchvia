@@ -27,7 +27,7 @@ import {
   MAX_QUEUE_WAIT_MS,
 } from './validation.ts';
 import { readRuntimeCapabilities } from './runtime.ts';
-import { reportedUsage, usageRecord } from './usage.ts';
+import { reportedUsage, usageRecord, usageTotals } from './usage.ts';
 import {
   contains,
   checkRulePaths,
@@ -1821,6 +1821,7 @@ class LocalEngine implements Engine {
       dispatchId: flight.dispatchId,
       provider,
     });
+    const totals = usageTotals(event);
     try {
       this.store.transaction(() => {
         const dispatch = this.store.require<Dispatch>('dispatches', flight.dispatchId);
@@ -1831,6 +1832,15 @@ class LocalEngine implements Engine {
           dispatch.provider !== provider
         )
           fail('INVALID_RUNTIME_CONTRACT', 'Usage observation has no matching durable dispatch');
+        // SPEC-0032 E01: the native session totals stay with the dispatch, in the transaction of
+        // its observation; a repeated observation must carry the same ones.
+        if (totals !== undefined) {
+          const kept = (dispatch as { usageTotals?: Json }).usageTotals;
+          if (kept === undefined)
+            this.store.put('dispatches', dispatch.id, { ...dispatch, usageTotals: totals });
+          else if (digest(kept) !== digest(totals))
+            fail('IDEMPOTENCY_CONFLICT', 'Dispatch already recorded different session totals');
+        }
         const existing = this.store.get<UsageRecord>('usage', value.id);
         // SPEC-0031 B01, B02: the model the runtime names, else the session's.
         const model = value.model ?? this.session(flight.sessionId).model;
@@ -1888,6 +1898,26 @@ class LocalEngine implements Engine {
       }
       throw error;
     }
+  }
+
+  /**
+   * The totals of the dispatch just before this one on the same native session (SPEC-0032 E01 to
+   * E03): the session's own previous dispatch once it has a native session, else, for a fork's
+   * first dispatch, its source's latest. Nothing when that dispatch kept no totals, or while the
+   * source still runs, since then which totals the fork continues from is unknown.
+   */
+  private usageBaseline(
+    session: SessionSnapshot,
+    dispatchId: string,
+  ): { dispatchId: string; totals: Json } | null {
+    const fork = !session.providerSessionId && session.forkSource;
+    if (!session.providerSessionId && !fork) return null;
+    const owner = fork ? this.session(fork.sessionId) : session;
+    if (fork && (owner.status === 'running' || this.store.activeDispatches(owner.id).length))
+      return null;
+    const previous = this.store.latestDispatch(owner.id, dispatchId);
+    const totals = (previous as { usageTotals?: Json } | undefined)?.usageTotals;
+    return previous && totals !== undefined ? { dispatchId: previous.id, totals } : null;
   }
 
   /** `delivered` records the change as the task's latest delivery of a result (SPEC-0029 B01). */
@@ -4632,6 +4662,7 @@ class LocalEngine implements Engine {
         ...(session.forkSource && !session.providerSessionId
           ? { forkSource: session.forkSource }
           : {}),
+        usageBaseline: this.usageBaseline(session, flight.dispatchId),
         ...(this.task(flight.taskId).kind === 'compaction'
           ? { nativeAction: 'compact' as const }
           : {}),

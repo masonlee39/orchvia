@@ -30,7 +30,7 @@ Pinned native **protocol-only** checks can run with explicit installed paths:
 node scripts/check-native-protocol.mjs /absolute/claude-agent-sdk/sdk.mjs /absolute/codex
 ```
 
-This requires Claude SDK 0.3.274 and Codex CLI 0.153.4, uses the real SDK against owned offline peers, generates App Server declarations, and makes no model requests. It does not exercise upstream history or OS sandbox enforcement. Default paths resolve project-local installations.
+This requires Claude SDK 0.3.283 and Codex CLI 0.157.1 (SPEC-0032 B04), uses the real SDK against owned offline peers, generates App Server declarations, and makes no model requests. It does not exercise upstream history or OS sandbox enforcement. Default paths resolve project-local installations.
 
 ## Support and execution matrix
 

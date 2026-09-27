@@ -79,9 +79,9 @@ test('0021-P08 package source writes the version only in version.ts and _version
     readFileSync(join(root, file), 'utf8')
       .split('\n')
       .forEach((line, index) => {
-        // Versions of other software: the zod peer and the Jev model.
+        // Versions of other software: the zod peer, the Jev model and Claude Code (SPEC-0032 A01).
         for (const match of line.matchAll(/\b\d+\.\d+\.\d+\b/g))
-          if (!/(?:zod |jev-)$/.test(line.slice(0, match.index)))
+          if (!/(?:zod |jev-|Claude Code )$/.test(line.slice(0, match.index)))
             found.push(`${file}:${index + 1}: ${line.trim()}`);
       });
   assert.deepEqual(found, []);

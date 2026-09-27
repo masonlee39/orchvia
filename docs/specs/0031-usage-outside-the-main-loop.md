@@ -41,7 +41,7 @@ The host's totals and the engine's own cost ledger were low by those calls.
 
 ## Timing invariants
 
-- **A02** The adapter subtracts the `usage` of a result from the `modelUsage` of the same result. A dispatch runs one `query()` with one user message, and the SDK starts `modelUsage` at zero for a resumed session, so both cover the calls of this dispatch and no other. `usage` counts one turn and `modelUsage` accumulates across turns, but a dispatch has one turn. The adapter reads the first result that matches the dispatch's session, as it already does for `usage`, and ignores later ones.
+- **A02** (Superseded in part by [SPEC-0032](./0032-claude-session-totals.md): from Claude Code 2.1.277 on, a resumed or forked session's `modelUsage` continues from its earlier dispatches, and the adapter first subtracts the totals of the dispatch before.) The adapter subtracts the `usage` of a result from the `modelUsage` of the same result. A dispatch runs one `query()` with one user message, and the SDK starts `modelUsage` at zero for a resumed session, so both cover the calls of this dispatch and no other. `usage` counts one turn and `modelUsage` accumulates across turns, but a dispatch has one turn. The adapter reads the first result that matches the dispatch's session, as it already does for `usage`, and ignores later ones.
 - **A02** The adapter reports every observation of a dispatch, through `reportUsage` and as events, before it yields the dispatch's terminal. The engine settles the dispatch's reservation again at the terminal, so that settlement sees them all.
 
 ## Tests

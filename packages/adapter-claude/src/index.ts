@@ -65,6 +65,8 @@ function outsideUsage(
   model: string,
   main: RecordValue | null,
   models: RecordValue | null,
+  /** SPEC-0032 A01: each key's counts for this dispatch alone, when the result's continue. */
+  own?: Record<string, (number | null)[]>,
 ): RuntimeUsageEvent[] {
   const keys = models ? Object.keys(models) : [];
   if (!models || !keys.length) return [];
@@ -104,12 +106,14 @@ function outsideUsage(
     const entry = record(models[key]);
     // The main model's calls keep the dispatch's model, as its main loop's do (A03).
     const name = key === mainKey ? undefined : (canonical(key) ?? key);
-    const counts = [
-      entry?.inputTokens,
-      entry?.cacheReadInputTokens,
-      entry?.cacheCreationInputTokens,
-      entry?.outputTokens,
-    ].map(nonnegativeInt);
+    const counts =
+      own?.[key] ??
+      [
+        entry?.inputTokens,
+        entry?.cacheReadInputTokens,
+        entry?.cacheCreationInputTokens,
+        entry?.outputTokens,
+      ].map(nonnegativeInt);
     const loop =
       key === mainKey
         ? [
@@ -143,6 +147,55 @@ function outsideUsage(
     });
   }
   return events;
+}
+/** Claude Code 2.1.277 and later continue a resumed or forked session's totals (SPEC-0032 A01). */
+function continuesTotals(version: string | undefined): boolean | undefined {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version ?? '');
+  if (!match) return undefined;
+  const [major, minor, patch] = match.slice(1).map(Number);
+  return major !== 2 ? major > 2 : minor !== 1 ? minor > 1 : patch >= 277;
+}
+/** Each key's four counts, in the order of an outside observation; undefined when any is missing. */
+function modelTotals(models: RecordValue | null): Record<string, number[]> | undefined {
+  if (!models || !Object.keys(models).length || Object.keys(models).length > 64) return undefined;
+  const totals: Record<string, number[]> = {};
+  for (const [key, value] of Object.entries(models)) {
+    const entry = record(value);
+    const counts = [
+      entry?.inputTokens,
+      entry?.cacheReadInputTokens,
+      entry?.cacheCreationInputTokens,
+      entry?.outputTokens,
+    ].map(nonnegativeInt);
+    if (counts.some((count) => count === null)) return undefined;
+    totals[key] = counts as number[];
+  }
+  return totals;
+}
+/** The totals a baseline names for `sessionId`, when they are this adapter's cumulative ones. */
+function baselineTotals(
+  baseline: RuntimeInput['usageBaseline'],
+  sessionId: string | undefined,
+): Record<string, number[]> | undefined {
+  const totals = record(baseline?.totals);
+  const models = record(totals?.models);
+  if (
+    !totals ||
+    !models ||
+    totals.version !== 1 ||
+    totals.cumulative !== true ||
+    !sessionId ||
+    totals.sessionId !== sessionId
+  )
+    return undefined;
+  const result: Record<string, number[]> = {};
+  for (const [key, value] of Object.entries(models)) {
+    if (!Array.isArray(value) || value.length !== 4) return undefined;
+    const counts = value.map(nonnegativeInt);
+    if (counts.some((count) => count === null)) return undefined;
+    result[key] = counts as number[];
+  }
+  return result;
 }
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -714,6 +767,7 @@ export function createClaudeAdapter<Extra extends object = object>(
         );
       };
       let receivedUsage: RuntimeUsageEvent | undefined;
+      let cliVersion: string | undefined;
       let outsideUsageEvents: RuntimeUsageEvent[] = [];
       const captureUsage = (message: RecordValue): void => {
         if (receivedUsage) return;
@@ -740,13 +794,61 @@ export function createClaudeAdapter<Extra extends object = object>(
             raw: source ? (source as Json) : null,
           },
         };
+        const models = record(message.modelUsage);
+        const totals = modelTotals(models);
+        const cumulative = continuesTotals(cliVersion);
+        const observed = typeof message.session_id === 'string' ? message.session_id : undefined;
+        // SPEC-0032 A02: the session's totals after this dispatch, for the dispatch after it.
+        if (totals && cumulative !== undefined && observed)
+          receivedUsage.sessionTotals = {
+            version: 1,
+            sessionId: observed,
+            cumulative,
+            models: totals,
+          };
         input.reportUsage?.(receivedUsage);
-        outsideUsageEvents = outsideUsage(
-          input.dispatchId,
-          input.model,
-          source,
-          record(message.modelUsage),
-        );
+        // A01, A03 to A05: a resumed or forked session's totals continue from the dispatch before
+        // this one on Claude Code 2.1.277 and later; without a matching baseline, or a version, what
+        // this dispatch alone used outside its main loop is unknown.
+        const continued = !!input.providerSessionId || !!input.forkSource;
+        let own: Record<string, (number | null)[]> | undefined;
+        let unknownOutside = false;
+        if (continued && cumulative !== false && models && Object.keys(models).length) {
+          const before =
+            cumulative === true
+              ? baselineTotals(
+                  input.usageBaseline,
+                  input.providerSessionId ?? input.forkSource?.providerSessionId,
+                )
+              : undefined;
+          if (!before) unknownOutside = true;
+          else {
+            own = {};
+            for (const key of Object.keys(models)) {
+              const now = totals?.[key];
+              const earlier = before[key] ?? [0, 0, 0, 0];
+              own[key] =
+                now && now.every((count, index) => count >= earlier[index])
+                  ? now.map((count, index) => count - earlier[index])
+                  : [null, null, null, null];
+            }
+          }
+        }
+        outsideUsageEvents = unknownOutside
+          ? [
+              {
+                type: 'usage',
+                usageId: `${input.dispatchId}:outside:unknown`,
+                usage: {
+                  inputTokens: null,
+                  cachedInputTokens: null,
+                  cacheWriteInputTokens: null,
+                  outputTokens: null,
+                  raw: models as Json,
+                },
+              },
+            ]
+          : outsideUsage(input.dispatchId, input.model, source, models, own);
         for (const event of outsideUsageEvents) input.reportUsage?.(event);
       };
       const observeLateStep = (step: IteratorResult<unknown>): void => {
@@ -967,6 +1069,14 @@ export function createClaudeAdapter<Extra extends object = object>(
                 nativeCheckpoint = message.uuid;
               requestInterrupt();
             }
+            // SPEC-0032 A01: the Claude Code version decides whether this session's totals continue.
+            if (
+              message.type === 'system' &&
+              message.subtype === 'init' &&
+              typeof message.claude_code_version === 'string' &&
+              (!observedId || observedId === sessionId)
+            )
+              cliVersion = message.claude_code_version;
             if (
               observedId === sessionId &&
               message.type === 'system' &&

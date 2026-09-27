@@ -13,11 +13,11 @@ const codex = process.argv[3] ?? join(root, 'node_modules/.bin/codex');
 const sdkVersion = JSON.parse(await readFile(join(dirname(sdk), 'package.json'), 'utf8')).version;
 assert.equal(
   sdkVersion,
-  '0.3.274',
+  '0.3.283',
   'Run a separate drift review before changing the supported SDK candidate',
 );
 const cliVersion = execFileSync(codex, ['--version'], { encoding: 'utf8', timeout: 3000 }).trim();
-assert.equal(cliVersion, 'codex-cli 0.153.4');
+assert.equal(cliVersion, 'codex-cli 0.157.1');
 const directory = await mkdtemp(join(tmpdir(), 'orch-native-protocol-'));
 try {
   execFileSync(codex, ['app-server', 'generate-ts', '--out', directory], {
