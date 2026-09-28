@@ -57,6 +57,7 @@ import {
   MIN_CODEX_VERSION,
   checkHostHookCommand,
   checkProxyCheck,
+  deniedCheckPath,
   checkToolBridge,
   type CodexToolBridge,
   hostHookChannel,
@@ -755,14 +756,27 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
               ),
             );
           home = local;
+          const denied = [local, state, ...resolveDenyRead(denyRead, workspace)];
+          // SPEC-0041 C01: the proxy check runs in the sandbox, so it must be able to read itself.
+          if (policy!.network !== 'off') {
+            const blocked = deniedCheckPath(
+              proxyCheck ? [proxyCheck.command, ...proxyCheck.args] : [process.execPath],
+              denied,
+            );
+            if (blocked)
+              throw new Error(
+                coded(
+                  'CODEX_NETWORK_PROXY_UNAVAILABLE',
+                  `the proxy check needs ${blocked.path}, which lies in ${blocked.under}, a directory commands cannot read; put the check where commands can read it`,
+                ),
+              );
+          }
           settings = profileSettings({
             write: dispatchProfile === 'workspace-write',
             writePaths,
             // Other instances under a host marker directory stay out of reach (SPEC-0035 B01).
             none: [
-              local,
-              state,
-              ...resolveDenyRead(denyRead, workspace),
+              ...denied,
               ...(markers && typeof config.stopMarker === 'object'
                 ? [dirname(markers.directory)]
                 : []),

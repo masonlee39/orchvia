@@ -49,12 +49,15 @@ try {
     join(base, 'package.json'),
     '{"name":"registry-check","private":true,"type":"module"}\n',
   );
-  run('npm', [
-    'install',
-    '--no-audit',
-    '--no-fund',
-    ...['sdk', 'engine', 'cli'].map((name) => `@orchvia/${name}@${version}`),
-  ]);
+  // SPEC-0041 C03: npm can answer npm view before its archives download.
+  await eventually(`npm install of ${version}`, () =>
+    run('npm', [
+      'install',
+      '--no-audit',
+      '--no-fund',
+      ...['sdk', 'engine', 'cli'].map((name) => `@orchvia/${name}@${version}`),
+    ]),
+  );
   for (const name of ['work', 'state', 'python-state'])
     await mkdir(join(base, name), { mode: 0o700 });
   await writeFile(

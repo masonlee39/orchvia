@@ -484,6 +484,14 @@ Pull request #65 carried SPEC-0039 and the version 0.1.16 together. Its second c
 - The npm registry lists 0.1.16 as the `latest` version of all five packages. PyPI's JSON API showed the 0.1.16 wheel and sdist, uploaded at 11:55 UTC.
 - Both `registry` jobs failed with `No matching distribution found for orchvia==0.1.16`. PyPI's simple index still listed nothing after 0.1.14 when the jobs gave up after 10 minutes; it listed 0.1.16 later that day. The owner then reran the failed jobs, and both passed (attempt 2). SPEC-0040 R02 lets the check wait 25 minutes.
 
+## The sixteenth release, 0.1.17
+
+Pull request #66 carried SPEC-0040 and the version 0.1.17. A local Claude Code session merged it and pushed the tag `v0.1.17` on the merge commit `f3cba92`, on the owner's authorization, which started the release workflow ([36430869620](https://github.com/masonlee39/orchvia/actions/runs/36430869620)).
+
+- The build and the test matrix passed. The owner approved the `npm` and `pypi` deployments; both passed, and so did the GitHub release "Orchvia 0.1.17".
+- Both `registry` jobs failed at 14:07 UTC, eight minutes after npm's publication: `npm view` already showed 0.1.17, but `npm install` got `404 Not Found` for `engine-0.1.17.tgz`. At 14:10 all five archives downloaded. The owner reran the failed jobs, which passed (attempt 3). SPEC-0041 C03 retries `npm install`.
+- The npm registry lists 0.1.17 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.17 with its wheel and sdist.
+
 ## P10: no document names the latest release (D-rel-3)
 
 On 2026-09-27 the owner chose D-rel-3: a release is recorded by the next release pull request, and no document names the latest release.

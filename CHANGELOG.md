@@ -2,6 +2,18 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.18] - 2026-09-28
+
+A proxy check the sandbox cannot read is named (SPEC-0041).
+
+### Changed
+
+- The proxy check runs inside the command sandbox, so its program and runtime must be where the member's commands can read them. A networked Codex dispatch whose check lies under `denyRead`, the Codex home or the state directory now fails before its app-server with `CODEX_NETWORK_PROXY_UNAVAILABLE`, naming the path, instead of `the check printed no result` (SPEC-0041 C01).
+
+### Fixed
+
+- The release workflow's registry check retries `npm install`, which can fail for minutes after `npm view` already shows a new version.
+
 ## [0.1.17] - 2026-09-28
 
 The host's own proxy check command for the local Codex member (SPEC-0040).
