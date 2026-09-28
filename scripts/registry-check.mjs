@@ -76,14 +76,18 @@ console.log(JSON.stringify({mode:'npm-registry',status:second.status,reused:true
   const venv = join(base, 'venv');
   run(python, ['-m', 'venv', venv]);
   const vpython = join(venv, 'bin', 'python');
-  await eventually(`orchvia==${pythonVersion} on PyPI`, () =>
-    run(vpython, [
-      '-m',
-      'pip',
-      'install',
-      '--disable-pip-version-check',
-      `orchvia==${pythonVersion}`,
-    ]),
+  // SPEC-0040 R02: PyPI's simple index once took more than 10 minutes to list a new release.
+  await eventually(
+    `orchvia==${pythonVersion} on PyPI`,
+    () =>
+      run(vpython, [
+        '-m',
+        'pip',
+        'install',
+        '--disable-pip-version-check',
+        `orchvia==${pythonVersion}`,
+      ]),
+    25,
   );
   const cli = join(base, 'node_modules/@orchvia/cli/dist/main.js');
   // SPEC-0021 P09: the installed packages report the release version.

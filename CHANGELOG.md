@@ -2,6 +2,19 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.17] - 2026-09-28
+
+The host's own proxy check command for the local Codex member (SPEC-0040).
+
+### Added
+
+- `proxyCheck: { command, args?, env? }` on `createCodexAdapter` with `connection`: how the proxy check runs before a networked dispatch, for a host whose `process.execPath` is not Node. Its `env` reaches that one check only, through Codex's `command/exec`, and cannot name a proxy variable. `proxyCheckProgram()` and `@orchvia/adapter-codex/proxy-check.mjs` give the check as one module to copy.
+
+### Fixed
+
+- A Python test connected to the host's socket as soon as the file appeared, which macOS creates before the socket accepts connections.
+- The release workflow's registry check waits up to 25 minutes for PyPI, whose index once took longer than 10 minutes to list a new release.
+
 ## [0.1.16] - 2026-09-28
 
 The host's own hook and tool bridge commands, hooks that fail open, and member instructions for the local Codex member (SPEC-0039).

@@ -249,6 +249,20 @@ const bridge=await createToolBridge({definitions:ORCHESTRATION_TOOLS,call:async(
 const listed=spawnSync(process.execPath,[linked],{input:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})+'\\n',encoding:'utf8',env:{PATH:process.env.PATH,...bridge.env},timeout:10000});
 await bridge.close();
 assert.deepEqual(JSON.parse(listed.stdout.split('\\n')[0]).result.tools.map((tool)=>tool.name),TOOL_NAMES,listed.stderr);
+// SPEC-0040 P03: the proxy check runs from a copy and reaches the socket it is given.
+const {proxyCheckProgram}=await import('@orchvia/adapter-codex');
+const {createServer}=await import('node:net');
+const checkFile=fileURLToPath(import.meta.resolve('@orchvia/adapter-codex/proxy-check.mjs'));
+assert.equal(createRequire(import.meta.url).resolve('@orchvia/adapter-codex/proxy-check.mjs'),checkFile);
+assert.equal(proxyCheckProgram(),checkFile);
+const checkCopy=${JSON.stringify(join(copied, 'proxy-check.mjs'))};copyFileSync(checkFile,checkCopy);
+const {mkdtempSync}=await import('node:fs');
+// A short path: Unix socket paths are limited to about 104 bytes on macOS.
+const listening=mkdtempSync('/tmp/orchvia-check-')+'/s';
+const server=createServer((socket)=>socket.destroy());await new Promise((ready)=>server.listen(listening,ready));
+const checked=spawnSync(process.execPath,[checkCopy,listening],{encoding:'utf8',env:{PATH:process.env.PATH},timeout:15000});
+server.close();
+assert.equal(JSON.parse(checked.stdout).unix,'connected',checked.stderr);
 console.log('hook-ok');`,
       );
       assertOutput(run(process.execPath, ['hook.mjs'], { cwd: isolated }), 'hook-ok');
