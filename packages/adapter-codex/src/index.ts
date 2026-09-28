@@ -21,6 +21,11 @@ import type {
   RuntimeUsageEvent,
 } from '../../engine/src/types.ts';
 import { observeRuntimeStop, requireStopProof } from '../../engine/src/stop-observation.ts';
+import {
+  StopMarkers,
+  type StopMarkerObservation,
+  type StopMarkerSyncResult,
+} from '../../engine/src/stop-marker.ts';
 import { adapterProviderName } from '../../engine/src/runtime.ts';
 import { contains, workspacePath } from '../../engine/src/verification.ts';
 import { createToolBridge } from '../../engine/src/tool-bridge.ts';
@@ -50,14 +55,39 @@ import {
   type CodexDispatchPolicy,
   type CodexHostMcpServer,
   MIN_CODEX_VERSION,
+  hostHookChannel,
+  hostHookSetting,
+  hostHookTrusted,
+  markedCommand,
+  markedLoginShell,
+  markerStartupFiles,
+  type CodexHostHook,
 } from './local.ts';
 export type {
   CodexClientInfo,
   CodexDispatchPolicy,
+  CodexHookDecision,
+  CodexHookEvent,
+  CodexHostHook,
   CodexHostMcpServer,
   CodexMode,
   CodexNetwork,
 } from './local.ts';
+// SPEC-0035 I01: the same stop marker functions as the Claude adapter's, for one host directory.
+export {
+  acknowledgeStopMarkers,
+  endStopMarkersSync,
+  sweepStopMarkers,
+  staleStopMarkers,
+  type StopMarkerAcknowledgement,
+  type StopMarkerRootSyncResult,
+  type StopMarkerDispatch,
+  type StopMarkerObservation,
+  type StopMarkerReason,
+  type StopMarkerSweep,
+  type StopMarkerSweepOptions,
+  type StopMarkerSyncResult,
+} from '../../engine/src/stop-marker.ts';
 export { codexConnection, type CodexConnection } from './connection.ts';
 
 /** The real location of a path that may not exist yet, or null when it cannot be resolved. */
@@ -142,6 +172,23 @@ export interface CodexAdapterConfig {
   hostMcpServers?: Record<string, CodexHostMcpServer>;
   /** Passed to Codex's `initialize` (SPEC-0035 C06); defaults to `agent_orch`. */
   clientInfo?: CodexClientInfo;
+  /**
+   * Asked before each command, file change and tool call runs, in every mode; needs `connection`
+   * and the hook trusted in it with `codexConnection().trustHostHook()` (SPEC-0035 R01, R02).
+   */
+  hostHook?: CodexHostHook;
+  /**
+   * Marks each zsh and bash command so that a dispatch is proven stopped when nothing holds its
+   * marker, as the Claude adapter's `stopMarker`; replaces `executionStop` and the observer
+   * (SPEC-0035 I).
+   */
+  stopMarker?: true | { directory: string; onObservation?: (item: StopMarkerObservation) => void };
+}
+
+/** The Codex adapter, with the stop markers' synchronous cleanup (SPEC-0035 I01). */
+export interface CodexRuntimeAdapter extends RuntimeAdapter {
+  /** Ends what holds this adapter's markers within `timeoutMs`; never throws. */
+  endStopMarkersSync(timeoutMs: number): StopMarkerSyncResult;
 }
 
 function timeout(value: number | undefined, fallback: number): number {
@@ -186,6 +233,7 @@ function defensiveArgs(
   workspace: string,
   bridge = false,
   host: { entries: string[]; exclude: string[] } = { entries: [], exclude: [] },
+  hooks = false,
 ): string[] {
   // SPEC-0035 G02: the bridge's tools act on the dispatch's own grant, so Codex asks for no
   // approval of them; under `never` it would refuse every call.
@@ -198,7 +246,7 @@ function defensiveArgs(
     ...host.entries,
   ];
   // SPEC-0035 B04: an agent socket and the host's MCP secrets stay out of commands too.
-  const exclude = ['AGENT_ORCH_BRIDGE_*', 'SSH_AUTH_SOCK', ...host.exclude];
+  const exclude = ['AGENT_ORCH_BRIDGE_*', 'ORCHVIA_HOOK_*', 'SSH_AUTH_SOCK', ...host.exclude];
   const untrustedProjects: string[] = [];
   for (let path = workspace; ; path = dirname(path)) {
     untrustedProjects.push('-c', `projects.${JSON.stringify(path)}.trust_level="untrusted"`);
@@ -226,8 +274,8 @@ function defensiveArgs(
     'computer_use',
     '--disable',
     'image_generation',
-    '--disable',
-    'hooks',
+    // Hooks run outside the sandbox; only the host's own, through Orchvia, when it has one.
+    ...(hooks ? [] : ['--disable', 'hooks']),
     '-c',
     'agents.enabled=false',
     '-c',
@@ -246,7 +294,38 @@ function defensiveArgs(
   ];
 }
 
-export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdapter {
+/** SPEC-0035 I01: the markers `stopMarker` asks for, as the Claude adapter's, or undefined. */
+function codexStopMarkers(config: CodexAdapterConfig): StopMarkers | undefined {
+  const choice: unknown = config.stopMarker;
+  if (choice === undefined || choice === false) return undefined;
+  let host:
+    | { directory: string; onObservation?: (item: StopMarkerObservation) => void }
+    | undefined;
+  if (choice !== true) {
+    const value = choice as Record<string, unknown> | null;
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      Array.isArray(value) ||
+      Object.keys(value).some((key) => key !== 'directory' && key !== 'onObservation') ||
+      (value.onObservation !== undefined && typeof value.onObservation !== 'function')
+    )
+      invalidConfig('stopMarker must be true or { directory, onObservation? }');
+    host = value as typeof host;
+  }
+  if (process.platform === 'win32') invalidConfig('stopMarker needs macOS or Linux');
+  if (config.observeExecutionStop !== undefined || config.executionStop !== undefined)
+    invalidConfig(
+      'stopMarker supplies the stop observer; leave out observeExecutionStop and executionStop',
+    );
+  try {
+    return new StopMarkers(host ? { root: host.directory, onObservation: host.onObservation } : {});
+  } catch (error) {
+    invalidConfig(errorMessage(error));
+  }
+}
+
+export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntimeAdapter {
   const providerName = adapterProviderName(config.provider, 'codex');
   const profile = config.permissionProfile ?? 'read-only';
   const networkAccess = config.networkAccess ?? false;
@@ -263,12 +342,17 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
   // SPEC-0034 A01: a command can outlive the turn and the app-server in either profile, so the
   // terminal never shows that execution stopped.
   const coversExecution = false;
-  requireStopProof('Codex adapter', coversExecution, config);
+  const markers = codexStopMarkers(config);
+  let startup: ReturnType<typeof markerStartupFiles> | undefined;
+  const observeExecutionStop = markers?.observer ?? config.observeExecutionStop;
+  requireStopProof('Codex adapter', coversExecution, { ...config, observeExecutionStop });
   // SPEC-0035: with the user's connection, each dispatch picks its profile, mode and network.
   const local = config.connection !== undefined ? connectionHome(config.connection?.home) : null;
   if (!local && (config.policy !== undefined || config.denyRead !== undefined))
     invalidConfig('policy and denyRead need connection');
   if (config.policy !== undefined && typeof config.policy !== 'function') invalidConfig('policy');
+  if (config.hostHook !== undefined && (!local || typeof config.hostHook !== 'function'))
+    invalidConfig('hostHook must be a function, with connection');
   if (local && config.networkAccess !== undefined)
     invalidConfig('with connection, the policy sets the network, not networkAccess');
   const denyRead = checkDenyRead(config.denyRead);
@@ -311,10 +395,13 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       executionBudget: { version: 2, acceptanceCapMs, turnCapMs },
       executionEvidence: {
         version: 1,
-        terminalCoversExecution: coversExecution || config.observeExecutionStop !== undefined,
+        terminalCoversExecution: coversExecution || observeExecutionStop !== undefined,
       },
     }),
     hasActiveResources: (sessionId) => prune(sessionId),
+    endStopMarkersSync(timeoutMs: number): StopMarkerSyncResult {
+      return markers?.endAllSync(timeoutMs) ?? { stopped: true, holders: 0, ended: 0 };
+    },
     async inspect(input) {
       if (stopping) throw new Error('Codex adapter is closing');
       const started = performance.now();
@@ -396,7 +483,10 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
         ),
       );
       for (const sessionId of owned.keys()) prune(sessionId);
-      if (owned.size || results.some((result) => result.status === 'rejected')) {
+      const markersEnded = markers
+        ? await markers.endAll(timeout(config.closeTimeoutMs, 1000))
+        : true;
+      if (!markersEnded || owned.size || results.some((result) => result.status === 'rejected')) {
         throw Object.assign(new Error('Codex owned app-server resources have not all exited'), {
           code: 'SHUTDOWN_INCOMPLETE',
         });
@@ -512,6 +602,19 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
         }
         policy = checked;
       }
+      // SPEC-0035 I03: commands are marked through zsh's and bash's startup files only.
+      const loginShell = markers ? markedLoginShell() : null;
+      if (markers && !loginShell) {
+        yield preSubmission({
+          type: 'error',
+          message: coded(
+            'STOP_MARKER_UNSUPPORTED_SHELL',
+            'the login shell, which Codex runs commands with, is neither zsh nor bash',
+          ),
+          outcome: 'failed',
+        });
+        return;
+      }
       if (input.signal.aborted) {
         yield preSubmission({ type: 'interrupted' });
         return;
@@ -531,6 +634,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       let bridge: Awaited<ReturnType<typeof createToolBridge>> | undefined;
       // SPEC-0035 A02: held from the app-server's start until its thread is open.
       let releaseStart = () => {};
+      let hookChannel: Awaited<ReturnType<typeof hostHookChannel>> | undefined;
+      let markerEnv: Record<string, string> = {};
       try {
         if (remainingAcceptanceMs() <= 0)
           throw new Error('Codex execution budget expired before startup');
@@ -552,17 +657,53 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
           settings = profileSettings({
             write: dispatchProfile === 'workspace-write',
             writePaths,
-            none: [local, state, ...resolveDenyRead(denyRead, workspace)],
+            // Other instances under a host marker directory stay out of reach (SPEC-0035 B01).
+            none: [
+              local,
+              state,
+              ...resolveDenyRead(denyRead, workspace),
+              ...(markers && typeof config.stopMarker === 'object'
+                ? [dirname(markers.directory)]
+                : []),
+            ],
+            read: markers ? [markers.directory] : [],
             network: policy!.network,
           });
         } else home = managedHome(input.stateDir);
+        if (markers) {
+          // SPEC-0035 I02: every zsh and bash command opens the marker, then the user's own files.
+          const marker = markers.prepare(input.dispatchId, loginShell!, workspace, input.stateDir);
+          startup ??= markerStartupFiles(markers.directory);
+          const host = isolatedEnv(config.env);
+          markerEnv = {
+            ORCHVIA_STOP_MARKER: marker.path,
+            ZDOTDIR: startup.zdotdir,
+            BASH_ENV: startup.bashEnv,
+            ...(host.ZDOTDIR !== undefined ? { ORCHVIA_USER_ZDOTDIR: host.ZDOTDIR } : {}),
+            ...(host.BASH_ENV !== undefined ? { ORCHVIA_USER_BASH_ENV: host.BASH_ENV } : {}),
+          };
+        }
+        if (config.hostHook) {
+          hookChannel = await hostHookChannel(config.hostHook, {
+            taskId: input.taskId,
+            sessionId: input.sessionId,
+            dispatchId: input.dispatchId,
+          });
+          settings.push('-c', hostHookSetting());
+        }
         if (input.orchestrationTools)
           bridge = await createToolBridge(input.orchestrationTools, input.signal);
         if (local) releaseStart = await startLock(local, remainingAcceptanceMs());
         child = spawn(
           config.command ?? 'codex',
           [
-            ...defensiveArgs(config.args ?? ['app-server'], workspace, !!bridge, hostMcp),
+            ...defensiveArgs(
+              config.args ?? ['app-server'],
+              workspace,
+              !!bridge,
+              hostMcp,
+              !!config.hostHook,
+            ),
             '-c',
             `web_search="${webSearch}"`,
             ...settings,
@@ -572,6 +713,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
             env: {
               ...isolatedEnv(config.env),
               ...hostMcp.env,
+              ...markerEnv,
+              ...hookChannel?.env,
               CODEX_HOME: home,
               CODEX_SQLITE_HOME: home,
               ...bridge?.env,
@@ -582,6 +725,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       } catch (error) {
         releaseStart();
         await bridge?.close();
+        await hookChannel?.close();
+        if (markers) await markers.end(input.dispatchId, () => 1000).catch(() => false);
         yield preSubmission({ type: 'error', message: errorMessage(error), outcome: 'failed' });
         return;
       }
@@ -605,6 +750,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       owned.set(input.sessionId, connections);
       let terminal = false;
       let interruptSent = false;
+      let bypassed = false;
       let answer = '';
       let sawUsage = false;
       const seenUsage = new Set<string>();
@@ -672,6 +818,17 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
             }
             if (verdict !== true)
               throw new Error(coded('CODEX_NETWORK_PROXY_UNAVAILABLE', verdict));
+          }
+          // SPEC-0035 R02: a hook Codex would not run leaves the host unasked.
+          if (config.hostHook) {
+            const hooks = await connection.request('hooks/list', { cwds: [workspace] });
+            if (!hostHookTrusted(hooks))
+              throw new Error(
+                coded(
+                  'HOST_HOOK_UNTRUSTED',
+                  'the host hook is not trusted in the Codex home; call codexConnection().trustHostHook()',
+                ),
+              );
           }
         }
         const approval = policy
@@ -849,6 +1006,20 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
           if (params.turnId && params.turnId !== turnId) continue;
           if (message.method === 'item/started') {
             const item = record(params.item);
+            // SPEC-0035 I04: a command under another shell holds no marker; the turn stops here.
+            if (
+              markers &&
+              !bypassed &&
+              item?.type === 'commandExecution' &&
+              !markedCommand(item.command)
+            ) {
+              bypassed = true;
+              try {
+                connection.send('turn/interrupt', { threadId, turnId });
+              } catch {
+                /* a closed connection is reported below */
+              }
+            }
             if (item?.type === 'fileChange' && typeof item.id === 'string')
               fileChanges.set(item.id, item);
           }
@@ -931,6 +1102,16 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
                         ? { compacted: { kind: 'boundary', evidence: compactBoundary! } }
                         : {}),
                     };
+            // SPEC-0035 I04: without the marker nothing proves the command stopped.
+            if (bypassed)
+              observedTerminal = {
+                type: 'error',
+                outcome: 'unknown',
+                message: coded(
+                  'STOP_MARKER_BYPASSED',
+                  'a command ran with a shell that does not open the stop marker; the owner reconciles the dispatch',
+                ),
+              };
             if (observedTerminal)
               report(
                 'runtime_terminal',
@@ -938,9 +1119,9 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
                 'Matching native terminal; execution still requires the host stop observer',
               );
             const stopObservation =
-              !coversExecution && observedTerminal
+              !coversExecution && observedTerminal && !bypassed
                 ? observeRuntimeStop(
-                    config.observeExecutionStop,
+                    observeExecutionStop,
                     {
                       target: {
                         taskId: input.taskId,
@@ -1042,7 +1223,11 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
         releaseStart();
         input.signal.removeEventListener('abort', requestInterrupt);
         await bridge?.close();
+        await hookChannel?.close();
         await connection.close();
+        // SPEC-0034 A03: whatever a dispatch left behind ends with it, proven stopped or not.
+        if (markers)
+          await markers.end(input.dispatchId, () => timeout(config.closeTimeoutMs, 1000));
         prune(input.sessionId);
       }
     },

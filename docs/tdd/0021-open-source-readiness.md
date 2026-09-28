@@ -457,6 +457,16 @@ Pull request #61 set the version to 0.1.13 on top of SPEC-0038 (#60). A local Cl
 - P04 passed on the Ubuntu and macOS runners, and the whole run, 13 jobs, passed at its first attempt.
 - The npm registry lists 0.1.13 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.13 with its wheel and sdist.
 
+## The thirteenth release, 0.1.14
+
+Pull request #63 set the version to 0.1.14 on top of the first part of SPEC-0035 (#62). A local Claude Code session pushed the tag `v0.1.14` on its merge commit `330558c`, on the owner's authorization, which started the release workflow ([36388029066](https://github.com/masonlee39/orchvia/actions/runs/36388029066)).
+
+- The offline matrix and the build passed at the first attempt, with the local-member smoke on Ubuntu and both macOS runners.
+- The owner approved the `npm` and `pypi` deployments. Both jobs passed, and the GitHub release "Orchvia 0.1.14" followed.
+- The npm registry lists 0.1.14 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.14 with its wheel and sdist.
+
+From 0.1.15 on, as the owner chose (D-35-18), the version change travels with the change it releases in one pull request, which is merged and tagged once its CI passes.
+
 ## P10: no document names the latest release (D-rel-3)
 
 On 2026-09-27 the owner chose D-rel-3: a release is recorded by the next release pull request, and no document names the latest release.

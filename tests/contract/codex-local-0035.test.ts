@@ -729,3 +729,25 @@ test('AC-0035-G02 the orchestration bridge needs no Codex approval', async (t) =
   // Its grant is bound to the dispatch; Codex's `never` would otherwise refuse every call.
   assert.match(servers, /agent_orch=\{[^}]*default_tools_approval_mode="approve"/);
 });
+
+test("AC-0035-C09 models() lists the account's models without an engine", async (t) => {
+  const paths = await home(t);
+  const connection = codexConnection({
+    home: paths.home,
+    command: process.execPath,
+    args: [fixture('codex-local.ts')],
+    env: { FIXTURE_LOG: paths.log },
+  });
+  t.after(() => connection.close());
+  assert.deepEqual(await connection.models(), {
+    data: [{ id: 'gpt-fixture', model: 'gpt-fixture', displayName: 'Fixture', isDefault: true }],
+    nextCursor: 'page-2',
+  });
+  const next = await connection.models({ cursor: 'page-2', includeHidden: true, limit: 50 });
+  assert.equal(next.nextCursor, null);
+  assert.deepEqual(
+    requested(paths.log, 'model/list').map((entry) => entry.params),
+    [{}, { cursor: 'page-2', includeHidden: true, limit: 50 }],
+  );
+  assert.deepEqual(readdirSync(paths.home), [], 'nothing written to the home');
+});

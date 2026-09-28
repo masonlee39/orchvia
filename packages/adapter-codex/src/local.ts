@@ -1,6 +1,8 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
+  chmodSync,
   closeSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
@@ -8,11 +10,13 @@ import {
   rmSync,
   statSync,
   unlinkSync,
+  writeFileSync,
   writeSync,
 } from 'node:fs';
-import { createServer, type Server } from 'node:net';
-import { tmpdir } from 'node:os';
+import { createServer, type Server, type Socket } from 'node:net';
+import os, { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { RuntimeInput } from '../../engine/src/types.ts';
 import { contains } from '../../engine/src/verification.ts';
 
@@ -261,6 +265,8 @@ export function profileSettings(options: {
   write: boolean;
   writePaths: readonly string[];
   none: readonly string[];
+  /** Readable even inside a writable directory: the stop marker instance (SPEC-0035 I02). */
+  read?: readonly string[];
   network: CodexNetwork;
 }): string[] {
   const filesystem: string[] = ['":root"="read"'];
@@ -268,6 +274,7 @@ export function profileSettings(options: {
     for (const path of options.writePaths) filesystem.push(`${toml(path)}="write"`);
     filesystem.push('":tmpdir"="write"');
   }
+  for (const path of options.read ?? []) filesystem.push(`${toml(path)}="read"`);
   for (const path of options.none) filesystem.push(`${toml(path)}="none"`);
   let network = '';
   if (options.network === 'direct')
@@ -451,4 +458,179 @@ export function proxyInForce(output: unknown): true | string {
   if (!refused(result.outside))
     return `a direct connection was ${String(result.outside)}, not refused`;
   return true;
+}
+
+// ---- SPEC-0035 R: the host's hook ----
+
+/** What the host's hook sees of a tool call before it runs. */
+export interface CodexHookEvent {
+  /** A command, a file change, or another tool. */
+  kind: 'command' | 'fileChange' | 'tool';
+  /** Codex's name for the tool: `Bash`, `apply_patch`, an MCP tool. */
+  tool: string;
+  command?: string;
+  patch?: string;
+  input?: unknown;
+  taskId: string;
+  sessionId: string;
+  dispatchId: string;
+}
+export type CodexHookDecision = { allow: true } | { allow: false; reason?: string };
+export type CodexHostHook = (
+  event: CodexHookEvent,
+) => CodexHookDecision | Promise<CodexHookDecision>;
+
+/** The key Codex gives the one hook Orchvia passes on the command line. */
+export const HOST_HOOK_KEY = '/<session-flags>/config.toml:pre_tool_use:0:0';
+
+const quoteShell = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * The hook command, the same for every dispatch and for `trustHostHook`, since Codex trusts a hook
+ * by a hash of its definition: this Node running the adapter's hook program.
+ */
+export function hostHookCommand(): string {
+  const program = fileURLToPath(new URL('./hook.ts', import.meta.url));
+  return `${quoteShell(process.execPath)} ${quoteShell(program)}`;
+}
+export function hostHookSetting(): string {
+  return `hooks.PreToolUse=[{hooks=[{type="command",command=${JSON.stringify(hostHookCommand())},async=false,timeoutSec=600}]}]`;
+}
+
+/** Whether `hooks/list` shows Orchvia's hook trusted. */
+export function hostHookTrusted(list: unknown): boolean {
+  const data = (list as { data?: { hooks?: Record<string, unknown>[] }[] })?.data ?? [];
+  const command = hostHookCommand();
+  return data.some((entry) =>
+    (entry.hooks ?? []).some(
+      (hook) =>
+        hook.key === HOST_HOOK_KEY &&
+        hook.command === command &&
+        (hook.trustStatus === 'trusted' || hook.trustStatus === 'managed'),
+    ),
+  );
+}
+
+function hookEvent(
+  input: Record<string, unknown>,
+  ids: Pick<CodexHookEvent, 'taskId' | 'sessionId' | 'dispatchId'>,
+): CodexHookEvent {
+  const tool = typeof input.tool_name === 'string' ? input.tool_name : 'unknown';
+  const toolInput = input.tool_input as Record<string, unknown> | undefined;
+  const text = typeof toolInput?.command === 'string' ? toolInput.command : undefined;
+  if (tool === 'Bash') return { kind: 'command', tool, command: text, ...ids };
+  if (tool === 'apply_patch') return { kind: 'fileChange', tool, patch: text, ...ids };
+  return { kind: 'tool', tool, input: toolInput, ...ids };
+}
+
+/**
+ * The dispatch's private channel from the hook to the host: a Unix socket in a 0700 directory and
+ * a token, given to Codex's environment in names that commands never see (ORCHVIA_HOOK_*).
+ */
+export async function hostHookChannel(
+  hook: CodexHostHook,
+  ids: Pick<CodexHookEvent, 'taskId' | 'sessionId' | 'dispatchId'>,
+): Promise<{ env: Record<string, string>; close: () => Promise<void> }> {
+  // A short path: Unix socket paths are limited to about 104 bytes on macOS.
+  const directory = mkdtempSync('/tmp/orchvia-hook-');
+  chmodSync(directory, 0o700);
+  const path = join(directory, 's');
+  const token = randomBytes(32).toString('hex');
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.on('error', () => {});
+    let buffer = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (data: string) => {
+      buffer += data;
+      if (buffer.length > 1_048_576) return socket.destroy();
+      const end = buffer.indexOf('\n');
+      if (end < 0) return;
+      const line = buffer.slice(0, end);
+      buffer = '';
+      void (async () => {
+        let answer: CodexHookDecision = { allow: false, reason: 'The host refused' };
+        try {
+          const message = JSON.parse(line) as { token?: unknown; event?: unknown };
+          if (
+            typeof message.token !== 'string' ||
+            message.token.length !== token.length ||
+            !timingSafeEqual(Buffer.from(message.token), Buffer.from(token))
+          )
+            throw new Error('unauthorized');
+          const decision = await hook(
+            hookEvent((message.event ?? {}) as Record<string, unknown>, ids),
+          );
+          answer =
+            decision?.allow === true
+              ? { allow: true }
+              : {
+                  allow: false,
+                  reason: (decision as { reason?: string })?.reason ?? 'The host refused',
+                };
+        } catch (error) {
+          answer = {
+            allow: false,
+            reason: `The host's hook failed: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+        socket.end(JSON.stringify(answer) + '\n');
+      })();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(path, resolve);
+  });
+  chmodSync(path, 0o600);
+  return {
+    env: { ORCHVIA_HOOK_SOCKET: path, ORCHVIA_HOOK_TOKEN: token },
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+// ---- SPEC-0035 I: stop markers for Codex's commands ----
+
+/** I03: the account's login shell, which Codex runs commands with, when it is zsh or bash. */
+export function markedLoginShell(): string | null {
+  const shell = os.userInfo().shell ?? '';
+  return /(^|\/)(zsh|bash)$/.test(shell) ? shell : null;
+}
+
+/** I04: whether a command item ran under a shell that opens the marker (zsh or bash). */
+export function markedCommand(command: unknown): boolean {
+  return typeof command === 'string' && /^(\S*\/)?(zsh|bash) /.test(command);
+}
+
+/**
+ * I02: the startup files that open a dispatch's marker as descriptor 9 in every zsh and bash
+ * command, then run the user's own, in `directory` (the stop marker instance). A marker that cannot
+ * be opened stops the command, as the Claude wrapper does.
+ */
+export function markerStartupFiles(directory: string): { zdotdir: string; bashEnv: string } {
+  const zdotdir = join(directory, 'zdotdir');
+  const bashEnv = join(directory, 'bash-env.sh');
+  mkdirSync(zdotdir, { recursive: true, mode: 0o700 });
+  const open =
+    'if [ -n "$ORCHVIA_STOP_MARKER" ]; then exec 9<"$ORCHVIA_STOP_MARKER" || exit 126; fi\n';
+  writeFileSync(
+    join(zdotdir, '.zshenv'),
+    open +
+      'if [ -n "${ORCHVIA_USER_ZDOTDIR+x}" ]; then ZDOTDIR="$ORCHVIA_USER_ZDOTDIR"; else unset ZDOTDIR; fi\n' +
+      '[ -f "${ZDOTDIR:-$HOME}/.zshenv" ] && . "${ZDOTDIR:-$HOME}/.zshenv"\n',
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    bashEnv,
+    open +
+      'if [ -n "$ORCHVIA_USER_BASH_ENV" ] && [ -f "$ORCHVIA_USER_BASH_ENV" ]; then . "$ORCHVIA_USER_BASH_ENV"; fi\n',
+    { mode: 0o600 },
+  );
+  return { zdotdir, bashEnv };
 }

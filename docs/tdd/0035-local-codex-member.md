@@ -48,3 +48,35 @@ With those fixes every job passed except the local-member smoke on Ubuntu, with 
 - Mutations, each restored from a file copy: 12 of 12 killed (plan on any profile, proxy always in force, no start lock, no retry, acceptEdits asking, any elicitation, no version check, no baseline, denyRead not fenced, agent socket passed, home overlap allowed, temporary directory not writable).
 - Native, macOS arm64, Codex CLI 0.153.4 and 0.157.1, loopback gateway, synthetic credentials, no model calls, without the internet checks: each profile's reads and writes (the home, a `denyRead` path and a directory outside denied; the workspace and the temporary directory writable in `auto`, nothing in `plan`), no `SSH_AUTH_SOCK` or key variable; `default` asked for the command and the edit, `acceptEdits` for the command only, `auto` for neither; under direct network a real ssh-agent refused (`ssh-add` 2), the Docker-path socket unreachable, the host tool port 401 without the token, no tool called; a Codex without its proxy refused with `CODEX_NETWORK_PROXY_UNAVAILABLE` before any model request; a host MCP tool call asked through an elicitation; the connection API's probe (`userAgent` with the host's name), API key sign-in and sign-out, browser sign-in and cancel; two members on one home at once. J01 with the real binaries: 1000, 2000 and 3000 recorded for 1000, 2000 and 3000 billed.
 - After the CI fixes, with 0.153.4 and 0.157.1 locally: the native gateway, security and local-member smokes passed, and J01 recorded 1000, 2000 and 3000. The internet checks (N01) and Linux (N04) run in this change's CI.
+
+# The 0.1.15 part: the host's hook, its trust, the model list and Codex stop markers
+
+Base: `330558c` (0.1.14 on `main`). Specification: SPEC-0035 C08, C09, R, I and X.
+
+## Probes before the code
+
+With 0.153.4 and 0.157.1: a `PreToolUse` hook passed with `-c` runs outside the sandbox with the app-server's environment, excluded variables included, and reaches a Unix socket even under a profile without network, while a command sees none of those variables; `config/batchWrite` with the key path `hooks.state."<key>".trusted_hash` trusts it; a command that code mode's `exec` tool runs is asked about, passes the hook as `Bash`, holds a marker opened from `ZDOTDIR` and shows its shell in its item.
+
+## RED
+
+This time the tests came first. `tests/contract/codex-hook-marker-0035.test.ts`, with `tests/fixtures/codex-local.ts` answering `hooks/list` and `config/batchWrite`, running the configured hook command on sample calls, starting a command item and taking an interrupt: 10 of 10 failed before any code (no `hostHook`, `stopMarker`, `trustHostHook`, `endStopMarkersSync` or hook program). The C09 test, added when the downstream host asked for the model list, failed with `connection.models is not a function`.
+
+## Changes
+
+- `packages/adapter-codex/src/hook.ts`: the hook program.
+- `packages/adapter-codex/src/local.ts`: the hook command, setting, trust check and channel; the marker startup files, the login shell and the shell of a command item; readable paths in the profile.
+- `packages/adapter-codex/src/index.ts`: `hostHook` and `stopMarker`; hooks enabled only with `hostHook`; `HOST_HOOK_UNTRUSTED`, `STOP_MARKER_UNSUPPORTED_SHELL` and `STOP_MARKER_BYPASSED`; the markers' observer, their end after the app-server, `endStopMarkersSync`; the stop marker functions exported.
+- `packages/adapter-codex/src/connection.ts`: `trustHostHook()` and `models()`.
+- `scripts/native-codex-local-smoke.mjs`: the hook refused and then trusted, a detached command ended, a `/bin/sh` command interrupting, code mode, the model list; a CI step with a bash login shell on macOS.
+
+Found on the way:
+
+- **bash skips `BASH_ENV` with a socket as its input.** The fixture's bash, started by Node, whose `child_process` gives children socket pairs, held no marker: bash takes a first-level non-interactive shell whose input is a socket for one sshd started and reads `~/.bashrc` instead. Codex gives commands pipes or a terminal, and real commands held the marker; the fixture now gives the shells no input, and the specification names the limit (I05).
+- **A flaky proof under load.** The marker test failed in three of six loaded copies: listing the holders with `lsof` took longer than the default one-second cleanup, so the stop stayed unproven, which is safe. The test gives the call 20 s.
+- **Surviving mutations.** Removing the markers' end after the dispatch survived, since a proven stop removes the marker anyway; the bypass test, whose dispatch is not observed, now checks the marker is gone. The channel's token check needed a test of its own.
+
+## GREEN
+
+- New tests: 11 of 11, with C09 and the 0.1.14 part 32 of 32. `npm test` 837 of 837, `npm run test:python` passed. Under one busy loop per core, six copies of the SPEC-0035, SPEC-0038 and adapter contract tests: 56 of 56 each.
+- Mutations, each restored from a file copy: 11 of 11 killed (trust always granted, allowing when the host cannot be asked, any shell taken as marked, any login shell, the channel visible to commands, a bypassed dispatch still observed, the token unchecked, `models()` dropping its paging, a wrong trust key, the user's `.zshenv` skipped, the marker not ended).
+- Native, macOS arm64, Codex CLI 0.153.4 and 0.157.1, a zsh login shell, loopback gateway, no model calls: an untrusted hook refused the dispatch; after `trustHostHook()` the host allowed `echo ok` and a patch and refused a command and a patch, and neither refused one ran; a `perl setsid` command held its marker and was ended with its dispatch, proven stopped; a `/bin/sh` command interrupted the turn with `STOP_MARKER_BYPASSED`, not released; a command from code mode passed the hook and was ended; `models()` listed 6 and 7 models. CI adds Linux and a bash login shell on macOS.

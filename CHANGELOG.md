@@ -2,6 +2,16 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.15] - 2026-09-28
+
+The host's own command rules and stop markers for the local Codex member (SPEC-0035, second part).
+
+### Added
+
+- `hostHook(event) => { allow } | { allow: false, reason }` on `createCodexAdapter` with `connection`: each command, file change and tool call reaches the host before it runs, in every mode, through Codex's `PreToolUse` hook; a dispatch whose hook the home does not trust is refused with `HOST_HOOK_UNTRUSTED` (SPEC-0035 R).
+- `codexConnection().trustHostHook()`, which trusts that hook through Codex's own configuration API, and `models()`, Codex's model list (SPEC-0035 C08, C09).
+- `stopMarker: true | { directory, onObservation? }` for Codex, as for Claude: each zsh and bash command holds a marker, the dispatch is proven stopped when nothing holds it, and `executionStop` is no longer needed. `STOP_MARKER_UNSUPPORTED_SHELL` refuses a dispatch whose login shell is neither; a command the model runs with `/bin/sh` ends the turn with `STOP_MARKER_BYPASSED` and keeps the lease. `adapter.endStopMarkersSync(timeoutMs)`, and the sweep, acknowledgement and synchronous cleanup functions from `@orchvia/adapter-codex` (SPEC-0035 I).
+
 ## [0.1.14] - 2026-09-28
 
 The user's own Codex CLI as a member (SPEC-0035, first part).

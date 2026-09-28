@@ -77,7 +77,7 @@ jobs:
         # macos-15-intel covers x86-64 Macs; macos-14 is Apple silicon.
         os: [ubuntu-24.04, macos-14, macos-15-intel]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -141,6 +141,15 @@ jobs:
         run: |
           npm install --ignore-scripts --no-save --package-lock=false --prefix "$RUNNER_TEMP/codex-0.153.4" @openai/codex@0.153.4
           node scripts/native-codex-local-smoke.mjs dist/verification/native-codex-local-0.153.4.json "$RUNNER_TEMP/codex-0.153.4/node_modules/.bin/codex"
+      # SPEC-0035 I01: commands of a bash login shell hold their marker too; Linux runners use bash
+      # already, macOS runners zsh, so the macOS runners change it.
+      - name: Local Codex member under a bash login shell (no paid models)
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        env:
+          ORCH_EXPECT_SHELL: bash
+        run: |
+          sudo chsh -s /bin/bash "$USER"
+          node scripts/native-codex-local-smoke.mjs dist/verification/native-codex-local-bash.json ./node_modules/.bin/codex
       # SPEC-0036: a killed host's leftover command is ended by the next host's sweep.
       - name: Stop markers across a host restart with the real Claude binary (no paid models)
         if: ${{ !cancelled() }}
