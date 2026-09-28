@@ -86,6 +86,7 @@ Each specification has a matching TDD record of observed failures before the cha
 | [SPEC-0034](specs/0034-background-command-stop-proof.md) | Stop proof for commands that outlive their turn: Codex coverage, process-tree cleanup, the `processGroupsStopped` deprecation and Claude's `stopMarker` (0.1.10) |
 | [SPEC-0036](specs/0036-stop-marker-restart.md) | Stop markers under a host directory, the sweep after a restart, the synchronous cleanup and observations (0.1.11) |
 | [SPEC-0037](specs/0037-stop-marker-acknowledgement.md) | Stop marker proofs kept until acknowledged, and one synchronous cleanup per host directory |
+| [SPEC-0038](specs/0038-codex-approval-paths.md) | Codex file change paths checked before approval, and no credentials in Codex commands' environment |
 
 ## Claude and Codex baselines
 

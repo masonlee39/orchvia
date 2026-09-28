@@ -126,6 +126,10 @@ jobs:
       - name: Stop proof with the real Codex binary and a scripted loopback gateway (no paid models)
         if: ${{ !cancelled() }}
         run: node scripts/native-stop-smoke.mjs codex dist/verification/native-stop-codex.json ./node_modules/.bin/codex
+      # SPEC-0038: an approved patch stays in the workspace; commands see no credentials.
+      - name: Codex file change paths and command environment with the real Codex binary (no paid models)
+        if: ${{ !cancelled() }}
+        run: node scripts/native-codex-security-smoke.mjs dist/verification/native-codex-security.json ./node_modules/.bin/codex
       # SPEC-0036: a killed host's leftover command is ended by the next host's sweep.
       - name: Stop markers across a host restart with the real Claude binary (no paid models)
         if: ${{ !cancelled() }}
