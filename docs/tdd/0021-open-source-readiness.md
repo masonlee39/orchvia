@@ -440,6 +440,14 @@ Pull request #55 set the version to 0.1.11 on top of SPEC-0036 (#54). A local Cl
 - P04 passed on the Ubuntu and macOS runners, and the whole run, 13 jobs, passed at its first attempt.
 - The npm registry lists 0.1.11 as the `latest` version of all five packages, with provenance attestations, and the published `@orchvia/adapter-claude` declares `sweepStopMarkers`, `staleStopMarkers` and `endStopMarkersSync`. PyPI lists `orchvia` 0.1.11 with its wheel and sdist.
 
+## The eleventh release, 0.1.12
+
+Pull request #58 set the version to 0.1.12 on top of SPEC-0037 (#57). A local Claude Code session pushed the tag `v0.1.12` on its merge commit `6b88b66`, on the owner's authorization. That run ([36331720031](https://github.com/masonlee39/orchvia/actions/runs/36331720031)) failed in its tests on the x86-64 macOS runner, before the build could publish anything: in 300 ms the root-level synchronous cleanup of the restart smoke did not finish its first listing on the slower runner. npm, PyPI and GitHub Releases had no 0.1.12. After the fixes of pull request #59, the owner chose to move the tag again (D-0037-3): it was deleted and pushed again on `868ca2b`, which started the release workflow ([36335671711](https://github.com/masonlee39/orchvia/actions/runs/36335671711)).
+
+- The offline matrix and the build passed at the first attempt, with the restart smoke on Ubuntu and both macOS runners.
+- The owner approved the `npm` and `pypi` deployments. Both jobs passed, and the GitHub release "Orchvia 0.1.12" followed with the five npm archives, the wheel, the sdist, both manifests and `SHA256SUMS`.
+- P04 passed on the Ubuntu and macOS runners, and the whole run, 13 jobs, passed at its first attempt.
+
 ## P10: no document names the latest release (D-rel-3)
 
 On 2026-09-27 the owner chose D-rel-3: a release is recorded by the next release pull request, and no document names the latest release.
