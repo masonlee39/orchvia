@@ -607,6 +607,9 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       let sawUsage = false;
       const seenUsage = new Set<string>();
       let previousUsageTotal: Message | null = null;
+      // SPEC-0035 J01: each observation goes out when the next one arrives or the turn ends, so the
+      // last one can carry the thread's totals, which the engine keeps once per dispatch.
+      let held: RuntimeUsageEvent | null = null;
       // SPEC-0035 J01: Codex sends a resumed thread's previous usage again, and a compaction does
       // so under its own turn, so the totals the last dispatch reported count as already seen.
       const baseline = input.providerSessionId
@@ -873,7 +876,6 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
             const observation: RuntimeUsageEvent = {
               type: 'usage',
               usageId: `${turnId}:total:${totalCount ?? 'unknown'}:${seenUsage.size}`,
-              ...(total ? { sessionTotals: { codexThreadTotal: total as Json } } : {}),
               usage: {
                 inputTokens: tokenDelta('inputTokens'),
                 cachedInputTokens: tokenDelta('cachedInputTokens'),
@@ -891,8 +893,11 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
               },
             };
             previousUsageTotal = total;
-            input.reportUsage?.(observation);
-            yield observation;
+            if (held) {
+              input.reportUsage?.(held);
+              yield held;
+            }
+            held = observation;
           } else if (message.method === 'turn/completed') {
             const completed = record(params.turn);
             if (completed?.id !== turnId) continue;
@@ -957,6 +962,14 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
                     },
                   )
                 : Promise.resolve(true);
+            if (held) {
+              const last: RuntimeUsageEvent = previousUsageTotal
+                ? { ...held, sessionTotals: { codexThreadTotal: previousUsageTotal as Json } }
+                : held;
+              held = null;
+              input.reportUsage?.(last);
+              yield last;
+            }
             const [exited] = await Promise.all([connection.close(), stopObservation]);
             if (!exited) {
               yield {
@@ -1002,6 +1015,11 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
           }
         }
       } catch (error) {
+        if (held) {
+          input.reportUsage?.(held);
+          yield held;
+          held = null;
+        }
         if (!terminal) {
           const exited = await connection.close();
           if (!exited)

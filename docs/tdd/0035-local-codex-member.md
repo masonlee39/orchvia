@@ -28,9 +28,19 @@ Found on the way:
 - **A cancelled sign-in** could still be found waiting for a moment; `cancel` now returns after the sign-in has ended.
 - **The version guard** (0021-P08) took TEST-NET-1's address for a version; the script builds it.
 
+## The first CI run
+
+Pull request #62's first run failed in three ways, none seen locally:
+
+- **One set of thread totals per dispatch.** The first version put the thread's totals on every usage event, and the engine keeps one set per dispatch and refuses a different second one (SPEC-0032 E01) with `IDEMPOTENCY_CONFLICT`, so every Codex dispatch with two model requests ended `outcome_unknown`; the existing native gateway smoke failed on each runner. The contract tests had not seen it: their dispatches had one usage event each. A test with two requests in one turn failed first; each usage event now goes out when the next arrives or the turn ends, so the last one carries the totals and none is sent twice, and a test checks that usage held back still reaches the host when the turn fails.
+- **Linux refuses a direct connection differently.** Under Codex's proxy on Linux the direct connection of the proxy check was `ENETUNREACH`, not `EPERM`; the check now takes `ENETUNREACH` and `EHOSTUNREACH` as refused too, still requiring the proxy variables and a refused Unix socket.
+- **Test mistakes.** A contract test expected macOS's `/private/etc/hosts`; the native smoke ran all internet checks in one command, which Codex hands back after 10 s, so the last check's output was missing. Each now runs on its own with time to finish, and a failing smoke prints what its commands printed.
+
+Found while reading those logs, and not changed here: in 0.1.13 already, the orchestration bridge's tools fail under Codex's `never` policy ("MCP tool call requires approval, but approval policy is never"); the gateway smoke does not require the call to succeed.
+
 ## GREEN
 
-- New tests: 17 of 17. `npm test` 822 of 822, `npm run test:python` passed. Under one busy loop per core, six copies of the SPEC-0035, SPEC-0038 and adapter contract tests: 41 of 41 each.
+- New tests: 19 of 19. `npm test` 823 of 823, `npm run test:python` passed. Under one busy loop per core, six copies of the SPEC-0035, SPEC-0038, adapter and Codex policy contract tests: 49 of 49 each.
 - Mutations, each restored from a file copy: 12 of 12 killed (plan on any profile, proxy always in force, no start lock, no retry, acceptEdits asking, any elicitation, no version check, no baseline, denyRead not fenced, agent socket passed, home overlap allowed, temporary directory not writable).
 - Native, macOS arm64, Codex CLI 0.153.4 and 0.157.1, loopback gateway, synthetic credentials, no model calls, without the internet checks: each profile's reads and writes (the home, a `denyRead` path and a directory outside denied; the workspace and the temporary directory writable in `auto`, nothing in `plan`), no `SSH_AUTH_SOCK` or key variable; `default` asked for the command and the edit, `acceptEdits` for the command only, `auto` for neither; under direct network a real ssh-agent refused (`ssh-add` 2), the Docker-path socket unreachable, the host tool port 401 without the token, no tool called; a Codex without its proxy refused with `CODEX_NETWORK_PROXY_UNAVAILABLE` before any model request; a host MCP tool call asked through an elicitation; the connection API's probe (`userAgent` with the host's name), API key sign-in and sign-out, browser sign-in and cancel; two members on one home at once. J01 with the real binaries: 1000, 2000 and 3000 recorded for 1000, 2000 and 3000 billed.
-- Not yet run: the internet checks (N01) and Linux (N04), in this change's CI.
+- After the CI fixes, with 0.153.4 and 0.157.1 locally: the native gateway, security and local-member smokes passed, and J01 recorded 1000, 2000 and 3000. The internet checks (N01) and Linux (N04) run in this change's CI.

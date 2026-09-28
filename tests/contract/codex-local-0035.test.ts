@@ -37,8 +37,55 @@ async function run(adapter: ReturnType<typeof createCodexAdapter>, input: Partia
     events.push(event);
   return events;
 }
-const inputTokens = (events: RuntimeEvent[]) =>
-  events.flatMap((event) => (event.type === 'usage' ? [event.usage.inputTokens] : []));
+/** Input tokens by usage record: the engine keeps one record per usageId. */
+const inputTokens = (events: RuntimeEvent[]) => [
+  ...new Map(
+    events.flatMap((event) =>
+      event.type === 'usage' ? [[event.usageId, event.usage.inputTokens] as const] : [],
+    ),
+  ).values(),
+];
+
+test('AC-0035-J01 a dispatch hands the engine one set of thread totals, after its last request', async (t) => {
+  const { workspace, state } = await dirs(t);
+  const adapter = createCodexAdapter({
+    executionStop: 'owner-reconcile',
+    command: process.execPath,
+    args: [fixture('codex-compact-usage.ts')],
+    env: { FIXTURE_TWO_REQUESTS: '1' },
+  });
+  t.after(() => adapter.close?.());
+  const events = await run(adapter, { workspace, stateDir: state });
+  assert.equal(events.at(-1)?.type, 'result', JSON.stringify(events));
+  const totals = events.flatMap((event) =>
+    event.type === 'usage' && event.sessionTotals !== undefined ? [event.sessionTotals] : [],
+  );
+  // The engine refuses a second, different set for one dispatch (SPEC-0032 E01).
+  assert.equal(
+    new Set(totals.map((value) => JSON.stringify(value))).size,
+    1,
+    JSON.stringify(totals),
+  );
+  assert.equal(
+    (totals[0] as { codexThreadTotal: { inputTokens: number } }).codexThreadTotal.inputTokens,
+    1500,
+    'the totals after the last request',
+  );
+});
+
+test('AC-0035-J01 usage held for the thread totals still reaches the host when the turn fails', async (t) => {
+  const { workspace, state } = await dirs(t);
+  const adapter = createCodexAdapter({
+    executionStop: 'owner-reconcile',
+    command: process.execPath,
+    args: [fixture('codex-compact-usage.ts')],
+    env: { FIXTURE_DIE: '1' },
+  });
+  t.after(() => adapter.close?.());
+  const events = await run(adapter, { workspace, stateDir: state });
+  assert.equal(events.at(-1)?.type, 'error', JSON.stringify(events));
+  assert.deepEqual(inputTokens(events), [1000]);
+});
 
 test('AC-0035-J01 a compaction on a resumed thread counts its own request once', async (t) => {
   const { workspace, state } = await dirs(t);
@@ -66,6 +113,19 @@ test('AC-0035-J01 a compaction on a resumed thread counts its own request once',
     usageBaseline: { dispatchId: 'd1', totals: totals! },
   });
   assert.equal(compacted.at(-1)?.type, 'result', JSON.stringify(compacted));
+  // The engine keeps one set of totals per dispatch and refuses a different second one.
+  for (const events of [first, compacted])
+    assert.equal(
+      new Set(
+        events.flatMap((event) =>
+          event.type === 'usage' && event.sessionTotals !== undefined
+            ? [JSON.stringify(event.sessionTotals)]
+            : [],
+        ),
+      ).size,
+      1,
+      'one set of thread totals per dispatch',
+    );
   assert.deepEqual(
     inputTokens(compacted).filter((tokens) => tokens !== 0),
     [2000],
@@ -75,7 +135,7 @@ test('AC-0035-J01 a compaction on a resumed thread counts its own request once',
 
 // ---- A local member on a connection home, against tests/fixtures/codex-local.ts ----
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { codexConnection } from '../../packages/adapter-codex/src/index.ts';
 
 async function home(t: any) {
@@ -252,7 +312,7 @@ test('AC-0035-B01 each dispatch runs under a named profile that fences the home,
       paths.home,
       paths.state,
       join(paths.workspace, 'secret'),
-      '/private/etc/hosts',
+      realpathSync('/etc/hosts'),
     ])
       assert.ok(profile.includes(`${JSON.stringify(denied)}="none"`), `${denied} in ${profile}`);
     assert.equal(profile.includes(`${JSON.stringify(paths.workspace)}="write"`), write);

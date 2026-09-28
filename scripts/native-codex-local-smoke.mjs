@@ -84,7 +84,7 @@ const gateway = createServer(async (request, response) => {
       name: 'exec_command',
       arguments: JSON.stringify({
         cmd: step.cmd,
-        ...(step.shell ? { shell: step.shell, login: false } : {}),
+        ...(step.yield ? { yield_time_ms: step.yield } : {}),
       }),
     };
   else if (step?.search)
@@ -321,13 +321,16 @@ try {
     `echo tool=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST -d '{}' ${toolsUrl})`,
     `echo environ=$(cat /proc/*/environ 2>/dev/null | tr '\\0' '\\n' | grep -c '${TOKEN}')`,
   ];
-  if (internet)
-    netProbe.push(
-      `mkdir -p tmp; export TMPDIR="$PWD/tmp"; npm_config_cache="$PWD/.npm" npm install is-number --no-audit --no-fund --no-save --prefix ./npm > /dev/null 2>&1; echo npm=$?`,
-      'export TMPDIR="$PWD/tmp"; git clone --depth 1 -q https://github.com/octocat/Hello-World.git hello > /dev/null 2>&1; echo git=$?',
-      "echo https=$(curl -s -m 15 -o /dev/null -w '%{http_code}' https://example.com)",
-      "echo direct=$(curl --noproxy '*' -s -m 8 -o /dev/null -w '%{http_code}' https://example.com)",
-    );
+  // One command each, with time to finish: after 10 s Codex hands back what a command has
+  // printed so far and lets it run on.
+  const internetProbes = internet
+    ? [
+        'mkdir -p tmp; export TMPDIR="$PWD/tmp"; npm_config_cache="$PWD/.npm" npm install is-number --no-audit --no-fund --no-save --prefix ./npm > /dev/null 2>&1; echo npm=$?',
+        'mkdir -p tmp; export TMPDIR="$PWD/tmp"; git clone --depth 1 -q https://github.com/octocat/Hello-World.git hello > /dev/null 2>&1; echo git=$?',
+        "echo https=$(curl -s -m 20 -o /dev/null -w '%{http_code}' https://example.com)",
+        "echo direct=$(curl --noproxy '*' -s -m 8 -o /dev/null -w '%{http_code}' https://example.com)",
+      ].map((cmd) => ({ cmd, yield: 30000 }))
+    : [];
   {
     const name = 'network-direct';
     const adapter = member(home, {
@@ -337,7 +340,8 @@ try {
       },
     });
     const { record, seen: out } = await dispatch(name, adapter, () => [
-      { cmd: netProbe.join('; ') },
+      { cmd: netProbe.join('; '), yield: 15000 },
+      ...internetProbes,
     ]);
     record.toolCalls = toolCalls;
     check(
@@ -484,6 +488,13 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
 
   evidence.failures = failures;
+  // In a CI log, what each failing case's commands printed.
+  if (failures.length)
+    for (const [name, record] of Object.entries(evidence.cases))
+      if (record?.toolOutputs?.length)
+        console.error(
+          `${name}: ${record.toolOutputs.join(' | ').replace(/\s+/g, ' ').slice(0, 1500)}`,
+        );
   assert.deepEqual(failures, [], failures.join('; '));
   evidence.passed = true;
 } finally {

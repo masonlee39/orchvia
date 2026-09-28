@@ -36,6 +36,14 @@ for await (const line of createInterface({ input: process.stdin })) {
       method: 'thread/tokenUsage/updated',
       params: { threadId: 'thread', turnId: 'turn-1', tokenUsage: usage(1000, 1000, 1) },
     });
+    // FIXTURE_DIE: the app-server ends in the middle of the turn, after its first request.
+    if (process.env.FIXTURE_DIE) process.exit(3);
+    // FIXTURE_TWO_REQUESTS: a turn with a second model request, as a tool call makes.
+    if (process.env.FIXTURE_TWO_REQUESTS)
+      send({
+        method: 'thread/tokenUsage/updated',
+        params: { threadId: 'thread', turnId: 'turn-1', tokenUsage: usage(500, 1500, 2) },
+      });
     done('turn-1', { type: 'agentMessage', text: 'first' });
   } else if (value.method === 'thread/compact/start') {
     send({ id: value.id, result: {} });

@@ -441,8 +441,11 @@ export function proxyInForce(output: unknown): true | string {
     return 'the check printed no result';
   }
   if (result.proxy !== true) return 'commands have no proxy';
-  // Seatbelt and Linux's filters refuse with EPERM (EACCES on some kernels).
-  const refused = (code: unknown) => code === 'EPERM' || code === 'EACCES';
+  // Seatbelt refuses with EPERM (EACCES on some systems); Linux's sandbox leaves a command no
+  // route but the proxy's, so a direct connection is unreachable. Network without the proxy
+  // connects or times out instead, and shows no proxy variables.
+  const refused = (code: unknown) =>
+    code === 'EPERM' || code === 'EACCES' || code === 'ENETUNREACH' || code === 'EHOSTUNREACH';
   if (!refused(result.unix))
     return `a Unix socket connection was ${String(result.unix)}, not refused`;
   if (!refused(result.outside))
