@@ -425,6 +425,15 @@ const attempt = (options) => new Promise((done) => {
 })();
 `;
 
+/**
+ * SPEC-0040 P03: the proxy check a host copies beside its own files: the package's
+ * `proxy-check.mjs`, which runs with no package beside it, or the source's `proxy-check.ts`.
+ */
+export function proxyCheckProgram(): string {
+  const built = fileURLToPath(new URL('./proxy-check.mjs', import.meta.url));
+  return existsSync(built) ? built : fileURLToPath(new URL('./proxy-check.ts', import.meta.url));
+}
+
 /** The Unix socket the check tries to reach; the caller closes it. */
 export async function proxyCheckSocket(): Promise<{ path: string; close: () => void }> {
   const directory = mkdtempSync(join(tmpdir(), 'orchvia-proxy-'));
@@ -552,25 +561,42 @@ export interface CodexToolBridge {
   /** Variables for the bridge process alone. */
   env?: Record<string, string>;
 }
-export function checkToolBridge(
-  value: unknown,
-): { command: string; args: string[]; env: Record<string, string> } | undefined {
-  if (value === undefined) return undefined;
-  const bridge = value as Record<string, unknown>;
-  if (typeof bridge !== 'object' || bridge === null || Array.isArray(bridge))
-    invalidConfig('toolBridge must be { command, args?, env? }');
-  if (Object.keys(bridge).some((key) => !['command', 'args', 'env'].includes(key)))
-    invalidConfig('toolBridge takes only command, args and env');
-  const line = (text: unknown) => typeof text === 'string' && !/[\0\r\n]/.test(text);
-  if (!line(bridge.command) || !isAbsolute(bridge.command as string))
-    invalidConfig('toolBridge.command must be an absolute path');
-  const args = bridge.args ?? [];
-  if (!Array.isArray(args) || args.length > 32 || !args.every(line))
-    invalidConfig('toolBridge.args must be at most 32 lines of text');
-  const env = checkEnv(bridge.env ?? {}, 'toolBridge.env');
-  if (Object.keys(env).some((name) => name.startsWith('AGENT_ORCH_BRIDGE_')))
+export function checkToolBridge(value: unknown): ChildCommand | undefined {
+  const bridge = checkChildCommand(value, 'toolBridge');
+  if (bridge && Object.keys(bridge.env).some((name) => name.startsWith('AGENT_ORCH_BRIDGE_')))
     invalidConfig('toolBridge.env cannot set the AGENT_ORCH_BRIDGE_ variables');
-  return { command: bridge.command as string, args: args as string[], env };
+  return bridge;
+}
+
+/** SPEC-0040 P01: how the proxy check runs; its variables cannot touch the proxy's. */
+export function checkProxyCheck(value: unknown): ChildCommand | undefined {
+  const check = checkChildCommand(value, 'proxyCheck');
+  if (check && Object.keys(check.env).some((name) => /proxy/i.test(name)))
+    invalidConfig('proxyCheck.env cannot set proxy variables, which the check reads');
+  return check;
+}
+
+/** A program a host names for one child process (SPEC-0039 B01, SPEC-0040 P01). */
+export interface ChildCommand {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+function checkChildCommand(value: unknown, what: string): ChildCommand | undefined {
+  if (value === undefined) return undefined;
+  const given = value as Record<string, unknown>;
+  if (typeof given !== 'object' || given === null || Array.isArray(given))
+    invalidConfig(`${what} must be { command, args?, env? }`);
+  if (Object.keys(given).some((key) => !['command', 'args', 'env'].includes(key)))
+    invalidConfig(`${what} takes only command, args and env`);
+  const line = (text: unknown) => typeof text === 'string' && !/[\0\r\n]/.test(text);
+  if (!line(given.command) || !isAbsolute(given.command as string))
+    invalidConfig(`${what}.command must be an absolute path`);
+  const args = given.args ?? [];
+  if (!Array.isArray(args) || args.length > 32 || !args.every(line))
+    invalidConfig(`${what}.args must be at most 32 lines of text`);
+  const env = checkEnv(given.env ?? {}, `${what}.env`);
+  return { command: given.command as string, args: args as string[], env };
 }
 
 /**

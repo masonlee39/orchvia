@@ -16,6 +16,7 @@ import {
   createCodexAdapter,
   hostHookCommandFor,
   hostHookProgram,
+  proxyCheckProgram,
   toolBridgeProgram,
 } from '../packages/adapter-codex/src/index.ts';
 import { ORCHESTRATION_TOOLS } from '../packages/engine/src/tools.ts';
@@ -695,6 +696,63 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       `host-command-bypassed: ${bypassed.record.events.at(-1)}`,
     );
     check(() => assert.deepEqual(asked, []), `host-command-bypassed: the host was asked ${asked}`);
+  }
+
+  // AC-0040-N01: the proxy check through the host's command, with its variable for it alone.
+  {
+    const checkHome = join(root, 'check-home');
+    await mkdir(checkHome, { mode: 0o700 });
+    const runtime = join(root, 'check runtime.sh');
+    writeFileSync(
+      runtime,
+      `#!/bin/sh\n[ "$ORCH_CHECK_PREFIX" = on ] || exit 1\nexec ${JSON.stringify(process.execPath)} "$@"\n`,
+    );
+    chmodSync(runtime, 0o755);
+    const checked = await dispatch(
+      'proxy-check',
+      member(checkHome, {
+        config: {
+          policy: () => ({ mode: 'auto', network: 'direct' }),
+          proxyCheck: {
+            command: runtime,
+            args: [proxyCheckProgram()],
+            env: { ORCH_CHECK_PREFIX: 'on' },
+          },
+        },
+      }),
+      (workspace) => [
+        { cmd: `echo "check=\${ORCH_CHECK_PREFIX:-none}" > '${join(workspace, 'seen.txt')}'` },
+      ],
+    );
+    const seen = join(checked.workspace, 'seen.txt');
+    checked.record.seen = existsSync(seen) ? readFileSync(seen, 'utf8').trim() : null;
+    check(
+      () => assert.equal(checked.record.events.at(-1), 'result'),
+      `proxy-check ended: ${checked.record.events.at(-1)}`,
+    );
+    check(
+      () => assert.equal(checked.record.seen, 'check=none'),
+      `proxy-check: the member's command saw ${checked.record.seen}`,
+    );
+    // Without the variable the runtime refuses, so the check that passed was the host's.
+    const without = await dispatch(
+      'proxy-check-without',
+      member(checkHome, {
+        config: {
+          policy: () => ({ mode: 'auto', network: 'direct' }),
+          proxyCheck: { command: runtime, args: [proxyCheckProgram()] },
+        },
+      }),
+      () => [],
+    );
+    check(
+      () =>
+        assert.match(
+          without.record.events.at(-1) ?? '',
+          /^error:CODEX_NETWORK_PROXY_UNAVAILABLE: /,
+        ),
+      `proxy-check-without: ${without.record.events.at(-1)}`,
+    );
   }
 
   // AC-0039-N02: the bridge through the host's command, and the member's instructions.

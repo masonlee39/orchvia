@@ -140,13 +140,25 @@ class NodeReconcileTests(unittest.IsolatedAsyncioTestCase):
             resumed = await restarted.sessions.get(task.session_id)
             self.assertNotIn("pause_origin", resumed.as_dict())
 
+    @staticmethod
+    async def accepts(path):
+        try:
+            _, writer = await asyncio.open_unix_connection(path)
+        except OSError:
+            return False
+        writer.close()
+        await writer.wait_closed()
+        return True
+
     async def test_a_socket_client_cannot_submit_owner_attestation(self):
         socket_path = str(self.directory / "host.sock")
         process = await asyncio.create_subprocess_exec(NODE, str(CLI), "host", "--config", str(self.config),
             "--socket", socket_path, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
         try:
+            # SPEC-0040 R01: the socket file exists from bind(), before listen() accepts, so wait for
+            # a connection the host accepts rather than for the file.
             async with asyncio.timeout(5):
-                while not Path(socket_path).exists():
+                while not await self.accepts(socket_path):
                     if process.returncode is not None:
                         self.fail((await process.stderr.read()).decode())
                     await asyncio.sleep(0.01)

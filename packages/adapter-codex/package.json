@@ -1,12 +1,13 @@
 {
   "name": "@orchvia/adapter-codex",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "private": true,
   "license": "MIT",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./hook.mjs": "./src/hook.ts",
+    "./proxy-check.mjs": "./src/proxy-check.ts",
     "./tool-bridge.mjs": "./src/tool-bridge.ts"
   }
 }

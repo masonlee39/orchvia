@@ -56,6 +56,7 @@ import {
   type CodexHostMcpServer,
   MIN_CODEX_VERSION,
   checkHostHookCommand,
+  checkProxyCheck,
   checkToolBridge,
   type CodexToolBridge,
   hostHookChannel,
@@ -99,7 +100,12 @@ export {
   type CodexConnectionConfig,
   type CodexHostHookTrust,
 } from './connection.ts';
-export { hostHookCommandFor, hostHookProgram, toolBridgeProgram } from './local.ts';
+export {
+  hostHookCommandFor,
+  hostHookProgram,
+  proxyCheckProgram,
+  toolBridgeProgram,
+} from './local.ts';
 
 /** The real location of a path that may not exist yet, or null when it cannot be resolved. */
 function canonicalPath(path: string): string | null {
@@ -200,6 +206,12 @@ export interface CodexAdapterConfig {
    * beside its files (SPEC-0039 B01).
    */
   toolBridge?: CodexToolBridge;
+  /**
+   * How the proxy check runs before a networked dispatch, instead of this Node with the built-in
+   * check: `[command, ...args, <socket>]`, with `env` for that process alone, and
+   * `proxyCheckProgram()` copied beside the host's files; with `connection` (SPEC-0040 P01).
+   */
+  proxyCheck?: CodexToolBridge;
   /**
    * Instructions for the member, given to Codex as developer instructions when a dispatch starts
    * a new thread; a resumed or forked thread keeps the ones it started with (SPEC-0039 D).
@@ -405,6 +417,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
     invalidConfig('hostHookCommand needs hostHook');
   const hookCommand = checkHostHookCommand(config.hostHookCommand);
   const toolBridge = checkToolBridge(config.toolBridge) ?? defaultToolBridge();
+  const proxyCheck = checkProxyCheck(config.proxyCheck);
+  if (proxyCheck && !local) invalidConfig('proxyCheck needs connection');
   if (config.instructions !== undefined && typeof config.instructions !== 'function')
     invalidConfig('instructions must be a function');
   if (local && config.networkAccess !== undefined)
@@ -900,7 +914,13 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
             let verdict: true | string;
             try {
               const check = await connection.request('command/exec', {
-                command: [process.execPath, '-e', PROXY_CHECK_SCRIPT, socket.path],
+                // SPEC-0040 P02: the host's program, with its variables for this process alone.
+                command: proxyCheck
+                  ? [proxyCheck.command, ...proxyCheck.args, socket.path]
+                  : [process.execPath, '-e', PROXY_CHECK_SCRIPT, socket.path],
+                ...(proxyCheck && Object.keys(proxyCheck.env).length
+                  ? { env: proxyCheck.env }
+                  : {}),
                 cwd: workspace,
                 timeoutMs: 10_000,
               });
