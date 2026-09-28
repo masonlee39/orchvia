@@ -1,6 +1,6 @@
 # Orchvia
 
-Orchvia runs Claude Code and Codex agents as a team from your own application: one local engine, with TypeScript and Python SDKs.
+Orchvia runs Claude Code and Codex agents as a team from your own application, including the Codex CLI already signed in on your machine: one local engine, with TypeScript and Python SDKs.
 
 - **Agents stay warm.** Each agent is a long-lived session that keeps its history, so follow-up work reuses it instead of starting over, or forks it to try another direction.
 - **Nothing is lost or silently repeated.** Tasks, messages, approvals and token usage are stored in SQLite before anything runs. After a crash, work whose outcome is unknown waits for you instead of being retried.
@@ -45,7 +45,7 @@ To use Orchvia in your own project, install it from npm (Node.js 22.18 or later)
 npm install @orchvia/sdk @orchvia/engine @orchvia/adapter-claude
 ```
 
-Use `@orchvia/adapter-codex` for Codex and add `@orchvia/cli` for a separate host. For Python 3.11 or later, `pip install orchvia` installs the [Python SDK](python/README.md), which starts or connects to the Node host of `@orchvia/cli`. To let agents edit files, run Codex, or wire the engine into your application, follow the [integration guide](docs/guide.md).
+Use `@orchvia/adapter-codex` for Codex, including your own signed-in Codex CLI, and add `@orchvia/cli` for a separate host. For Python 3.11 or later, `pip install orchvia` installs the [Python SDK](python/README.md), which starts or connects to the Node host of `@orchvia/cli`. To let agents edit files, run Codex, or wire the engine into your application, follow the [integration guide](docs/guide.md).
 
 ## How it compares
 
@@ -64,6 +64,7 @@ Orchvia runs coding agents. It is not a framework for building agents out of mod
 ## What it does
 
 - **Sessions:** open, reuse, fork, compact, pause, resume and stop agents; each keeps its native history.
+- **Your own Codex CLI:** the Codex CLI installed and signed in on your machine joins the team with its sign-in untouched. Each task gets its own mode, network setting and paths it can read and write, and your application can check each command before it runs.
 - **Scheduling:** dependencies between tasks, queues for busy agents, limits on how many run at once, and no two writers on the same files.
 - **Messages and handoffs:** a durable mailbox between agents; delegation and handoffs that your host approves.
 - **Acceptance:** human review of each result, or verification commands you register.
@@ -76,7 +77,7 @@ Orchvia runs coding agents. It is not a framework for building agents out of mod
 Orchvia is alpha software.
 
 - Tested offline on macOS and Linux, with Node 22 and 24 and Python 3.11 and 3.14.
-- The real Claude Code and Codex programs are tested in CI against a scripted local gateway, with no model calls.
+- The real Claude Code and Codex programs are tested in CI against a scripted local gateway, with no model calls. The Codex CLI as a local member is tested with versions 0.153.4 and 0.157.1.
 - Not verified yet: runs with real models, operating-system sandbox enforcement, Windows, and speed or cost compared with other approaches. Measurements will be published with their raw data.
 
 [Status](docs/status.md) lists what each check covered, the specifications and their evidence.
