@@ -2,7 +2,7 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.14] - 2026-09-28
 
 The user's own Codex CLI as a member (SPEC-0035, first part).
 
