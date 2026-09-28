@@ -404,6 +404,28 @@ export function resolveDenyRead(paths: readonly string[], workspace: string): st
 }
 
 /**
+ * SPEC-0041 C01: the first path the proxy check needs that lies in a directory the dispatch's
+ * profile denies, since the check runs inside the sandbox; null when it can read them all.
+ */
+export function deniedCheckPath(
+  paths: readonly string[],
+  denied: readonly string[],
+): { path: string; under: string } | null {
+  for (const given of paths) {
+    if (!isAbsolute(given)) continue;
+    let path = given;
+    try {
+      path = realpathSync(given);
+    } catch {
+      /* a path that does not exist is checked as given */
+    }
+    const under = denied.find((directory) => contains(directory, path));
+    if (under) return { path: given, under };
+  }
+  return null;
+}
+
+/**
  * F04: what a command sees when Codex's network proxy is in force, run with `command/exec` under
  * the dispatch's profile before its turn: the proxy variables, a refused Unix socket, and a refused
  * direct connection (to TEST-NET-1, which nothing answers).

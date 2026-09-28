@@ -753,6 +753,30 @@ createInterface({ input: process.stdin }).on('line', (line) => {
         ),
       `proxy-check-without: ${without.record.events.at(-1)}`,
     );
+    // AC-0041-N01: a check copied into a directory the dispatch denies is named, not run.
+    const deniedDir = join(root, 'check-user-data');
+    await mkdir(deniedDir);
+    const deniedCopy = join(deniedDir, 'proxy-check.mjs');
+    writeFileSync(deniedCopy, readFileSync(proxyCheckProgram()));
+    const denied = await dispatch(
+      'proxy-check-denied',
+      member(checkHome, {
+        config: {
+          policy: () => ({ mode: 'auto', network: 'direct' }),
+          denyRead: [deniedDir],
+          proxyCheck: { command: process.execPath, args: [deniedCopy] },
+        },
+      }),
+      () => [],
+    );
+    check(
+      () =>
+        assert.match(
+          denied.record.events.at(-1) ?? '',
+          new RegExp(`^error:CODEX_NETWORK_PROXY_UNAVAILABLE: the proxy check needs ${deniedCopy}`),
+        ),
+      `proxy-check-denied: ${denied.record.events.at(-1)}`,
+    );
   }
 
   // AC-0039-N02: the bridge through the host's command, and the member's instructions.
