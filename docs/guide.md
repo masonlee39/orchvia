@@ -164,6 +164,24 @@ Codex accepts `permissionProfile`, `networkAccess` (default false), and `webSear
 
 Codex applies an approved file change itself, outside the command sandbox, and its approval request names no paths. The adapter therefore takes the paths from the change's item, resolves symbolic links, and declines a change with any path outside the workspace or `writePaths` without asking the host; the host sees the others with `permission.changes` (`[{ path, kind, movePath? }]`). Codex starts without its shell snapshot, which would otherwise export the app-server's whole environment into each command, and with its default excludes, so commands see neither the orchestration bridge's variables nor any variable whose name contains `KEY`, `SECRET` or `TOKEN` ([SPEC-0038](./specs/0038-codex-approval-paths.md)).
 
+**The user's own Codex CLI.** With `createCodexAdapter({ connection: { home }, policy })` the adapter runs the Codex CLI the user installed and signed in to, on their Codex home, which Orchvia leaves as it is ([SPEC-0035](./specs/0035-local-codex-member.md)):
+
+```ts
+import { codexConnection, createCodexAdapter } from '@orchvia/adapter-codex';
+
+const home = '/Users/me/.codex';
+await codexConnection({ home }).probe(); // version, supported, userAgent; sign-in: login(), waitForLogin()
+const codex = createCodexAdapter({
+  connection: { home },
+  executionStop: 'owner-reconcile',
+  denyRead: ['.env'],
+  policy: (input) =>
+    input.permissionProfile === 'read-only' ? { mode: 'plan' } : { mode: 'acceptEdits', network: 'direct' },
+});
+```
+
+Each dispatch runs under a named permission profile: commands read the file system but neither the home, the state directory nor `denyRead`; a writable dispatch also writes the workspace (or `writePaths`) and the temporary directory. `plan` never asks; `default` asks the host for each command and file change; `acceptEdits` asks for commands and takes file changes inside the write paths itself; `auto` asks only for what leaves the profile. `network: 'direct'` goes through Codex's network proxy with every domain allowed: Unix sockets such as an ssh-agent or Docker stay out of reach, local ports do not, and programs that ignore `HTTPS_PROXY`, such as `git` over ssh, cannot connect. `{ domains }` allows only those. Before a network dispatch opens its thread the adapter checks that the proxy is in force and otherwise refuses it with `CODEX_NETWORK_PROXY_UNAVAILABLE`, never falling back to network without the proxy. Other refusals are `CODEX_NOT_FOUND`, `CODEX_VERSION_UNSUPPORTED` (older than 0.153.4), `CODEX_POLICY_INVALID`, `CODEX_HOME_OVERLAP` and `CODEX_START_LOCK_TIMEOUT`, at the start of the dispatch's error message. MCP tool calls ask the host through `requestPermission` like commands; `hostMcpServers` adds the host's own servers by command or by `{ url, token }`. Under `never`, Codex itself refuses commands such as `rm -f`.
+
 For extended Claude options, the writable Claude profile or any Codex profile, `observeExecutionStop({ target, terminal, signal, remainingMs })` must observe complete remote/background stop for the exact dispatch/generation/native IDs. Return true only after actual host observation. False, rejection, absence, and timeout retain unknown execution. Waiting is bounded by cleanup time; late true evidence is retained without clearing business quarantine or resubmitting. Local child-process exit is independently required. With an observer configured, `terminalCoversExecution` denotes this combined proof; native-terminal evidence retains `remoteExecution: unknown` until host confirmation.
 
 Without an observer, no dispatch of such an adapter could release its execution lease, and the engine would stop dispatching once capacity ran out. So `createClaudeAdapter` given `options`, `extendOptions` or `permissionProfile: 'workspace-write'`, and every `createCodexAdapter`, fail at once with `INVALID_ADAPTER_CONFIG` unless the host gives `observeExecutionStop` or chooses `executionStop: 'owner-reconcile'`. The second keeps leases held until the owner reconciles each dispatch with `sessions.reconcile`, and the task waits blocked with `outcome_unknown` until then; it cannot be combined with an observer ([SPEC-0027](./specs/0027-read-only-access-and-host-corrections.md) A01 to A03, [SPEC-0034](./specs/0034-background-command-stop-proof.md) A01).

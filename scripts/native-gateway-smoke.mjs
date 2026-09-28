@@ -439,6 +439,20 @@ try {
     responses.includes('parentTaskId') || responses.includes('artifactRefs'),
     'Bound work_read did not return the engine task',
   );
+  if (provider === 'codex') {
+    // The tool's own output, not the whole request, whose tool schemas name the same fields:
+    // Codex's `never` policy once refused the bridge's tools (SPEC-0035 G02).
+    const outputs = requests.flatMap((item) =>
+      (Array.isArray(item.input) ? item.input : [])
+        .filter((entry) => /_call_output$/.test(entry?.type ?? ''))
+        .map((entry) => JSON.stringify(entry.output)),
+    );
+    evidence.bridgeOutputs = outputs.map((output) => output.slice(0, 300));
+    assert.ok(
+      outputs.some((output) => output.includes(task.id) && output.includes('artifactRefs')),
+      `Bound work_read failed: ${outputs.join(' | ').slice(0, 400)}`,
+    );
+  }
   assert.equal(adapter.hasActiveResources(pending.sessionId), false);
   const scheduler = await client.scheduler.get();
   evidence.scheduler = scheduler;

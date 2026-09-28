@@ -2,6 +2,25 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+The user's own Codex CLI as a member (SPEC-0035, first part).
+
+### Added
+
+- `createCodexAdapter({ connection: { home } })`: the user's Codex home and sign-in. Each dispatch runs under a named permission profile that keeps commands out of the home, the state directory and `denyRead`, with `policy(input) => { mode, network }` choosing `plan`, `default`, `acceptEdits` or `auto` and no network, direct network through Codex's network proxy, or a domain list. App-servers on one home start one at a time. A dispatch is refused before its thread with `CODEX_NOT_FOUND`, `CODEX_VERSION_UNSUPPORTED` (older than 0.153.4), `CODEX_POLICY_INVALID`, `CODEX_HOME_OVERLAP`, `CODEX_START_LOCK_TIMEOUT` or `CODEX_NETWORK_PROXY_UNAVAILABLE`, which a network dispatch gets when Codex's proxy is not in force (SPEC-0035 A, B, E, F).
+- `codexConnection({ home })` from `@orchvia/adapter-codex`, without an engine: probe, account, sign-in with an API key, a browser or a device code, waiting, cancelling, sign-out and rate limits (SPEC-0035 C).
+- MCP tool approvals reach the host's `requestPermission`; `hostMcpServers` adds the host's MCP servers by command or URL and token; `clientInfo` names the host to Codex (SPEC-0035 G, H, C06).
+
+### Fixed
+
+- The orchestration tools (`work_delegate`, `work_send`, `work_read`, `work_control`) failed for a Codex member without an approval callback: Codex's `never` policy refused every MCP tool call, and the bridge's server asked for approval. It now needs none; its tools act on the dispatch's own grant (SPEC-0035 G02).
+- A Codex compaction on a resumed thread counted the thread's previous request again. Codex usage events carry the thread's totals as `sessionTotals`, which the next dispatch uses as its baseline (SPEC-0035 J01).
+
+### Changed
+
+- Codex commands no longer get `SSH_AUTH_SOCK` (SPEC-0035 B04).
+
 ## [0.1.13] - 2026-09-28
 
 Codex file changes stay inside the write paths, and commands no longer see credentials.

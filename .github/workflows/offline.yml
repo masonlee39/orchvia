@@ -77,7 +77,7 @@ jobs:
         # macos-15-intel covers x86-64 Macs; macos-14 is Apple silicon.
         os: [ubuntu-24.04, macos-14, macos-15-intel]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -130,6 +130,17 @@ jobs:
       - name: Codex file change paths and command environment with the real Codex binary (no paid models)
         if: ${{ !cancelled() }}
         run: node scripts/native-codex-security-smoke.mjs dist/verification/native-codex-security.json ./node_modules/.bin/codex
+      # SPEC-0035: the local Codex CLI as a member; the pinned binary also runs the internet checks.
+      - name: Local Codex member with the real Codex binary, internet checks included (no paid models)
+        if: ${{ !cancelled() }}
+        env:
+          ORCH_INTERNET: '1'
+        run: node scripts/native-codex-local-smoke.mjs dist/verification/native-codex-local.json ./node_modules/.bin/codex
+      - name: Local Codex member with Codex 0.153.4, the oldest supported (no paid models)
+        if: ${{ !cancelled() }}
+        run: |
+          npm install --ignore-scripts --no-save --package-lock=false --prefix "$RUNNER_TEMP/codex-0.153.4" @openai/codex@0.153.4
+          node scripts/native-codex-local-smoke.mjs dist/verification/native-codex-local-0.153.4.json "$RUNNER_TEMP/codex-0.153.4/node_modules/.bin/codex"
       # SPEC-0036: a killed host's leftover command is ended by the next host's sweep.
       - name: Stop markers across a host restart with the real Claude binary (no paid models)
         if: ${{ !cancelled() }}
