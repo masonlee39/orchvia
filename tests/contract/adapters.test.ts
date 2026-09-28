@@ -192,6 +192,17 @@ test('AC adapter Codex: handshake, thread and turn ack, deduplicated usage, term
     {
       type: 'usage',
       usageId: 'codex-turn-1:total:5:1',
+      // The thread's totals, the next dispatch's baseline (SPEC-0035 J01).
+      sessionTotals: {
+        codexThreadTotal: {
+          totalTokens: 5,
+          inputTokens: 3,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          outputTokens: 2,
+          reasoningOutputTokens: 0,
+        },
+      },
       usage: {
         inputTokens: 3,
         cachedInputTokens: 0,

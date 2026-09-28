@@ -26,14 +26,40 @@ import { contains, workspacePath } from '../../engine/src/verification.ts';
 import { createToolBridge } from '../../engine/src/tool-bridge.ts';
 import { TOOL_NAMES } from '../../engine/src/tools.ts';
 import { VERSION } from '../../engine/src/version.ts';
-import { descendantsOf, endProcesses } from '../../engine/src/process-tree.ts';
+import { AppServerConnection, errorMessage, record, type Message } from './app-server.ts';
+import {
+  approvalPolicy,
+  checkDenyRead,
+  checkHostMcpServers,
+  checkPolicy,
+  clientInfo as checkClientInfo,
+  coded,
+  codexVersion,
+  connectionHome,
+  hostMcpEntries,
+  invalidConfig,
+  overlaps,
+  profileSettings,
+  PROXY_CHECK_SCRIPT,
+  proxyCheckSocket,
+  proxyInForce,
+  resolveDenyRead,
+  supportedVersion,
+  startLock,
+  type CodexClientInfo,
+  type CodexDispatchPolicy,
+  type CodexHostMcpServer,
+  MIN_CODEX_VERSION,
+} from './local.ts';
+export type {
+  CodexClientInfo,
+  CodexDispatchPolicy,
+  CodexHostMcpServer,
+  CodexMode,
+  CodexNetwork,
+} from './local.ts';
+export { codexConnection, type CodexConnection } from './connection.ts';
 
-type Message = Record<string, unknown>;
-function record(value: unknown): Message | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Message)
-    : null;
-}
 /** The real location of a path that may not exist yet, or null when it cannot be resolved. */
 function canonicalPath(path: string): string | null {
   const rest: string[] = [];
@@ -86,229 +112,6 @@ function checkedChanges(item: unknown, cwd: string, roots: readonly string[]): J
 function nonnegativeInt(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-class MessageQueue {
-  static readonly limit = 256;
-  private values: (Message | null)[] = [];
-  private waiting: {
-    resolve: (value: Message | null) => void;
-    reject: (error: Error) => void;
-    timer?: NodeJS.Timeout;
-  } | null = null;
-  private ended = false;
-  push(value: Message | null): boolean {
-    if (this.ended) return true;
-    if (value === null) this.ended = true;
-    if (this.waiting) {
-      const { resolve, timer } = this.waiting;
-      this.waiting = null;
-      if (timer) clearTimeout(timer);
-      resolve(value);
-    } else if (value !== null) {
-      if (this.values.length >= MessageQueue.limit) return false;
-      this.values.push(value);
-    }
-    return true;
-  }
-  async next(remainingMs: () => number): Promise<Message | null> {
-    if (this.values.length > 0) return this.values.shift() ?? null;
-    if (this.ended) return null;
-    return new Promise((resolve, reject) => {
-      const waiting: NonNullable<MessageQueue['waiting']> = { resolve, reject };
-      const check = () => {
-        if (this.waiting !== waiting) return;
-        try {
-          const remaining = remainingMs();
-          if (remaining <= 0) throw new Error('Codex app-server response timed out');
-          waiting.timer = setTimeout(check, Math.max(1, remaining));
-        } catch (error) {
-          this.waiting = null;
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      };
-      this.waiting = waiting;
-      check();
-    });
-  }
-}
-
-class AppServerConnection {
-  private child: ChildProcessWithoutNullStreams;
-  private queue = new MessageQueue();
-  private deferred: Message[] = [];
-  private nextId = 0;
-  private protocolError: string | null = null;
-  private exited: Promise<void>;
-  private exitConfirmed = false;
-  private shutdownRequested = false;
-  private closing: Promise<boolean> | null = null;
-  private remainingRequestMs: () => number;
-  private closeTimeoutMs: number;
-  constructor(
-    child: ChildProcessWithoutNullStreams,
-    timeouts: { remainingRequestMs: () => number; closeTimeoutMs: number },
-    onExit: () => void,
-  ) {
-    this.child = child;
-    this.remainingRequestMs = timeouts.remainingRequestMs;
-    this.closeTimeoutMs = timeouts.closeTimeoutMs;
-    this.exited = new Promise((resolve) => {
-      const confirmExit = () => {
-        this.exitConfirmed = true;
-        resolve();
-        onExit();
-      };
-      child.once('exit', confirmExit);
-      child.once('error', () => {
-        if (child.pid === undefined) confirmExit();
-      });
-    });
-    let buffer = '';
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => {
-      buffer += chunk;
-      let lineEnd: number;
-      while ((lineEnd = buffer.indexOf('\n')) >= 0) {
-        if (lineEnd > 1_048_576) {
-          this.protocolError = 'Codex app-server frame exceeds 1 MiB';
-          child.kill();
-          return;
-        }
-        const line = buffer.slice(0, lineEnd).trim();
-        buffer = buffer.slice(lineEnd + 1);
-        if (!line) continue;
-        try {
-          const message = record(JSON.parse(line));
-          if (!message) throw new Error('non-object message');
-          if (!this.queue.push(message)) {
-            this.protocolError = 'Codex app-server queue limit exceeded';
-            this.queue.push(null);
-            child.kill();
-            return;
-          }
-        } catch {
-          this.protocolError = 'Codex app-server emitted invalid JSON';
-          child.kill();
-          return;
-        }
-      }
-      if (buffer.length > 1_048_576) {
-        this.protocolError = 'Codex app-server frame exceeds 1 MiB';
-        child.kill();
-      }
-    });
-    child.stderr.resume();
-    child.stdin.on('error', (error) => {
-      this.protocolError = error.message;
-      this.queue.push(null);
-    });
-    child.on('error', (error) => {
-      this.protocolError = error.message;
-      this.queue.push(null);
-    });
-    child.on('close', () => this.queue.push(null));
-  }
-  send(method: string, params?: Message): number {
-    if (this.shutdownRequested || this.exitConfirmed)
-      throw new Error('Codex app-server connection is closed');
-    const id = ++this.nextId;
-    this.child.stdin.write(JSON.stringify({ method, id, ...(params ? { params } : {}) }) + '\n');
-    return id;
-  }
-  notify(method: string, params: Message = {}): void {
-    if (this.shutdownRequested || this.exitConfirmed)
-      throw new Error('Codex app-server connection is closed');
-    this.child.stdin.write(JSON.stringify({ method, params }) + '\n');
-  }
-  respond(id: unknown, result: Message): void {
-    if (this.shutdownRequested || this.exitConfirmed) return;
-    this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
-  }
-  async request(method: string, params?: Message, onSent?: () => void): Promise<Message> {
-    if (this.remainingRequestMs() <= 0) throw new Error('Codex app-server response timed out');
-    const id = this.send(method, params);
-    onSent?.();
-    while (true) {
-      const remaining = this.remainingRequestMs();
-      if (remaining <= 0) throw new Error('Codex app-server response timed out');
-      const message = await this.queue.next(this.remainingRequestMs);
-      if (!message) throw new Error(this.protocolError ?? 'Codex app-server disconnected');
-      if (message.method !== undefined || message.id !== id) {
-        if (this.deferred.length >= MessageQueue.limit)
-          throw new Error('Codex app-server queue limit exceeded');
-        this.deferred.push(message);
-        continue;
-      }
-      if (message.error) {
-        const failure = record(message.error);
-        throw new Error(
-          typeof failure?.message === 'string' ? failure.message : `${method} failed`,
-        );
-      }
-      const result = record(message.result);
-      if (!result) throw new Error(`${method} returned invalid result`);
-      return result;
-    }
-  }
-  async next(remainingTurnMs: () => number): Promise<Message | null> {
-    const remaining = remainingTurnMs();
-    if (remaining <= 0) throw new Error('Codex app-server turn terminal timed out');
-    return this.deferred.shift() ?? (await this.queue.next(remainingTurnMs));
-  }
-  failure(): string | null {
-    return this.protocolError;
-  }
-  hasActiveResources(): boolean {
-    return !this.exitConfirmed;
-  }
-  close(): Promise<boolean> {
-    if (this.exitConfirmed) return Promise.resolve(true);
-    if (this.closing) return this.closing;
-    this.shutdownRequested = true;
-    this.deferred = [];
-    this.queue.push(null);
-    const closing = this.stop();
-    this.closing = closing;
-    void closing.then(
-      () => {
-        if (this.closing === closing) this.closing = null;
-      },
-      () => {
-        if (this.closing === closing) this.closing = null;
-      },
-    );
-    return this.closing;
-  }
-  private async waitForExit(timeoutMs: number): Promise<boolean> {
-    if (this.exitConfirmed) return true;
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(false), timeoutMs);
-      this.exited.then(() => {
-        clearTimeout(timer);
-        resolve(true);
-      });
-    });
-  }
-  private async stop(): Promise<boolean> {
-    // SPEC-0034 A03: the commands the app-server started run in groups of their own and outlive
-    // it, so they are listed before it exits and ended after.
-    const started = this.child.pid === undefined ? [] : descendantsOf(this.child.pid);
-    const exited = await this.stopServer();
-    await endProcesses(started, this.closeTimeoutMs);
-    return exited;
-  }
-  private async stopServer(): Promise<boolean> {
-    this.child.stdin.end();
-    if (await this.waitForExit(0)) return true;
-    this.child.kill('SIGTERM');
-    if (await this.waitForExit(this.closeTimeoutMs)) return true;
-    this.child.kill('SIGKILL');
-    return this.waitForExit(this.closeTimeoutMs);
-  }
-}
 
 export interface CodexAdapterConfig {
   /** Engine provider name; defaults to `codex`. */
@@ -326,6 +129,19 @@ export interface CodexAdapterConfig {
   requestTimeoutMs?: number;
   turnTimeoutMs?: number;
   closeTimeoutMs?: number;
+  /**
+   * The user's Codex home, which holds their sign-in (SPEC-0035 A01). With it, each dispatch runs
+   * under a named permission profile and `policy`, and Orchvia writes nothing to the home.
+   */
+  connection?: { home: string };
+  /** Each dispatch's mode and network; with `connection` only (SPEC-0035 F01). */
+  policy?: (input: RuntimeInput) => CodexDispatchPolicy | Promise<CodexDispatchPolicy>;
+  /** Paths commands can neither read nor write, as the Claude adapter's; with `connection` (B02). */
+  denyRead?: string[];
+  /** MCP servers of the host, run outside the command sandbox (SPEC-0035 H01). */
+  hostMcpServers?: Record<string, CodexHostMcpServer>;
+  /** Passed to Codex's `initialize` (SPEC-0035 C06); defaults to `agent_orch`. */
+  clientInfo?: CodexClientInfo;
 }
 
 function timeout(value: number | undefined, fallback: number): number {
@@ -365,7 +181,22 @@ function isolatedEnv(configured?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   };
 }
 
-function defensiveArgs(args: string[], workspace: string, bridge = false): string[] {
+function defensiveArgs(
+  args: string[],
+  workspace: string,
+  bridge = false,
+  host: { entries: string[]; exclude: string[] } = { entries: [], exclude: [] },
+): string[] {
+  const servers = [
+    ...(bridge
+      ? [
+          `agent_orch={command=${JSON.stringify(process.execPath)},args=[${JSON.stringify(fileURLToPath(new URL('../../engine/src/tool-bridge.ts', import.meta.url)))}],env_vars=["AGENT_ORCH_BRIDGE_TOKEN","AGENT_ORCH_BRIDGE_SOCKET"],enabled_tools=${JSON.stringify(TOOL_NAMES)},required=true}`,
+        ]
+      : []),
+    ...host.entries,
+  ];
+  // SPEC-0035 B04: an agent socket and the host's MCP secrets stay out of commands too.
+  const exclude = ['AGENT_ORCH_BRIDGE_*', 'SSH_AUTH_SOCK', ...host.exclude];
   const untrustedProjects: string[] = [];
   for (let path = workspace; ; path = dirname(path)) {
     untrustedProjects.push('-c', `projects.${JSON.stringify(path)}.trust_level="untrusted"`);
@@ -398,11 +229,9 @@ function defensiveArgs(args: string[], workspace: string, bridge = false): strin
     '-c',
     'agents.enabled=false',
     '-c',
-    bridge
-      ? `mcp_servers={agent_orch={command=${JSON.stringify(process.execPath)},args=[${JSON.stringify(fileURLToPath(new URL('../../engine/src/tool-bridge.ts', import.meta.url)))}],env_vars=["AGENT_ORCH_BRIDGE_TOKEN","AGENT_ORCH_BRIDGE_SOCKET"],enabled_tools=${JSON.stringify(TOOL_NAMES)},required=true}}`
-      : 'mcp_servers={}',
+    `mcp_servers={${servers.join(',')}}`,
     '-c',
-    'shell_environment_policy.exclude=["AGENT_ORCH_BRIDGE_*"]',
+    `shell_environment_policy.exclude=${JSON.stringify(exclude)}`,
     // SPEC-0038 P02: the shell snapshot re-exports the whole environment and so defeats the
     // excludes; without it Codex also drops names containing KEY, SECRET or TOKEN.
     '-c',
@@ -433,6 +262,22 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
   // terminal never shows that execution stopped.
   const coversExecution = false;
   requireStopProof('Codex adapter', coversExecution, config);
+  // SPEC-0035: with the user's connection, each dispatch picks its profile, mode and network.
+  const local = config.connection !== undefined ? connectionHome(config.connection?.home) : null;
+  if (!local && (config.policy !== undefined || config.denyRead !== undefined))
+    invalidConfig('policy and denyRead need connection');
+  if (config.policy !== undefined && typeof config.policy !== 'function') invalidConfig('policy');
+  if (local && config.networkAccess !== undefined)
+    invalidConfig('with connection, the policy sets the network, not networkAccess');
+  const denyRead = checkDenyRead(config.denyRead);
+  const hostMcp = hostMcpEntries(checkHostMcpServers(config.hostMcpServers));
+  const info = checkClientInfo(config.clientInfo) ?? {
+    name: 'agent_orch',
+    title: 'Agent Orchestration',
+    version: VERSION,
+  };
+  const profiles: RuntimeInput['permissionProfile'][] =
+    local && !config.permissionProfile ? ['read-only', 'workspace-write'] : [profile];
   const acceptanceCapMs = timeout(config.requestTimeoutMs, 0) || null;
   const turnCapMs = timeout(config.turnTimeoutMs, 0) || null;
   const owned = new Map<string, Set<AppServerConnection>>();
@@ -452,7 +297,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       provider: providerName,
       resume: true,
       interrupt: true,
-      permissionProfiles: [profile],
+      permissionProfiles: profiles,
       fork: true,
       // Model-changing forks stay disabled until separate native evidence exists.
       forkModelChange: false,
@@ -478,8 +323,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
           cwd: input.workspace,
           env: {
             ...isolatedEnv(config.env),
-            CODEX_HOME: managedHome(input.stateDir),
-            CODEX_SQLITE_HOME: managedHome(input.stateDir),
+            CODEX_HOME: local ?? managedHome(input.stateDir),
+            CODEX_SQLITE_HOME: local ?? managedHome(input.stateDir),
           },
           stdio: ['pipe', 'pipe', 'pipe'],
         },
@@ -634,13 +479,36 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
         });
         return;
       }
-      if (input.permissionProfile !== profile) {
+      if (!profiles.includes(input.permissionProfile)) {
         yield preSubmission({
           type: 'error',
-          message: `Codex adapter supports ${profile} only`,
+          message: `Codex adapter supports ${profiles.join(' and ')} only`,
           outcome: 'failed',
         });
         return;
+      }
+      const dispatchProfile = input.permissionProfile;
+      // SPEC-0035 F01 to F03: the host's choice for this dispatch, checked before anything starts.
+      let policy: Required<CodexDispatchPolicy> | null = null;
+      if (local) {
+        let decided: unknown;
+        try {
+          decided = config.policy
+            ? await config.policy(input)
+            : { mode: dispatchProfile === 'read-only' ? 'plan' : 'auto', network: 'off' };
+        } catch (error) {
+          decided = `the policy callback failed: ${errorMessage(error)}`;
+        }
+        const checked = typeof decided === 'string' ? decided : checkPolicy(decided, input);
+        if (typeof checked === 'string') {
+          yield preSubmission({
+            type: 'error',
+            message: coded('CODEX_POLICY_INVALID', checked),
+            outcome: 'failed',
+          });
+          return;
+        }
+        policy = checked;
       }
       if (input.signal.aborted) {
         yield preSubmission({ type: 'interrupted' });
@@ -659,25 +527,49 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       let writePaths: string[];
       let child: ChildProcessWithoutNullStreams;
       let bridge: Awaited<ReturnType<typeof createToolBridge>> | undefined;
+      // SPEC-0035 A02: held from the app-server's start until its thread is open.
+      let releaseStart = () => {};
       try {
         if (remainingAcceptanceMs() <= 0)
           throw new Error('Codex execution budget expired before startup');
-        home = managedHome(input.stateDir);
         workspace = realpathSync(input.workspace);
         writePaths = input.writePaths?.map((path) => workspacePath(workspace, path)) ?? [workspace];
+        let settings: string[] = [];
+        if (local) {
+          if (!isAbsolute(input.stateDir)) throw new Error('Codex stateDir must be absolute');
+          mkdirSync(input.stateDir, { recursive: true, mode: 0o700 });
+          const state = realpathSync(input.stateDir);
+          if (overlaps(local, [workspace, state]))
+            throw new Error(
+              coded(
+                'CODEX_HOME_OVERLAP',
+                'the Codex home overlaps the workspace or state directory',
+              ),
+            );
+          home = local;
+          settings = profileSettings({
+            write: dispatchProfile === 'workspace-write',
+            writePaths,
+            none: [local, state, ...resolveDenyRead(denyRead, workspace)],
+            network: policy!.network,
+          });
+        } else home = managedHome(input.stateDir);
         if (input.orchestrationTools)
           bridge = await createToolBridge(input.orchestrationTools, input.signal);
+        if (local) releaseStart = await startLock(local, remainingAcceptanceMs());
         child = spawn(
           config.command ?? 'codex',
           [
-            ...defensiveArgs(config.args ?? ['app-server'], workspace, !!bridge),
+            ...defensiveArgs(config.args ?? ['app-server'], workspace, !!bridge, hostMcp),
             '-c',
             `web_search="${webSearch}"`,
+            ...settings,
           ],
           {
             cwd: workspace,
             env: {
               ...isolatedEnv(config.env),
+              ...hostMcp.env,
               CODEX_HOME: home,
               CODEX_SQLITE_HOME: home,
               ...bridge?.env,
@@ -686,6 +578,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
           },
         );
       } catch (error) {
+        releaseStart();
         await bridge?.close();
         yield preSubmission({ type: 'error', message: errorMessage(error), outcome: 'failed' });
         return;
@@ -714,6 +607,15 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       let sawUsage = false;
       const seenUsage = new Set<string>();
       let previousUsageTotal: Message | null = null;
+      // SPEC-0035 J01: Codex sends a resumed thread's previous usage again, and a compaction does
+      // so under its own turn, so the totals the last dispatch reported count as already seen.
+      const baseline = input.providerSessionId
+        ? record(record(input.usageBaseline?.totals)?.codexThreadTotal)
+        : null;
+      if (baseline) {
+        previousUsageTotal = baseline;
+        seenUsage.add(JSON.stringify(baseline));
+      }
       const permissionRequests = new Set<string>();
       // SPEC-0038 P01: a file change approval names only its item, which arrives first.
       const fileChanges = new Map<string, unknown>();
@@ -728,30 +630,80 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       };
       input.signal.addEventListener('abort', requestInterrupt);
       try {
-        await connection.request('initialize', {
-          clientInfo: { name: 'agent_orch', title: 'Agent Orchestration', version: VERSION },
-        });
+        let initialized: Message;
+        try {
+          initialized = await connection.request('initialize', { clientInfo: info });
+        } catch (error) {
+          // SPEC-0035 E01: a binary that cannot run is named as such.
+          if (local && /ENOENT/.test(errorMessage(error)))
+            throw new Error(coded('CODEX_NOT_FOUND', `${config.command ?? 'codex'} cannot be run`));
+          throw error;
+        }
         connection.notify('initialized');
-        const thread = await connection.request(
-          input.providerSessionId
-            ? 'thread/resume'
-            : input.forkSource
-              ? 'thread/fork'
-              : 'thread/start',
-          {
-            ...(input.providerSessionId ? { threadId: input.providerSessionId } : {}),
-            ...(!input.providerSessionId && input.forkSource
-              ? {
-                  threadId: input.forkSource.providerSessionId,
-                  lastTurnId: input.forkSource.nativeCheckpoint,
-                }
-              : {}),
-            model: input.model,
-            cwd: input.workspace,
-            sandbox: profile,
-            approvalPolicy: input.requestPermission ? 'on-request' : 'never',
-          },
-        );
+        if (local) {
+          const version = codexVersion(initialized.userAgent);
+          if (!supportedVersion(version))
+            throw new Error(
+              coded(
+                'CODEX_VERSION_UNSUPPORTED',
+                `Codex ${version ?? 'of unknown version'} is older than ${MIN_CODEX_VERSION.join('.')}`,
+              ),
+            );
+          if (policy!.network !== 'off') {
+            // SPEC-0035 F04: the proxy is checked before the turn; nothing falls back without it.
+            const socket = await proxyCheckSocket();
+            let verdict: true | string;
+            try {
+              const check = await connection.request('command/exec', {
+                command: [process.execPath, '-e', PROXY_CHECK_SCRIPT, socket.path],
+                cwd: workspace,
+                timeoutMs: 10_000,
+              });
+              verdict = proxyInForce(check.stdout);
+            } catch (error) {
+              verdict = `the check could not run: ${errorMessage(error)}`;
+            } finally {
+              socket.close();
+            }
+            if (verdict !== true)
+              throw new Error(coded('CODEX_NETWORK_PROXY_UNAVAILABLE', verdict));
+          }
+        }
+        const approval = policy
+          ? approvalPolicy(policy.mode, !!input.requestPermission)
+          : input.requestPermission
+            ? 'on-request'
+            : 'never';
+        const openThread = () =>
+          connection.request(
+            input.providerSessionId
+              ? 'thread/resume'
+              : input.forkSource
+                ? 'thread/fork'
+                : 'thread/start',
+            {
+              ...(input.providerSessionId ? { threadId: input.providerSessionId } : {}),
+              ...(!input.providerSessionId && input.forkSource
+                ? {
+                    threadId: input.forkSource.providerSessionId,
+                    lastTurnId: input.forkSource.nativeCheckpoint,
+                  }
+                : {}),
+              model: input.model,
+              cwd: input.workspace,
+              ...(local ? {} : { sandbox: profile }),
+              approvalPolicy: approval,
+            },
+          );
+        let thread: Message;
+        try {
+          thread = await openThread();
+        } catch (error) {
+          // SPEC-0035 A03: a sign-in or sign-out on the same home can revoke a starting thread.
+          if (!local || !/permission was revoked/i.test(errorMessage(error))) throw error;
+          thread = await openThread();
+        }
+        releaseStart();
         threadId =
           typeof record(thread.thread)?.id === 'string'
             ? (record(thread.thread)!.id as string)
@@ -774,17 +726,22 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
                   threadId,
                   input: [{ type: 'text', text: input.prompt }],
                   cwd: input.workspace,
-                  approvalPolicy: input.requestPermission ? 'on-request' : 'never',
-                  sandboxPolicy:
-                    profile === 'read-only'
-                      ? { type: 'readOnly', networkAccess }
-                      : {
-                          type: 'workspaceWrite',
-                          writableRoots: writePaths,
-                          networkAccess,
-                          excludeTmpdirEnvVar: true,
-                          excludeSlashTmp: true,
-                        },
+                  approvalPolicy: approval,
+                  // With a connection, the named profile of the command line applies instead.
+                  ...(local
+                    ? {}
+                    : {
+                        sandboxPolicy:
+                          profile === 'read-only'
+                            ? { type: 'readOnly', networkAccess }
+                            : {
+                                type: 'workspaceWrite',
+                                writableRoots: writePaths,
+                                networkAccess,
+                                excludeTmpdirEnvVar: true,
+                                excludeSlashTmp: true,
+                              },
+                      }),
                 },
                 () => {
                   turnSent = true;
@@ -808,20 +765,32 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
             const key = `${typeof message.id}:${message.id}`;
             if (permissionRequests.has(key)) continue;
             permissionRequests.add(key);
+            // SPEC-0035 G01: MCP tool approvals come as elicitations, answered with an action.
+            const elicitation = method === 'mcpServer/elicitation/request';
+            const decline = () =>
+              connection.respond(
+                message.id,
+                elicitation ? { action: 'decline', content: {} } : { decision: 'decline' },
+              );
             const supported = [
               'item/commandExecution/requestApproval',
               'item/fileChange/requestApproval',
+              'mcpServer/elicitation/request',
             ].includes(method);
+            const meta = record(params?._meta);
             if (
               !supported ||
               !params ||
-              params.threadId !== threadId ||
-              params.turnId !== turnId ||
               !turnId ||
               !input.requestPermission ||
-              (method === 'item/fileChange/requestApproval' && profile !== 'workspace-write')
+              (elicitation
+                ? meta?.codex_approval_kind !== 'mcp_tool_call' ||
+                  (params.threadId !== undefined && params.threadId !== threadId)
+                : params.threadId !== threadId || params.turnId !== turnId) ||
+              (method === 'item/fileChange/requestApproval' &&
+                dispatchProfile !== 'workspace-write')
             ) {
-              connection.respond(message.id, { decision: 'decline' });
+              decline();
               continue;
             }
             let permission = params as Json;
@@ -832,7 +801,12 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
                 writePaths,
               );
               if (!changes) {
-                connection.respond(message.id, { decision: 'decline' });
+                decline();
+                continue;
+              }
+              // SPEC-0035 D-35-3: acceptEdits takes a change inside the write paths itself.
+              if (policy?.mode === 'acceptEdits') {
+                connection.respond(message.id, { decision: 'accept' });
                 continue;
               }
               permission = { ...(params as { [key: string]: Json }), changes };
@@ -848,13 +822,13 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
               })
               .then(
                 (allow) =>
-                  connection.respond(message.id, {
-                    decision:
-                      allow && !terminal && !input.signal.aborted && turnId === capturedTurn
-                        ? 'accept'
-                        : 'decline',
-                  }),
-                () => connection.respond(message.id, { decision: 'decline' }),
+                  allow && !terminal && !input.signal.aborted && turnId === capturedTurn
+                    ? connection.respond(
+                        message.id,
+                        elicitation ? { action: 'accept', content: {} } : { decision: 'accept' },
+                      )
+                    : decline(),
+                () => decline(),
               );
             continue;
           }
@@ -899,6 +873,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
             const observation: RuntimeUsageEvent = {
               type: 'usage',
               usageId: `${turnId}:total:${totalCount ?? 'unknown'}:${seenUsage.size}`,
+              ...(total ? { sessionTotals: { codexThreadTotal: total as Json } } : {}),
               usage: {
                 inputTokens: tokenDelta('inputTokens'),
                 cachedInputTokens: tokenDelta('cachedInputTokens'),
@@ -1044,6 +1019,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
           };
         }
       } finally {
+        releaseStart();
         input.signal.removeEventListener('abort', requestInterrupt);
         await bridge?.close();
         await connection.close();

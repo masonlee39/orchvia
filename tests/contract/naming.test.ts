@@ -59,6 +59,6 @@ test('0021-N06 protocol identifiers stay the same after the rename', () => {
   assert.equal(json('schemas/protocol.schema.json').$id, 'urn:agent-orch:protocol:2.0');
   // Native histories and host allowlists name tools as mcp__agent_orch__<tool>.
   assert.match(text('packages/adapter-claude/src/mcp.ts'), /name: 'agent_orch'/);
-  assert.match(text('packages/adapter-codex/src/index.ts'), /mcp_servers=\{agent_orch=/);
+  assert.match(text('packages/adapter-codex/src/index.ts'), /`agent_orch=\{command=/);
   assert.match(text('packages/engine/src/tool-bridge.ts'), /AGENT_ORCH_BRIDGE_TOKEN/);
 });
