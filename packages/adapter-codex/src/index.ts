@@ -55,7 +55,9 @@ import {
   type CodexDispatchPolicy,
   type CodexHostMcpServer,
   MIN_CODEX_VERSION,
+  checkHostHookCommand,
   hostHookChannel,
+  hostHookCommand,
   hostHookSetting,
   hostHookTrusted,
   markedCommand,
@@ -88,7 +90,13 @@ export {
   type StopMarkerSweepOptions,
   type StopMarkerSyncResult,
 } from '../../engine/src/stop-marker.ts';
-export { codexConnection, type CodexConnection } from './connection.ts';
+export {
+  codexConnection,
+  type CodexConnection,
+  type CodexConnectionConfig,
+  type CodexHostHookTrust,
+} from './connection.ts';
+export { hostHookCommandFor, hostHookProgram } from './local.ts';
 
 /** The real location of a path that may not exist yet, or null when it cannot be resolved. */
 function canonicalPath(path: string): string | null {
@@ -178,6 +186,12 @@ export interface CodexAdapterConfig {
    */
   hostHook?: CodexHostHook;
   /**
+   * The command Codex runs as the hook, which must be the one trusted with `trustHostHook`; by
+   * default this Node running the package's hook program. Build it with `hostHookCommandFor` and
+   * `hostHookProgram` (SPEC-0039 H01).
+   */
+  hostHookCommand?: string;
+  /**
    * Marks each zsh and bash command so that a dispatch is proven stopped when nothing holds its
    * marker, as the Claude adapter's `stopMarker`; replaces `executionStop` and the observer
    * (SPEC-0035 I).
@@ -190,6 +204,9 @@ export interface CodexRuntimeAdapter extends RuntimeAdapter {
   /** Ends what holds this adapter's markers within `timeoutMs`; never throws. */
   endStopMarkersSync(timeoutMs: number): StopMarkerSyncResult;
 }
+
+/** SPEC-0039 H05: the time a hook command has to answer its probe before a dispatch. */
+const HOOK_PROBE_MS = 15_000;
 
 function timeout(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : fallback;
@@ -353,6 +370,9 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
   if (config.policy !== undefined && typeof config.policy !== 'function') invalidConfig('policy');
   if (config.hostHook !== undefined && (!local || typeof config.hostHook !== 'function'))
     invalidConfig('hostHook must be a function, with connection');
+  if (config.hostHookCommand !== undefined && config.hostHook === undefined)
+    invalidConfig('hostHookCommand needs hostHook');
+  const hookCommand = checkHostHookCommand(config.hostHookCommand);
   if (local && config.networkAccess !== undefined)
     invalidConfig('with connection, the policy sets the network, not networkAccess');
   const denyRead = checkDenyRead(config.denyRead);
@@ -689,10 +709,28 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
             sessionId: input.sessionId,
             dispatchId: input.dispatchId,
           });
-          settings.push('-c', hostHookSetting());
+          settings.push('-c', hostHookSetting(hookCommand));
         }
         if (input.orchestrationTools)
           bridge = await createToolBridge(input.orchestrationTools, input.signal);
+        const env = {
+          ...isolatedEnv(config.env),
+          ...hostMcp.env,
+          ...markerEnv,
+          ...hookChannel?.env,
+          CODEX_HOME: home,
+          CODEX_SQLITE_HOME: home,
+          ...bridge?.env,
+        };
+        // SPEC-0039 H05: Codex runs a tool whose hook does not answer, so the hook must work first.
+        if (hookChannel) {
+          const works = await hookChannel.probe(
+            hostHookCommand(hookCommand),
+            env,
+            Math.max(1, Math.min(HOOK_PROBE_MS, remainingAcceptanceMs())),
+          );
+          if (works !== true) throw new Error(coded('HOST_HOOK_UNAVAILABLE', works));
+        }
         if (local) releaseStart = await startLock(local, remainingAcceptanceMs());
         child = spawn(
           config.command ?? 'codex',
@@ -708,19 +746,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
             `web_search="${webSearch}"`,
             ...settings,
           ],
-          {
-            cwd: workspace,
-            env: {
-              ...isolatedEnv(config.env),
-              ...hostMcp.env,
-              ...markerEnv,
-              ...hookChannel?.env,
-              CODEX_HOME: home,
-              CODEX_SQLITE_HOME: home,
-              ...bridge?.env,
-            },
-            stdio: ['pipe', 'pipe', 'pipe'],
-          },
+          { cwd: workspace, env, stdio: ['pipe', 'pipe', 'pipe'] },
         );
       } catch (error) {
         releaseStart();
@@ -751,6 +777,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
       let terminal = false;
       let interruptSent = false;
       let bypassed = false;
+      let hookBypassed = false;
       let answer = '';
       let sawUsage = false;
       const seenUsage = new Set<string>();
@@ -822,7 +849,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
           // SPEC-0035 R02: a hook Codex would not run leaves the host unasked.
           if (config.hostHook) {
             const hooks = await connection.request('hooks/list', { cwds: [workspace] });
-            if (!hostHookTrusted(hooks))
+            if (!hostHookTrusted(hooks, hookCommand))
               throw new Error(
                 coded(
                   'HOST_HOOK_UNTRUSTED',
@@ -1020,6 +1047,20 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
                 /* a closed connection is reported below */
               }
             }
+            // SPEC-0039 H06: Codex runs a call whose hook failed; the host never saw this one.
+            if (
+              hookChannel &&
+              !hookBypassed &&
+              (item?.type === 'commandExecution' || item?.type === 'fileChange') &&
+              !(typeof item.id === 'string' && hookChannel.allowed.has(item.id))
+            ) {
+              hookBypassed = true;
+              try {
+                connection.send('turn/interrupt', { threadId, turnId });
+              } catch {
+                /* a closed connection is reported below */
+              }
+            }
             if (item?.type === 'fileChange' && typeof item.id === 'string')
               fileChanges.set(item.id, item);
           }
@@ -1110,6 +1151,15 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
                 message: coded(
                   'STOP_MARKER_BYPASSED',
                   'a command ran with a shell that does not open the stop marker; the owner reconciles the dispatch',
+                ),
+              };
+            if (hookBypassed)
+              observedTerminal = {
+                type: 'error',
+                outcome: 'unknown',
+                message: coded(
+                  'HOST_HOOK_BYPASSED',
+                  'Codex started a command or file change that the host hook did not allow; the owner reconciles the dispatch',
                 ),
               };
             if (observedTerminal)

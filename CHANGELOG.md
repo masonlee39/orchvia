@@ -2,6 +2,24 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.16] - 2026-09-28
+
+The host's own hook command, and hooks that fail open (SPEC-0039).
+
+### Added
+
+- `hostHookCommand` on `createCodexAdapter` and `codexConnection`: the command Codex runs as the host hook, for a host whose `process.execPath` is not Node, such as an Electron application. `hostHookCommandFor({ runtime, program, env })` builds it with a variable prefix that applies to the hook process alone, such as `ELECTRON_RUN_AS_NODE=1`.
+- `hostHookProgram()` and the package export `@orchvia/adapter-codex/hook.mjs`: the hook program as one module that runs wherever a host copies it.
+- `codexConnection().hostHookTrust()`: whether the home trusts the hook, its hash, and whether its command runs, without writing anything.
+
+### Fixed
+
+- Codex runs a tool whose hook does not answer: a hook command that is missing, fails or prints nothing let every call through unasked. Each dispatch with `hostHook` now runs its hook command first, as Codex would, and refuses to start with `HOST_HOOK_UNAVAILABLE` when it does not answer. A command or file change that starts without the host's permission interrupts the turn and ends the dispatch with `HOST_HOOK_BYPASSED`.
+
+### Documented
+
+- Claude and Codex members may share one `stopMarker.directory`: `sweepStopMarkers` and `endStopMarkersSync` from either package cover both (SPEC-0039 M).
+
 ## [0.1.15] - 2026-09-28
 
 The host's own command rules and stop markers for the local Codex member (SPEC-0035, second part).

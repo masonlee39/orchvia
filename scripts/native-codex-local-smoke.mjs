@@ -7,11 +7,16 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
 import os, { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { codexConnection, createCodexAdapter } from '../packages/adapter-codex/src/index.ts';
+import {
+  codexConnection,
+  createCodexAdapter,
+  hostHookCommandFor,
+  hostHookProgram,
+} from '../packages/adapter-codex/src/index.ts';
 
 const [outputPath, executable] = process.argv.slice(2);
 if (!outputPath)
@@ -574,6 +579,116 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       () => assert.equal(hookEvents.length, 4),
       `hook: the host was asked ${hookEvents.length} times`,
     );
+  }
+
+  // AC-0039-N01: a host's own command with a variable prefix; one that does not answer.
+  {
+    const hookHome = join(root, 'host-command-home');
+    await mkdir(hookHome, { mode: 0o700 });
+    // A runtime that runs the hook only with the prefix, as Electron runs as Node only with
+    // ELECTRON_RUN_AS_NODE; `sometimes` answers the probe and fails every real call.
+    const runtime = join(root, 'hook runtime.sh');
+    writeFileSync(
+      runtime,
+      `#!/bin/sh\n[ "$ORCH_HOOK_PREFIX" = 1 ] || exit 1\nexec ${JSON.stringify(process.execPath)} "$@"\n`,
+    );
+    const sometimes = join(root, 'sometimes.sh');
+    writeFileSync(
+      sometimes,
+      `#!/bin/sh\ninput=$(cat)\ncase "$input" in *orchvia-probe-*) exec ${JSON.stringify(process.execPath)} "$1" <<EOF\n$input\nEOF\n;; esac\nexit 1\n`,
+    );
+    chmodSync(runtime, 0o755);
+    chmodSync(sometimes, 0o755);
+    const commands = {
+      prefixed: hostHookCommandFor({
+        runtime,
+        program: hostHookProgram(),
+        env: { ORCH_HOOK_PREFIX: '1' },
+      }),
+      broken: `'${join(root, 'no-such-hook')}'`,
+      sometimes: hostHookCommandFor({ runtime: sometimes, program: hostHookProgram() }),
+    };
+    const connect = (hostHookCommand) =>
+      codexConnection({
+        home: hookHome,
+        command: binary,
+        args: providerArgs,
+        env: process.env,
+        hostHookCommand,
+      });
+    const before = await connect(commands.prefixed).hostHookTrust();
+    await connect(commands.prefixed).trustHostHook();
+    const after = await connect(commands.prefixed).hostHookTrust();
+    evidence.cases.hostHookTrust = { before, after };
+    check(
+      () =>
+        assert.deepEqual(
+          [before.trusted, before.runs, after.trusted, after.runs],
+          [false, true, true, true],
+        ),
+      `host-command: trust ${JSON.stringify({ before, after })}`,
+    );
+    const asked = [];
+    const hookConfig = (hostHookCommand) => ({
+      policy: () => ({ mode: 'auto' }),
+      hostHookCommand,
+      hostHook(event) {
+        asked.push(event.kind);
+        return { allow: true };
+      },
+    });
+    const prefixed = await dispatch(
+      'host-command',
+      member(hookHome, { config: hookConfig(commands.prefixed) }),
+      (workspace) => [
+        { cmd: `echo "prefix=\${ORCH_HOOK_PREFIX:-none}" > '${join(workspace, 'seen.txt')}'` },
+      ],
+    );
+    const seenPrefix = existsSync(join(prefixed.workspace, 'seen.txt'))
+      ? readFileSync(join(prefixed.workspace, 'seen.txt'), 'utf8').trim()
+      : null;
+    prefixed.record.seenPrefix = seenPrefix;
+    prefixed.record.asked = [...asked];
+    check(
+      () => assert.equal(prefixed.record.events.at(-1), 'result'),
+      `host-command ended: ${prefixed.record.events.at(-1)}`,
+    );
+    check(() => assert.deepEqual(asked, ['command']), `host-command: asked ${asked}`);
+    check(
+      () => assert.equal(seenPrefix, 'prefix=none'),
+      `host-command: the command saw ${seenPrefix}`,
+    );
+    // H05: a command that does not run refuses the dispatch; hostHookTrust says so.
+    await connect(commands.broken).trustHostHook();
+    const brokenTrust = await connect(commands.broken).hostHookTrust();
+    evidence.cases.brokenTrust = brokenTrust;
+    check(
+      () => assert.deepEqual([brokenTrust.trusted, brokenTrust.runs], [true, false]),
+      `host-command-broken: trust ${JSON.stringify(brokenTrust)}`,
+    );
+    const broken = await dispatch(
+      'host-command-broken',
+      member(hookHome, { config: hookConfig(commands.broken) }),
+      (workspace) => [{ cmd: `echo ran > '${join(workspace, 'ran.txt')}'` }],
+    );
+    check(
+      () => assert.match(broken.record.events.at(-1) ?? '', /^error:HOST_HOOK_UNAVAILABLE: /),
+      `host-command-broken: ${broken.record.events.at(-1)}`,
+    );
+    // H06: a hook that answers the probe and then fails lets Codex run the call unasked.
+    await connect(commands.sometimes).trustHostHook();
+    asked.length = 0;
+    const bypassed = await dispatch(
+      'host-command-bypassed',
+      member(hookHome, { config: hookConfig(commands.sometimes) }),
+      (workspace) => [{ cmd: `echo ran > '${join(workspace, 'ran.txt')}'` }, { text: 'after' }],
+    );
+    bypassed.record.asked = [...asked];
+    check(
+      () => assert.match(bypassed.record.events.at(-1) ?? '', /^error:HOST_HOOK_BYPASSED: /),
+      `host-command-bypassed: ${bypassed.record.events.at(-1)}`,
+    );
+    check(() => assert.deepEqual(asked, []), `host-command-bypassed: the host was asked ${asked}`);
   }
 
   // AC-0035-I01: a detached command holds its marker and ends with the dispatch.

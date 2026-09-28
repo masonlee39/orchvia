@@ -13,7 +13,12 @@ import { createInterface } from 'node:readline';
 // - FIXTURE_HOOK_TRUST: the trust hooks/list reports for the session hook (default untrusted);
 // - FIXTURE_HOOK_EVENTS: PreToolUse inputs, JSON [{ tool_name, tool_input }], run through the hook
 //   command the adapter configured, as Codex runs it; their outputs become the final message;
-// - FIXTURE_ITEM_COMMAND: a command item started during the turn, which then waits for an interrupt.
+// - FIXTURE_ITEM_COMMAND: a command item started during the turn, which then waits for an interrupt;
+// - FIXTURE_HOOKED_ITEMS: JSON [{ hooks?: [PreToolUse input], item }]: for each entry, its hook inputs
+//   run through the hook command, as Codex runs it, then its item starts and completes, as Codex
+//   does whatever the hook answered; the hooks' outputs become the final message;
+// - FIXTURE_BACKGROUND: a bash command run with the app-server's environment when the turn starts,
+//   whose output (a background process's PID) is logged; the turn then waits for an interrupt.
 const send = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
 const log = (entry: Record<string, unknown>) => {
   if (process.env.FIXTURE_LOG)
@@ -133,7 +138,44 @@ for await (const line of createInterface({ input: process.stdin })) {
       });
   } else if (value.method === 'turn/start') {
     send({ id: value.id, result: { turn: { id: 'turn' } } });
-    if (process.env.FIXTURE_ITEM_COMMAND) {
+    if (process.env.FIXTURE_BACKGROUND) {
+      const run = spawnSync('/bin/bash', ['-c', process.env.FIXTURE_BACKGROUND], {
+        encoding: 'utf8',
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      log({ event: 'background', pid: Number(run.stdout.trim()), stderr: run.stderr });
+    } else if (process.env.FIXTURE_HOOKED_ITEMS) {
+      const outputs: unknown[] = [];
+      for (const entry of JSON.parse(process.env.FIXTURE_HOOKED_ITEMS) as {
+        hooks?: object[];
+        item: Record<string, unknown>;
+      }[]) {
+        for (const event of entry.hooks ?? []) {
+          const run = spawnSync('/bin/sh', ['-c', hookCommand ?? 'false'], {
+            input: JSON.stringify({ hook_event_name: 'PreToolUse', ...event }),
+            encoding: 'utf8',
+            env: process.env,
+          });
+          outputs.push({ status: run.status, stdout: run.stdout.trim() });
+        }
+        for (const method of ['item/started', 'item/completed'])
+          send({ method, params: { threadId: 'thread', turnId: 'turn', item: entry.item } });
+      }
+      finished = true;
+      send({
+        method: 'item/completed',
+        params: {
+          threadId: 'thread',
+          turnId: 'turn',
+          item: { type: 'agentMessage', text: JSON.stringify(outputs) },
+        },
+      });
+      send({
+        method: 'turn/completed',
+        params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } },
+      });
+    } else if (process.env.FIXTURE_ITEM_COMMAND) {
       send({
         method: 'item/started',
         params: {

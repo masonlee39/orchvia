@@ -184,6 +184,16 @@ try {
     const exported = {};
     for (const [key, value] of Object.entries(original.exports ?? {})) {
       const target = value.replace('./src/', './dist/').replace(/\.ts$/, '.js');
+      if (key.endsWith('.mjs')) {
+        // SPEC-0039 H03: a program a host copies elsewhere, one module that imports only node:*.
+        const standalone = target.replace(/\.js$/, '.mjs');
+        const code = await readFile(join(stage, target), 'utf8');
+        if (/\bfrom\s+['"](?!node:)|\bimport\s*\(\s*['"](?!node:)/.test(code))
+          throw new Error(`${key} must import only node: modules`);
+        await writeFile(join(stage, standalone), code);
+        exported[key] = standalone;
+        continue;
+      }
       exported[key] = { types: target.replace(/\.js$/, '.d.ts'), import: target };
     }
     exported['./internal/*'] = { types: './dist/*.d.ts', import: './dist/*.js' };

@@ -1,6 +1,8 @@
+import { spawn } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   chmodSync,
+  existsSync,
   closeSync,
   mkdirSync,
   mkdtempSync,
@@ -486,29 +488,76 @@ export const HOST_HOOK_KEY = '/<session-flags>/config.toml:pre_tool_use:0:0';
 const quoteShell = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
 /**
- * The hook command, the same for every dispatch and for `trustHostHook`, since Codex trusts a hook
- * by a hash of its definition: this Node running the adapter's hook program.
+ * The hook command of SPEC-0035, and still the default: this Node running the adapter's hook
+ * program. Codex trusts a hook by a hash of its definition, so a dispatch and `trustHostHook` must
+ * pass the same command.
  */
-export function hostHookCommand(): string {
+export function hostHookCommand(command?: string): string {
+  if (command !== undefined) return command;
   const program = fileURLToPath(new URL('./hook.ts', import.meta.url));
   return `${quoteShell(process.execPath)} ${quoteShell(program)}`;
 }
-export function hostHookSetting(): string {
-  return `hooks.PreToolUse=[{hooks=[{type="command",command=${JSON.stringify(hostHookCommand())},async=false,timeoutSec=600}]}]`;
+export function hostHookSetting(command?: string): string {
+  return `hooks.PreToolUse=[{hooks=[{type="command",command=${JSON.stringify(hostHookCommand(command))},async=false,timeoutSec=600}]}]`;
+}
+
+/** SPEC-0039 H01: a host's own hook command. */
+export function checkHostHookCommand(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !value || value.length > 4096 || /[\0\r\n]/.test(value))
+    invalidConfig('hostHookCommand must be one line of at most 4096 characters');
+  return value;
+}
+
+/**
+ * SPEC-0039 H02: the command that runs `program` with `runtime`, with `env` as a prefix that
+ * applies to the hook process alone, each part quoted for a POSIX shell, which Codex runs it with.
+ */
+export function hostHookCommandFor(options: {
+  runtime: string;
+  program: string;
+  env?: Record<string, string>;
+}): string {
+  const { runtime, program, env = {} } = options ?? ({} as never);
+  if (typeof runtime !== 'string' || !isAbsolute(runtime))
+    invalidConfig('hostHookCommandFor needs an absolute runtime');
+  if (typeof program !== 'string' || !isAbsolute(program))
+    invalidConfig('hostHookCommandFor needs an absolute program');
+  if (typeof env !== 'object' || env === null || Array.isArray(env))
+    invalidConfig('hostHookCommandFor env must be an object');
+  const prefix = Object.entries(env).map(([name, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+      invalidConfig(`hostHookCommandFor env has an invalid name ${JSON.stringify(name)}`);
+    if (typeof value !== 'string' || /[\0\r\n]/.test(value))
+      invalidConfig(`hostHookCommandFor env ${name} must be one line of text`);
+    return `${name}=${quoteShell(value)}`;
+  });
+  return [...prefix, quoteShell(runtime), quoteShell(program)].join(' ');
+}
+
+/**
+ * SPEC-0039 H03: the hook program a host copies beside its own files: the package's `hook.mjs`,
+ * which runs with no package beside it, or the source's `hook.ts` in the repository.
+ */
+export function hostHookProgram(): string {
+  const built = fileURLToPath(new URL('./hook.mjs', import.meta.url));
+  return existsSync(built) ? built : fileURLToPath(new URL('./hook.ts', import.meta.url));
+}
+
+/** The hook `hooks/list` shows for `command`, if any. */
+export function listedHostHook(list: unknown, command?: string): Record<string, unknown> | null {
+  const data = (list as { data?: { hooks?: Record<string, unknown>[] }[] })?.data ?? [];
+  const wanted = hostHookCommand(command);
+  for (const entry of data)
+    for (const hook of entry.hooks ?? [])
+      if (hook.key === HOST_HOOK_KEY && hook.command === wanted) return hook;
+  return null;
 }
 
 /** Whether `hooks/list` shows Orchvia's hook trusted. */
-export function hostHookTrusted(list: unknown): boolean {
-  const data = (list as { data?: { hooks?: Record<string, unknown>[] }[] })?.data ?? [];
-  const command = hostHookCommand();
-  return data.some((entry) =>
-    (entry.hooks ?? []).some(
-      (hook) =>
-        hook.key === HOST_HOOK_KEY &&
-        hook.command === command &&
-        (hook.trustStatus === 'trusted' || hook.trustStatus === 'managed'),
-    ),
-  );
+export function hostHookTrusted(list: unknown, command?: string): boolean {
+  const hook = listedHostHook(list, command);
+  return hook?.trustStatus === 'trusted' || hook?.trustStatus === 'managed';
 }
 
 function hookEvent(
@@ -523,6 +572,25 @@ function hookEvent(
   return { kind: 'tool', tool, input: toolInput, ...ids };
 }
 
+/** What the channel gives a dispatch: the hook's environment, the calls allowed, and the probe. */
+export interface HostHookChannel {
+  env: Record<string, string>;
+  /** SPEC-0039 H06: the `tool_use_id` of each call the host allowed. */
+  allowed: ReadonlySet<string>;
+  /**
+   * SPEC-0039 H05: runs `command` as Codex would, with a probe the channel refuses without asking
+   * the host; true when the probe came through and the command printed a denial Codex can read.
+   */
+  probe(command: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<true | string>;
+  close(): Promise<void>;
+}
+
+/** The shell Codex runs hook commands with: the account's login shell. */
+function hookShell(): string {
+  const shell = os.userInfo().shell;
+  return shell && isAbsolute(shell) ? shell : '/bin/sh';
+}
+
 /**
  * The dispatch's private channel from the hook to the host: a Unix socket in a 0700 directory and
  * a token, given to Codex's environment in names that commands never see (ORCHVIA_HOOK_*).
@@ -530,12 +598,15 @@ function hookEvent(
 export async function hostHookChannel(
   hook: CodexHostHook,
   ids: Pick<CodexHookEvent, 'taskId' | 'sessionId' | 'dispatchId'>,
-): Promise<{ env: Record<string, string>; close: () => Promise<void> }> {
+): Promise<HostHookChannel> {
   // A short path: Unix socket paths are limited to about 104 bytes on macOS.
   const directory = mkdtempSync('/tmp/orchvia-hook-');
   chmodSync(directory, 0o700);
   const path = join(directory, 's');
   const token = randomBytes(32).toString('hex');
+  const allowed = new Set<string>();
+  const probes = new Set<string>();
+  const probed = new Set<string>();
   const sockets = new Set<Socket>();
   const server = createServer((socket) => {
     sockets.add(socket);
@@ -560,16 +631,23 @@ export async function hostHookChannel(
             !timingSafeEqual(Buffer.from(message.token), Buffer.from(token))
           )
             throw new Error('unauthorized');
-          const decision = await hook(
-            hookEvent((message.event ?? {}) as Record<string, unknown>, ids),
-          );
-          answer =
-            decision?.allow === true
-              ? { allow: true }
-              : {
-                  allow: false,
-                  reason: (decision as { reason?: string })?.reason ?? 'The host refused',
-                };
+          const event = (message.event ?? {}) as Record<string, unknown>;
+          const id = typeof event.tool_use_id === 'string' ? event.tool_use_id : null;
+          if (id !== null && probes.has(id)) {
+            probed.add(id);
+            answer = { allow: false, reason: 'Orchvia checks that the hook runs' };
+          } else {
+            const decision = await hook(hookEvent(event, ids));
+            answer =
+              decision?.allow === true
+                ? { allow: true }
+                : {
+                    allow: false,
+                    reason: (decision as { reason?: string })?.reason ?? 'The host refused',
+                  };
+            // H06: recorded before the hook program has the answer, so before Codex starts it.
+            if (answer.allow && id !== null) allowed.add(id);
+          }
         } catch (error) {
           answer = {
             allow: false,
@@ -585,8 +663,68 @@ export async function hostHookChannel(
     server.listen(path, resolve);
   });
   chmodSync(path, 0o600);
+  const env = { ORCHVIA_HOOK_SOCKET: path, ORCHVIA_HOOK_TOKEN: token };
   return {
-    env: { ORCHVIA_HOOK_SOCKET: path, ORCHVIA_HOOK_TOKEN: token },
+    env,
+    allowed,
+    async probe(command, probeEnv, timeoutMs) {
+      const id = `orchvia-probe-${randomBytes(16).toString('hex')}`;
+      probes.add(id);
+      const child = spawn(hookShell(), ['-c', command], {
+        env: { ...probeEnv, ...env },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true,
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.setEncoding('utf8').on('data', (data: string) => {
+        if (stdout.length < 65_536) stdout += data;
+      });
+      child.stderr.setEncoding('utf8').on('data', (data: string) => {
+        if (stderr.length < 4096) stderr += data;
+      });
+      child.stdin.on('error', () => {});
+      child.stdin.end(
+        JSON.stringify({
+          hook_event_name: 'PreToolUse',
+          tool_name: 'orchvia_probe',
+          tool_use_id: id,
+          tool_input: {},
+        }),
+      );
+      const exit = await new Promise<{ code: number | null; error?: string }>((resolve) => {
+        const timer = setTimeout(() => {
+          try {
+            process.kill(-child.pid!, 'SIGKILL');
+          } catch {
+            child.kill('SIGKILL');
+          }
+          resolve({ code: null, error: `it did not finish within ${timeoutMs} ms` });
+        }, timeoutMs);
+        child.once('error', (error) => {
+          clearTimeout(timer);
+          resolve({ code: null, error: error.message });
+        });
+        child.once('close', (code) => {
+          clearTimeout(timer);
+          resolve({ code });
+        });
+      });
+      probes.delete(id);
+      const detail = stderr.trim() ? ` (${stderr.trim().split('\n').at(-1)!.slice(0, 200)})` : '';
+      if (exit.error) return `the hook command failed: ${exit.error}`;
+      if (!probed.has(id)) return `the hook command never reached the host${detail}`;
+      if (exit.code !== 0) return `the hook command exited with ${exit.code}${detail}`;
+      let printed: unknown;
+      try {
+        printed = JSON.parse(stdout);
+      } catch {
+        return 'the hook command printed something besides its answer';
+      }
+      const decision = (printed as { hookSpecificOutput?: { permissionDecision?: unknown } })
+        ?.hookSpecificOutput?.permissionDecision;
+      return decision === 'deny' ? true : 'the hook command did not print its denial';
+    },
     close: async () => {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));

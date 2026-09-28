@@ -6,13 +6,13 @@ Date: 2026-09-23. Base: `7af317c`. Branch `oss-launch`. Specification: [SPEC-002
 
 The tests in `tests/contract/docs.test.ts` were written first and run against the unchanged documentation: `node --test tests/contract/docs.test.ts` failed 5 of 6.
 
-| Test | Failure before the change |
-| --- | --- |
-| 0021-R01 the README opens with what it is, three reasons, a diagram, a quickstart, a comparison and the status | No `# Orchvia` title, reasons, diagram or the three sections |
-| 0021-R02 0021-R06 0021-R08 no release evidence, price or paid judge, within 15 KB | The README was 46,486 bytes, and cited test counts, CI runs, candidate versions, a price and the paid judge |
-| 0021-R03 no internal term in the README; `docs/concepts.md` explains them | The README used A/Q/R and other internal terms; `docs/concepts.md` did not exist |
-| 0021-R05 the README embeds a diagram of at most 400 KB | No embedded image; the two diagrams were 1.4 MB and 1.1 MB |
-| 0021-R09 no repository file names a downstream product | 24 files: 23 tracked Markdown files, and the draft of SPEC-0021 itself |
+| Test                                                                                                           | Failure before the change                                                                                   |
+| -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| 0021-R01 the README opens with what it is, three reasons, a diagram, a quickstart, a comparison and the status | No `# Orchvia` title, reasons, diagram or the three sections                                                |
+| 0021-R02 0021-R06 0021-R08 no release evidence, price or paid judge, within 15 KB                              | The README was 46,486 bytes, and cited test counts, CI runs, candidate versions, a price and the paid judge |
+| 0021-R03 no internal term in the README; `docs/concepts.md` explains them                                      | The README used A/Q/R and other internal terms; `docs/concepts.md` did not exist                            |
+| 0021-R05 the README embeds a diagram of at most 400 KB                                                         | No embedded image; the two diagrams were 1.4 MB and 1.1 MB                                                  |
+| 0021-R09 no repository file names a downstream product                                                         | 24 files: 23 tracked Markdown files, and the draft of SPEC-0021 itself                                      |
 
 0021-R04 (every relative link resolves) passed before the change. It guards the move of the design document, the guide and the diagrams, which rewrote 136 links.
 
@@ -52,18 +52,18 @@ On 2026-09-23, with the owner's go-ahead:
 
 Each change was made in turn, the matching test was run, and the file was restored:
 
-| Mutation | Result |
-| --- | --- |
-| A test count in the README | caught (R02) |
-| A candidate version in the README | caught (R02) |
-| A price in the README | caught (R06) |
-| The status heading renamed | caught (R01) |
-| An internal term in the README | caught (R03) |
-| A term missing from `docs/concepts.md` | caught (R03) |
-| A broken relative link | caught (R04) |
-| An internal name in a document | caught (R09) |
+| Mutation                                | Result       |
+| --------------------------------------- | ------------ |
+| A test count in the README              | caught (R02) |
+| A candidate version in the README       | caught (R02) |
+| A price in the README                   | caught (R06) |
+| The status heading renamed              | caught (R01) |
+| An internal term in the README          | caught (R03) |
+| A term missing from `docs/concepts.md`  | caught (R03) |
+| A broken relative link                  | caught (R04) |
+| An internal name in a document          | caught (R09) |
 | The quickstart starting a fresh session | caught (R01) |
-| An embedded image over 400 KB | caught (R05) |
+| An embedded image over 400 KB           | caught (R05) |
 
 ## Not done or not verified
 
@@ -107,15 +107,15 @@ Base: `702a3d7`. Branch `orchvia-rename`, merged as pull request #11 (`f331930`)
 
 ### Mutation checks
 
-| Mutation | Result |
-| --- | --- |
-| A package keeps its old name | caught (N01) |
-| The command keeps its old name | caught (N01) |
-| An example imports the old module | caught (N02) |
+| Mutation                                         | Result       |
+| ------------------------------------------------ | ------------ |
+| A package keeps its old name                     | caught (N01) |
+| The command keeps its old name                   | caught (N01) |
+| An example imports the old module                | caught (N02) |
 | The request digest prefix changes, in TypeScript | caught (N06) |
-| The request digest prefix changes, in Python | caught (N06) |
-| The MCP server name changes | caught (N06) |
-| The schema identifier changes | caught (N06) |
+| The request digest prefix changes, in Python     | caught (N06) |
+| The MCP server name changes                      | caught (N06) |
+| The schema identifier changes                    | caught (N06) |
 
 ### Not verified yet
 
@@ -170,18 +170,18 @@ Timing invariants, as approved:
 
 #### Mutation checks
 
-| Mutation | Result |
-| --- | --- |
-| The Orchvia arm's follow-ups start a new session | caught (E04) |
-| The two tracks run one after the other | caught (E04) |
-| The budget is never checked | caught (E05) |
-| A failed hidden check counts as passed | caught (E04) |
-| The test runner's variable reaches the checks | caught (E04) |
-| The quickstart's second task starts a new session | caught (E01 check) |
-| The stop proof does not wait for the dispatch's own process | caught (E04) |
-| The stop proof accepts a process that outlived its parent | caught (E04) |
-| lsof's exit status 1 with a result counts as an error again | caught (E04) |
-| Any error proves the stop | caught (E04) |
+| Mutation                                                    | Result             |
+| ----------------------------------------------------------- | ------------------ |
+| The Orchvia arm's follow-ups start a new session            | caught (E04)       |
+| The two tracks run one after the other                      | caught (E04)       |
+| The budget is never checked                                 | caught (E05)       |
+| A failed hidden check counts as passed                      | caught (E04)       |
+| The test runner's variable reaches the checks               | caught (E04)       |
+| The quickstart's second task starts a new session           | caught (E01 check) |
+| The stop proof does not wait for the dispatch's own process | caught (E04)       |
+| The stop proof accepts a process that outlived its parent   | caught (E04)       |
+| lsof's exit status 1 with a result counts as an error again | caught (E04)       |
+| Any error proves the stop                                   | caught (E04)       |
 
 #### Not verified yet
 
@@ -221,15 +221,15 @@ Two corrections concern the drawing and the layout, so a rendering checks them r
 
 #### Mutation checks
 
-| Mutation | Result |
-| --- | --- |
-| The banner uses the `font` attribute again | caught |
-| Notes at 14 px | caught |
-| No font family | caught |
-| The description names only a person | caught |
-| The banner names only a person | caught |
+| Mutation                                          | Result |
+| ------------------------------------------------- | ------ |
+| The banner uses the `font` attribute again        | caught |
+| Notes at 14 px                                    | caught |
+| No font family                                    | caught |
+| The description names only a person               | caught |
+| The banner names only a person                    | caught |
 | The README's alternative text names only a person | caught |
-| A viewBox 1,600 wide | caught |
+| A viewBox 1,600 wide                              | caught |
 
 #### Not verified
 
@@ -258,12 +258,12 @@ Two corrections concern the drawing and the layout, so a rendering checks them r
 
 #### Mutation checks
 
-| Mutation | Result |
-| --- | --- |
-| `--help` does not list `--version` | caught (source test) |
-| JSON instead of the bare version | caught (source test) |
-| No newline | caught (source test) |
-| `-v` prints the version too | caught (source test) |
+| Mutation                                        | Result                                                                                                                                                                                                                                                                               |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--help` does not list `--version`              | caught (source test)                                                                                                                                                                                                                                                                 |
+| JSON instead of the bare version                | caught (source test)                                                                                                                                                                                                                                                                 |
+| No newline                                      | caught (source test)                                                                                                                                                                                                                                                                 |
+| `-v` prints the version too                     | caught (source test)                                                                                                                                                                                                                                                                 |
 | The version is written into the code as `0.1.0` | not caught by the source test, whose manifest also says 0.1.0; caught by the smoke of the build as `0.2.0-rc.7` (`'0.1.0\n'` instead of `'0.2.0-rc.7\n'`). The release workflow runs that smoke with the tag's version, and with `0.0.0-rc.N` on pull requests that touch packaging. |
 
 The check that `-v` stays an unknown command was added after its mutation first went unnoticed. It covers behavior that was already right, so it has no failing run of its own.
@@ -285,12 +285,12 @@ The test and the example were written together, as the TypeScript quickstart's w
 
 #### Mutation checks
 
-| Mutation | Result |
-| --- | --- |
-| The second task starts a new session | caught |
-| The last line prints Python's `True` | caught |
-| No `allowCrossRootReuse` | caught |
-| Another goal for the second task | caught |
+| Mutation                                               | Result |
+| ------------------------------------------------------ | ------ |
+| The second task starts a new session                   | caught |
+| The last line prints Python's `True`                   | caught |
+| No `allowCrossRootReuse`                               | caught |
+| Another goal for the second task                       | caught |
 | The result is read without waiting for the task to end | caught |
 
 ## One version (P08, P09)
@@ -329,20 +329,20 @@ A local build of 0.1.1 from its tag's commit `5d95079`, made as the release work
 
 ### Mutation checks
 
-| Mutation | Result |
-| --- | --- |
-| `engineVersion` written as a literal again | caught (P08 source) |
-| `SDK_VERSION` written as a literal again | caught (P08 source) |
-| A package manifest at another version | caught (P08 copies) |
-| A lockfile workspace entry at another version | caught (P08 copies) |
-| `_version.py` at another version | caught (P08 copies) |
-| No changelog section for the source version | caught (P08 copies) |
-| `set-version` skips the lockfile | caught (P08 set-version) |
-| `set-version` writes JSON with four spaces | caught (P08 set-version) |
-| The release check skips the tag comparison | caught (P09) |
-| The release check skips the check that the commit is on main | caught (P09) |
-| An error in that check lets the release through | caught (P09) |
-| The Python build leaves `_version.py` as it is | caught by the smoke of a `0.2.0-rc.7` build: `AssertionError: ('0.1.0', '0.1.0')` |
+| Mutation                                                     | Result                                                                            |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `engineVersion` written as a literal again                   | caught (P08 source)                                                               |
+| `SDK_VERSION` written as a literal again                     | caught (P08 source)                                                               |
+| A package manifest at another version                        | caught (P08 copies)                                                               |
+| A lockfile workspace entry at another version                | caught (P08 copies)                                                               |
+| `_version.py` at another version                             | caught (P08 copies)                                                               |
+| No changelog section for the source version                  | caught (P08 copies)                                                               |
+| `set-version` skips the lockfile                             | caught (P08 set-version)                                                          |
+| `set-version` writes JSON with four spaces                   | caught (P08 set-version)                                                          |
+| The release check skips the tag comparison                   | caught (P09)                                                                      |
+| The release check skips the check that the commit is on main | caught (P09)                                                                      |
+| An error in that check lets the release through              | caught (P09)                                                                      |
+| The Python build leaves `_version.py` as it is               | caught by the smoke of a `0.2.0-rc.7` build: `AssertionError: ('0.1.0', '0.1.0')` |
 
 ### Not verified
 
@@ -466,6 +466,14 @@ Pull request #63 set the version to 0.1.14 on top of the first part of SPEC-0035
 - The npm registry lists 0.1.14 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.14 with its wheel and sdist.
 
 From 0.1.15 on, as the owner chose (D-35-18), the version change travels with the change it releases in one pull request, which is merged and tagged once its CI passes.
+
+## The fourteenth release, 0.1.15
+
+Pull request #64 carried the second part of SPEC-0035 and the version 0.1.15 together, as D-35-18 chose. A local Claude Code session pushed the tag `v0.1.15` on its merge commit `97530f1`, on the owner's authorization, which started the release workflow ([36394841258](https://github.com/masonlee39/orchvia/actions/runs/36394841258)).
+
+- The offline matrix and the build passed, with the local-member smoke on Ubuntu and both macOS runners, one of them with a bash login shell.
+- The owner approved the `npm` and `pypi` deployments. Both jobs passed, and the GitHub release "Orchvia 0.1.15" followed.
+- The npm registry lists 0.1.15 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.15 with its wheel and sdist.
 
 ## P10: no document names the latest release (D-rel-3)
 

@@ -215,6 +215,30 @@ assert.equal(events.at(-1).type,'result',JSON.stringify(events));assert.equal(ca
       );
       assertOutput(run(process.execPath, ['bridge.mjs'], { cwd: isolated }), 'bridge-ok');
       results.push({ mode: 'installed-codex-private-mcp', tools: 4, modelCalls: 0 });
+      // SPEC-0039 H03: the hook program resolves under every condition and runs from a copy with no
+      // package beside it; the default command is still 0.1.15's.
+      const copied = join(base, 'hook-copy');
+      await mkdir(copied);
+      await writeFile(
+        join(isolated, 'hook.mjs'),
+        `import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+import {copyFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {hostHookProgram} from '@orchvia/adapter-codex';
+import {hostHookCommand} from '@orchvia/adapter-codex/internal/local';
+const imported=fileURLToPath(import.meta.resolve('@orchvia/adapter-codex/hook.mjs'));
+const required=createRequire(import.meta.url).resolve('@orchvia/adapter-codex/hook.mjs');
+assert.equal(imported,required);assert.equal(hostHookProgram(),imported);assert.match(imported,/dist\\/hook\\.mjs$/);
+assert.match(hostHookCommand(),/dist\\/hook\\.js'$/);
+const copy=${JSON.stringify(join(copied, 'hook.mjs'))};copyFileSync(imported,copy);
+const ran=spawnSync(process.execPath,[copy],{input:'{}',encoding:'utf8',env:{PATH:process.env.PATH,ORCHVIA_HOOK_SOCKET:'/nonexistent/s',ORCHVIA_HOOK_TOKEN:'x'}});
+assert.equal(JSON.parse(ran.stdout).hookSpecificOutput.permissionDecision,'deny',ran.stderr);
+console.log('hook-ok');`,
+      );
+      assertOutput(run(process.execPath, ['hook.mjs'], { cwd: isolated }), 'hook-ok');
+      results.push({ mode: 'installed-codex-hook-program', standalone: true, modelCalls: 0 });
     }
     results.push({
       mode: `installed-${selected}-only`,

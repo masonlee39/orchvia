@@ -8,8 +8,11 @@ import {
   supportedVersion,
   withStartLock,
   HOST_HOOK_KEY,
+  checkHostHookCommand,
+  hostHookChannel,
   hostHookCommand,
   hostHookSetting,
+  listedHostHook,
   type CodexClientInfo,
 } from './local.ts';
 import { VERSION } from '../../engine/src/version.ts';
@@ -27,6 +30,19 @@ export interface CodexConnectionConfig {
   clientInfo?: CodexClientInfo;
   /** Each call's time, and a sign-in's default wait; 30 s. */
   timeoutMs?: number;
+  /** The adapter's `hostHookCommand`, which `trustHostHook` and `hostHookTrust` act on (SPEC-0039). */
+  hostHookCommand?: string;
+}
+/** SPEC-0039 H04: what Codex says of the host hook, and whether its command runs. */
+export interface CodexHostHookTrust {
+  trusted: boolean;
+  /** Codex's `trustStatus`, or `missing` when Codex does not list the hook. */
+  status: string;
+  key: string;
+  hash: string | null;
+  runs: boolean;
+  /** Why the command does not run, when it does not. */
+  reason?: string;
 }
 export type CodexLogin =
   | { type: 'apiKey'; apiKey: string }
@@ -62,6 +78,11 @@ export interface CodexConnection {
    * that `hostHook` passes; the one entry Orchvia ever writes to the home (SPEC-0035 D-35-5).
    */
   trustHostHook(): Promise<{ key: string; hash: string }>;
+  /**
+   * SPEC-0039 H04: whether the hook is trusted, and whether its command answers as a dispatch
+   * requires; writes nothing. After a change of command, `trustHostHook` trusts the new one.
+   */
+  hostHookTrust(): Promise<CodexHostHookTrust>;
   /** Ends every sign-in still waiting. */
   close(): Promise<void>;
 }
@@ -76,6 +97,15 @@ export function codexConnection(config: CodexConnectionConfig): CodexConnection 
     version: VERSION,
   };
   const callMs = config.timeoutMs ?? 30_000;
+  const hookCommand = checkHostHookCommand(config.hostHookCommand);
+  const environment = (): NodeJS.ProcessEnv => ({
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    TMPDIR: process.env.TMPDIR,
+    ...config.env,
+    CODEX_HOME: home,
+    CODEX_SQLITE_HOME: home,
+  });
   // A waiting sign-in's app-server is read by its own loop only; `replies` carries the answers to
   // requests sent to it meanwhile, such as a cancellation.
   const pending = new Map<
@@ -97,14 +127,7 @@ export function codexConnection(config: CodexConnectionConfig): CodexConnection 
         config.command ?? 'codex',
         [...(config.args ?? ['app-server']), ...extraArgs],
         {
-          env: {
-            PATH: process.env.PATH,
-            HOME: process.env.HOME,
-            TMPDIR: process.env.TMPDIR,
-            ...config.env,
-            CODEX_HOME: home,
-            CODEX_SQLITE_HOME: home,
-          },
+          env: environment(),
           stdio: ['pipe', 'pipe', 'pipe'],
         },
       );
@@ -184,12 +207,13 @@ export function codexConnection(config: CodexConnectionConfig): CodexConnection 
     async trustHostHook() {
       const end = performance.now() + callMs;
       // The same hook a dispatch passes, so Codex computes the same key and hash.
-      const { connection } = await open(() => end - performance.now(), ['-c', hostHookSetting()]);
+      const { connection } = await open(
+        () => end - performance.now(),
+        ['-c', hostHookSetting(hookCommand)],
+      );
       try {
         const listed = await connection.request('hooks/list', { cwds: [home] });
-        const entry = ((listed.data as { hooks?: Message[] }[] | undefined) ?? [])
-          .flatMap((item) => item.hooks ?? [])
-          .find((hook) => hook.key === HOST_HOOK_KEY && hook.command === hostHookCommand());
+        const entry = listedHostHook(listed, hookCommand);
         if (!entry || typeof entry.currentHash !== 'string')
           throw new Error('Codex does not list the host hook');
         await connection.request('config/batchWrite', {
@@ -201,12 +225,55 @@ export function codexConnection(config: CodexConnectionConfig): CodexConnection 
             },
           ],
         });
-        return { key: HOST_HOOK_KEY, hash: entry.currentHash };
+        return { key: HOST_HOOK_KEY, hash: entry.currentHash as string };
       } catch (error) {
         throw Object.assign(new Error(errorMessage(error)), { code: 'CODEX_REQUEST_FAILED' });
       } finally {
         await connection.close();
       }
+    },
+    async hostHookTrust() {
+      const end = performance.now() + callMs;
+      const { connection } = await open(
+        () => end - performance.now(),
+        ['-c', hostHookSetting(hookCommand)],
+      );
+      let entry: Record<string, unknown> | null;
+      try {
+        entry = listedHostHook(
+          await connection.request('hooks/list', { cwds: [home] }),
+          hookCommand,
+        );
+      } catch (error) {
+        throw Object.assign(new Error(errorMessage(error)), { code: 'CODEX_REQUEST_FAILED' });
+      } finally {
+        await connection.close();
+      }
+      const status = typeof entry?.trustStatus === 'string' ? entry.trustStatus : 'missing';
+      // The probe never reaches a host: the channel refuses it itself.
+      const channel = await hostHookChannel(() => ({ allow: false }), {
+        taskId: '',
+        sessionId: '',
+        dispatchId: '',
+      });
+      let works: true | string;
+      try {
+        works = await channel.probe(
+          hostHookCommand(hookCommand),
+          environment(),
+          Math.max(1, Math.min(15_000, end - performance.now())),
+        );
+      } finally {
+        await channel.close();
+      }
+      return {
+        trusted: status === 'trusted' || status === 'managed',
+        status,
+        key: HOST_HOOK_KEY,
+        hash: typeof entry?.currentHash === 'string' ? entry.currentHash : null,
+        runs: works === true,
+        ...(works === true ? {} : { reason: works }),
+      };
     },
     async login(login) {
       if (login?.type === 'apiKey') {
