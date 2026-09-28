@@ -1,14 +1,31 @@
 import { exerciseTools } from './orchestration-actions.ts';
 import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { TOOL_NAMES } from '../../packages/engine/src/tools.ts';
 
+// The agent_orch entry, started as Codex starts an MCP server: its command and arguments, with
+// its `env` added to the app-server's environment (SPEC-0039 B01).
+// FIXTURE_ENV_OUT: where to write the names of the app-server's environment variables.
+if (process.env.FIXTURE_ENV_OUT)
+  writeFileSync(process.env.FIXTURE_ENV_OUT, JSON.stringify(Object.keys(process.env)));
 const config = process.argv.find((arg) => arg.startsWith('mcp_servers=')) ?? '';
-const runner = JSON.parse(config.match(/args=\[("(?:[^"\\]|\\.)*")\]/)?.[1] ?? 'null');
-if (!runner || config.includes(process.env.AGENT_ORCH_BRIDGE_TOKEN!))
+const quoted = '"(?:[^"\\\\]|\\\\.)*"';
+const command = JSON.parse(config.match(new RegExp(`command=(${quoted})`))?.[1] ?? 'null');
+const args = JSON.parse(
+  `[${config.match(new RegExp(`args=\\[((?:${quoted},?)*)\\]`))?.[1] ?? ''}]`,
+);
+const entryEnv = Object.fromEntries(
+  [
+    ...(config.match(/[,{]env=\{([^}]*)\}/)?.[1] ?? '').matchAll(
+      new RegExp(`([A-Za-z_][A-Za-z0-9_]*)=(${quoted})`, 'g'),
+    ),
+  ].map((match) => [match[1], JSON.parse(match[2]!)]),
+);
+if (!command || !args.length || config.includes(process.env.AGENT_ORCH_BRIDGE_TOKEN!))
   throw new Error('Invalid private bridge wiring');
-const bridge = spawn(process.execPath, [runner], {
-  env: process.env,
+const bridge = spawn(command, args, {
+  env: { ...process.env, ...entryEnv },
   stdio: ['pipe', 'pipe', 'pipe'],
 });
 const responses = createInterface({ input: bridge.stdout })[Symbol.asyncIterator]();

@@ -7,11 +7,18 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
 import os, { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { codexConnection, createCodexAdapter } from '../packages/adapter-codex/src/index.ts';
+import {
+  codexConnection,
+  createCodexAdapter,
+  hostHookCommandFor,
+  hostHookProgram,
+  toolBridgeProgram,
+} from '../packages/adapter-codex/src/index.ts';
+import { ORCHESTRATION_TOOLS } from '../packages/engine/src/tools.ts';
 
 const [outputPath, executable] = process.argv.slice(2);
 if (!outputPath)
@@ -46,6 +53,8 @@ const check = (run, message) => {
 
 // Each case scripts the model's calls; after the last one the model answers with text.
 let steps = [];
+// Each request's input, for the cases that check what reached the model.
+const bodies = [];
 let requests = 0;
 // What the model saw from its last tool call: the next request carries it.
 let toolOutputs = [];
@@ -58,6 +67,7 @@ const gateway = createServer(async (request, response) => {
     return response.writeHead(404).end();
   if (++requests > 200) return response.writeHead(500).end();
   const body = JSON.parse(raw);
+  bodies.push(JSON.stringify(body.input ?? []));
   for (const entry of body.input ?? [])
     if (/_call_output$/.test(entry.type ?? ''))
       toolOutputs.push(
@@ -123,7 +133,7 @@ const gateway = createServer(async (request, response) => {
       status: 'completed',
       name: tool.name,
       ...(tool.ns ? { namespace: tool.ns } : {}),
-      arguments: JSON.stringify({ text: 'hello' }),
+      arguments: JSON.stringify(step.args ?? { text: 'hello' }),
     };
   } else
     item = {
@@ -215,6 +225,7 @@ async function dispatch(name, adapter, script, input = {}) {
             : event.type,
       );
       if (event.type === 'usage') (record.usage ??= []).push(event.usage.inputTokens);
+      if (event.type === 'result') record.thread = event.providerSessionId;
     }
   } finally {
     await adapter.close?.();
@@ -573,6 +584,208 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     check(
       () => assert.equal(hookEvents.length, 4),
       `hook: the host was asked ${hookEvents.length} times`,
+    );
+  }
+
+  // AC-0039-N01: a host's own command with a variable prefix; one that does not answer.
+  {
+    const hookHome = join(root, 'host-command-home');
+    await mkdir(hookHome, { mode: 0o700 });
+    // A runtime that runs the hook only with the prefix, as Electron runs as Node only with
+    // ELECTRON_RUN_AS_NODE; `sometimes` answers the probe and fails every real call.
+    const runtime = join(root, 'hook runtime.sh');
+    writeFileSync(
+      runtime,
+      `#!/bin/sh\n[ "$ORCH_HOOK_PREFIX" = 1 ] || exit 1\nexec ${JSON.stringify(process.execPath)} "$@"\n`,
+    );
+    const sometimes = join(root, 'sometimes.sh');
+    writeFileSync(
+      sometimes,
+      `#!/bin/sh\ninput=$(cat)\ncase "$input" in *orchvia-probe-*) exec ${JSON.stringify(process.execPath)} "$1" <<EOF\n$input\nEOF\n;; esac\nexit 1\n`,
+    );
+    chmodSync(runtime, 0o755);
+    chmodSync(sometimes, 0o755);
+    const commands = {
+      prefixed: hostHookCommandFor({
+        runtime,
+        program: hostHookProgram(),
+        env: { ORCH_HOOK_PREFIX: '1' },
+      }),
+      broken: `'${join(root, 'no-such-hook')}'`,
+      sometimes: hostHookCommandFor({ runtime: sometimes, program: hostHookProgram() }),
+    };
+    const connect = (hostHookCommand) =>
+      codexConnection({
+        home: hookHome,
+        command: binary,
+        args: providerArgs,
+        env: process.env,
+        hostHookCommand,
+      });
+    const before = await connect(commands.prefixed).hostHookTrust();
+    await connect(commands.prefixed).trustHostHook();
+    const after = await connect(commands.prefixed).hostHookTrust();
+    evidence.cases.hostHookTrust = { before, after };
+    check(
+      () =>
+        assert.deepEqual(
+          [before.trusted, before.runs, after.trusted, after.runs],
+          [false, true, true, true],
+        ),
+      `host-command: trust ${JSON.stringify({ before, after })}`,
+    );
+    const asked = [];
+    const hookConfig = (hostHookCommand) => ({
+      policy: () => ({ mode: 'auto' }),
+      hostHookCommand,
+      hostHook(event) {
+        asked.push(event.kind);
+        return { allow: true };
+      },
+    });
+    const prefixed = await dispatch(
+      'host-command',
+      member(hookHome, { config: hookConfig(commands.prefixed) }),
+      (workspace) => [
+        { cmd: `echo "prefix=\${ORCH_HOOK_PREFIX:-none}" > '${join(workspace, 'seen.txt')}'` },
+      ],
+    );
+    const seenPrefix = existsSync(join(prefixed.workspace, 'seen.txt'))
+      ? readFileSync(join(prefixed.workspace, 'seen.txt'), 'utf8').trim()
+      : null;
+    prefixed.record.seenPrefix = seenPrefix;
+    prefixed.record.asked = [...asked];
+    check(
+      () => assert.equal(prefixed.record.events.at(-1), 'result'),
+      `host-command ended: ${prefixed.record.events.at(-1)}`,
+    );
+    check(() => assert.deepEqual(asked, ['command']), `host-command: asked ${asked}`);
+    check(
+      () => assert.equal(seenPrefix, 'prefix=none'),
+      `host-command: the command saw ${seenPrefix}`,
+    );
+    // H05: a command that does not run refuses the dispatch; hostHookTrust says so.
+    await connect(commands.broken).trustHostHook();
+    const brokenTrust = await connect(commands.broken).hostHookTrust();
+    evidence.cases.brokenTrust = brokenTrust;
+    check(
+      () => assert.deepEqual([brokenTrust.trusted, brokenTrust.runs], [true, false]),
+      `host-command-broken: trust ${JSON.stringify(brokenTrust)}`,
+    );
+    const broken = await dispatch(
+      'host-command-broken',
+      member(hookHome, { config: hookConfig(commands.broken) }),
+      (workspace) => [{ cmd: `echo ran > '${join(workspace, 'ran.txt')}'` }],
+    );
+    check(
+      () => assert.match(broken.record.events.at(-1) ?? '', /^error:HOST_HOOK_UNAVAILABLE: /),
+      `host-command-broken: ${broken.record.events.at(-1)}`,
+    );
+    // H06: a hook that answers the probe and then fails lets Codex run the call unasked.
+    await connect(commands.sometimes).trustHostHook();
+    asked.length = 0;
+    const bypassed = await dispatch(
+      'host-command-bypassed',
+      member(hookHome, { config: hookConfig(commands.sometimes) }),
+      (workspace) => [{ cmd: `echo ran > '${join(workspace, 'ran.txt')}'` }, { text: 'after' }],
+    );
+    bypassed.record.asked = [...asked];
+    check(
+      () => assert.match(bypassed.record.events.at(-1) ?? '', /^error:HOST_HOOK_BYPASSED: /),
+      `host-command-bypassed: ${bypassed.record.events.at(-1)}`,
+    );
+    check(() => assert.deepEqual(asked, []), `host-command-bypassed: the host was asked ${asked}`);
+  }
+
+  // AC-0039-N02: the bridge through the host's command, and the member's instructions.
+  {
+    const bridgeHome = join(root, 'bridge-home');
+    await mkdir(bridgeHome, { mode: 0o700 });
+    const ran = join(root, 'bridge-ran');
+    const runtime = join(root, 'bridge runtime.sh');
+    writeFileSync(
+      runtime,
+      `#!/bin/sh\n[ "$ORCH_BRIDGE_PREFIX" = on ] || exit 1\necho ran > '${ran}'\nexec ${JSON.stringify(process.execPath)} "$@"\n`,
+    );
+    chmodSync(runtime, 0o755);
+    const calls = [];
+    const asked = [];
+    const MARK = 'ORCH_MEMBER_INSTRUCTIONS_7f3a';
+    // The dispatch helper closes its adapter, so the resumed dispatch gets another one.
+    const make = () =>
+      member(bridgeHome, {
+        config: {
+          toolBridge: {
+            command: runtime,
+            args: [toolBridgeProgram()],
+            env: { ORCH_BRIDGE_PREFIX: 'on' },
+          },
+          instructions: (input) => (
+            asked.push(input.dispatchId),
+            asked.length > 1 ? `${MARK}_AGAIN` : MARK
+          ),
+        },
+      });
+    const tools = {
+      definitions: ORCHESTRATION_TOOLS,
+      async call(name) {
+        calls.push(name);
+        return { ok: true };
+      },
+    };
+    bodies.length = 0;
+    const first = await dispatch(
+      'bridge',
+      make(),
+      () => [
+        { search: 'agent_orch work_read' },
+        { call: 'work_read', args: { request: { kind: 'task', id: 'task' } } },
+      ],
+      { orchestrationTools: tools, permissionProfile: 'read-only' },
+    );
+    const firstBodies = [...bodies];
+    bodies.length = 0;
+    const resumed = await dispatch('bridge-resumed', make(), () => [], {
+      providerSessionId: first.record.thread,
+      permissionProfile: 'read-only',
+    });
+    const count = (list, text) => list.map((body) => body.split(text).length - 1);
+    first.record.bridge = { ran: existsSync(ran), calls: [...calls], asked: [...asked] };
+    first.record.instructions = {
+      first: count(firstBodies, MARK),
+      resumed: count(bodies, MARK),
+      again: count(bodies, `${MARK}_AGAIN`),
+      developer: firstBodies.some((body) =>
+        JSON.parse(body).some(
+          (item) => item.role === 'developer' && JSON.stringify(item.content).includes(MARK),
+        ),
+      ),
+    };
+    check(
+      () => assert.equal(first.record.events.at(-1), 'result'),
+      `bridge ended: ${first.record.events.at(-1)}`,
+    );
+    check(
+      () => assert.equal(resumed.record.events.at(-1), 'result'),
+      `bridge-resumed ended: ${resumed.record.events.at(-1)}`,
+    );
+    check(
+      () =>
+        assert.deepEqual(first.record.bridge, {
+          ran: true,
+          calls: ['work_read'],
+          asked: ['bridge'],
+        }),
+      `bridge: ${JSON.stringify(first.record.bridge)}`,
+    );
+    check(
+      () => {
+        assert.equal(first.record.instructions.developer, true);
+        assert.ok(first.record.instructions.first.every((n) => n === 1));
+        assert.ok(first.record.instructions.resumed.every((n) => n === 1));
+        assert.ok(first.record.instructions.again.every((n) => n === 0));
+      },
+      `instructions: ${JSON.stringify(first.record.instructions)}`,
     );
   }
 

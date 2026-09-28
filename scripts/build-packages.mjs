@@ -1,4 +1,5 @@
 import ts from 'typescript';
+import { build as bundle } from 'esbuild';
 import {
   readFile,
   writeFile,
@@ -184,6 +185,31 @@ try {
     const exported = {};
     for (const [key, value] of Object.entries(original.exports ?? {})) {
       const target = value.replace('./src/', './dist/').replace(/\.ts$/, '.js');
+      if (key.endsWith('.mjs')) {
+        // SPEC-0039 H03, B02: a program a host copies elsewhere, bundled into one module that
+        // imports only node: modules.
+        const standalone = target.replace(/\.js$/, '.mjs');
+        const bundled = await bundle({
+          entryPoints: [join(root, 'packages', directory, value)],
+          bundle: true,
+          platform: 'node',
+          format: 'esm',
+          target: 'node22',
+          write: false,
+          metafile: true,
+          logLevel: 'silent',
+        });
+        const imports = Object.values(bundled.metafile.outputs).flatMap((output) => output.imports);
+        if (imports.some((item) => !item.external || !item.path.startsWith('node:')))
+          throw new Error(`${key} must import only node: modules`);
+        let code = bundled.outputFiles[0].text;
+        if ((code.match(/\bVERSION = (['"])[^'"]*\1/g)?.length ?? 0) > 1)
+          throw new Error(`Expected at most one version in ${key}`);
+        code = code.replace(/(\bVERSION = )(['"])[^'"]*\2/, `$1$2${version}$2`);
+        await writeFile(join(stage, standalone), code);
+        exported[key] = standalone;
+        continue;
+      }
       exported[key] = { types: target.replace(/\.js$/, '.d.ts'), import: target };
     }
     exported['./internal/*'] = { types: './dist/*.d.ts', import: './dist/*.js' };

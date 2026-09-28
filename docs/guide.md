@@ -4,11 +4,11 @@ Updated 2026-09-27. This guide describes the interfaces implemented on `main`, w
 
 ## 1. Choose an integration mode
 
-| Mode | Owner | Runtime and storage |
-| --- | --- | --- |
-| Embedded TypeScript | `createOrchestrator(config)` | Same Node process; caller injects optional adapters |
-| Managed Python | `await Orchestrator.local(engine_command=[...])` | Python owns one Node stdio host |
-| Shared local host | CLI `host`, clients `connectOrchestrator` / `Orchestrator.connect` | One host owns SQLite and adapters; connected clients cannot administer the owner |
+| Mode                | Owner                                                              | Runtime and storage                                                              |
+| ------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| Embedded TypeScript | `createOrchestrator(config)`                                       | Same Node process; caller injects optional adapters                              |
+| Managed Python      | `await Orchestrator.local(engine_command=[...])`                   | Python owns one Node stdio host                                                  |
+| Shared local host   | CLI `host`, clients `connectOrchestrator` / `Orchestrator.connect` | One host owns SQLite and adapters; connected clients cannot administer the owner |
 
 Use exactly one writer for a state directory. Python is a client, not a second scheduler. An application's existing execution pipeline can be supplied as a RuntimeAdapter; see section 5.1.
 
@@ -59,7 +59,13 @@ This is runnable with explicit fake data after replacing the paths:
   "transport": { "mode": "unix", "socketPath": "/absolute/private/state/host.sock" },
   "providers": { "fake": { "model": "fixture", "permissionProfile": "read-only" } },
   "limits": { "maxActiveSessions": 2, "maxTurnsPerTask": 20, "maxQuarantinedDispatches": 32 },
-  "tools": { "enabled": true, "maxDepth": 4, "maxChildren": 32, "maxCallsPerDispatch": 100, "maxRepeatedCalls": 6 },
+  "tools": {
+    "enabled": true,
+    "maxDepth": 4,
+    "maxChildren": 32,
+    "maxCallsPerDispatch": 100,
+    "maxRepeatedCalls": 6
+  },
   "runtimeApprovals": { "enabled": true, "ttlMs": 30000 }
 }
 ```
@@ -176,13 +182,15 @@ const codex = createCodexAdapter({
   executionStop: 'owner-reconcile',
   denyRead: ['.env'],
   policy: (input) =>
-    input.permissionProfile === 'read-only' ? { mode: 'plan' } : { mode: 'acceptEdits', network: 'direct' },
+    input.permissionProfile === 'read-only'
+      ? { mode: 'plan' }
+      : { mode: 'acceptEdits', network: 'direct' },
 });
 ```
 
 Each dispatch runs under a named permission profile: commands read the file system but neither the home, the state directory nor `denyRead`; a writable dispatch also writes the workspace (or `writePaths`) and the temporary directory. `plan` never asks; `default` asks the host for each command and file change; `acceptEdits` asks for commands and takes file changes inside the write paths itself; `auto` asks only for what leaves the profile. `network: 'direct'` goes through Codex's network proxy with every domain allowed: Unix sockets such as an ssh-agent or Docker stay out of reach, local ports do not, and programs that ignore `HTTPS_PROXY`, such as `git` over ssh, cannot connect. `{ domains }` allows only those. Before a network dispatch opens its thread the adapter checks that the proxy is in force and otherwise refuses it with `CODEX_NETWORK_PROXY_UNAVAILABLE`, never falling back to network without the proxy. Other refusals are `CODEX_NOT_FOUND`, `CODEX_VERSION_UNSUPPORTED` (older than 0.153.4), `CODEX_POLICY_INVALID`, `CODEX_HOME_OVERLAP` and `CODEX_START_LOCK_TIMEOUT`, at the start of the dispatch's error message. MCP tool calls ask the host through `requestPermission` like commands; `hostMcpServers` adds the host's own servers by command or by `{ url, token }`. Under `never`, Codex itself refuses commands such as `rm -f`.
 
-`hostHook(event)` asks the host before each command, file change and tool call, in every mode: `{ kind: 'command' | 'fileChange' | 'tool', command?, patch?, … }` answered `{ allow: true }` or `{ allow: false, reason }`. It runs through Codex's hook, which Codex runs only when the home trusts it: call `codexConnection({ home }).trustHostHook()` once, and again after moving Node or the package; an untrusted hook refuses the dispatch with `HOST_HOOK_UNTRUSTED`. The hook sees the command's text, not the shell the model chose, so it is a policy, not a sandbox. `codexConnection().models()` lists the models the sign-in can use. `stopMarker: true` (or `{ directory }`, shared with Claude members) marks each zsh and bash command as for Claude and proves a dispatch stopped without `executionStop`; a login shell other than zsh or bash refuses the dispatch (`STOP_MARKER_UNSUPPORTED_SHELL`), and a command the model runs with `/bin/sh` ends the turn (`STOP_MARKER_BYPASSED`) and leaves the dispatch to the owner.
+`hostHook(event)` asks the host before each command, file change and tool call, in every mode: `{ kind: 'command' | 'fileChange' | 'tool', command?, patch?, … }` answered `{ allow: true }` or `{ allow: false, reason }`. It runs through Codex's hook, which Codex runs only when the home trusts it: call `codexConnection({ home }).trustHostHook()` once, and again after moving Node or the package; an untrusted hook refuses the dispatch with `HOST_HOOK_UNTRUSTED`. A host whose `process.execPath` is not Node, such as an Electron application, copies `hostHookProgram()` (the package's `hook.mjs`) to a place its updates do not move, and passes the same `hostHookCommand` to the adapter and the connection, built with `hostHookCommandFor({ runtime, program, env: { ELECTRON_RUN_AS_NODE: '1' } })`; a variable in `env` reaches the hook process only. `hostHookTrust()` says whether the home trusts that command and whether it runs; after a change of command, `trustHostHook()` trusts the new one and the old one no longer. Codex runs a tool whose hook does not answer, so each dispatch first runs the hook command itself and refuses to start with `HOST_HOOK_UNAVAILABLE` when it does not answer, and a command or file change that starts without the host's permission ends the turn with `HOST_HOOK_BYPASSED` (SPEC-0039). That check covers commands and file changes, not MCP calls or web search. Such a host also starts the orchestration tool bridge its own way, with `toolBridge: { command, args: [toolBridgeProgram() copied beside its files], env }`; a bridge that does not start makes Codex refuse the thread. `instructions(input)` gives a member its role as Codex developer instructions when a dispatch starts a new thread, outside the task's goal and events; Codex keeps the first ones for the thread's life, so a changed role needs a new session. `clientInfo` needs `name` and `version`. The hook sees the command's text, not the shell the model chose, so it is a policy, not a sandbox. `codexConnection().models()` lists the models the sign-in can use. `stopMarker: true` (or `{ directory }`, shared with Claude members) marks each zsh and bash command as for Claude and proves a dispatch stopped without `executionStop`; a login shell other than zsh or bash refuses the dispatch (`STOP_MARKER_UNSUPPORTED_SHELL`), and a command the model runs with `/bin/sh` ends the turn (`STOP_MARKER_BYPASSED`) and leaves the dispatch to the owner.
 
 For extended Claude options, the writable Claude profile or any Codex profile, `observeExecutionStop({ target, terminal, signal, remainingMs })` must observe complete remote/background stop for the exact dispatch/generation/native IDs. Return true only after actual host observation. False, rejection, absence, and timeout retain unknown execution. Waiting is bounded by cleanup time; late true evidence is retained without clearing business quarantine or resubmitting. Local child-process exit is independently required. With an observer configured, `terminalCoversExecution` denotes this combined proof; native-terminal evidence retains `remoteExecution: unknown` until host confirmation.
 
@@ -206,7 +214,10 @@ A program that closes inherited descriptors drops the marker; Python's `subproce
 ```ts
 const directory = '/Users/me/Library/Application Support/MyHost/stop-markers';
 const swept = await sweepStopMarkers(directory); // before starting the engine
-const claude = createClaudeAdapter({ permissionProfile: 'workspace-write', stopMarker: { directory } });
+const claude = createClaudeAdapter({
+  permissionProfile: 'workspace-write',
+  stopMarker: { directory },
+});
 process.on('exit', () => claude.endStopMarkersSync(300));
 ```
 
@@ -245,19 +256,26 @@ For an existing task `taskId`, pause it, queue revised context, and resume:
 ```ts
 const task = await orch.tasks.get(taskId);
 const session = await orch.sessions.get(task.sessionId);
-const pause = await orch.sessions.control({
-  sessionId: session.id,
-  expectedGeneration: session.generation,
-  expectedRevision: session.revision,
-  expectedDispatchId: session.activeDispatchId,
-  expectedState: session.status,
-}, { action: 'pause', mode: 'interrupt' });
+const pause = await orch.sessions.control(
+  {
+    sessionId: session.id,
+    expectedGeneration: session.generation,
+    expectedRevision: session.revision,
+    expectedDispatchId: session.activeDispatchId,
+    expectedState: session.status,
+  },
+  { action: 'pause', mode: 'interrupt' },
+);
 const paused = await pause.wait({ timeoutMs: 35000 });
-if (paused.status !== 'completed') throw new Error(`Pause requires investigation: ${paused.status}`);
+if (paused.status !== 'completed')
+  throw new Error(`Pause requires investigation: ${paused.status}`);
 const current = await orch.sessions.get(session.id);
 await orch.messages.send({
-  taskId, toSessionId: current.id, expectedGeneration: current.generation,
-  kind: 'finding', summary: 'Use the revised requirements in the next turn.',
+  taskId,
+  toSessionId: current.id,
+  expectedGeneration: current.generation,
+  kind: 'finding',
+  summary: 'Use the revised requirements in the next turn.',
 });
 await orch.tasks.resume(taskId);
 ```
@@ -316,19 +334,19 @@ const rows = await orch.usage.byTask(pageOfTaskIds);
 
 Where `initialize` lists `workflow.queueReasons`, a queued task, and a task that waits for its dependencies, carries `blockedBy`: the first condition that keeps the scheduler from dispatching it (SPEC-0028 B). The engine computes it from the scheduler's own checks when the task is read; it is not stored, no event announces it, and a read-only view returns none.
 
-| `reason` | The task waits for | Also given |
-| --- | --- | --- |
-| `scheduler_failed` | a restart: an internal failure stopped the engine (section 11.6) | |
-| `host_stopping` | nothing: the host is closing | |
-| `capacity` | a free execution slot, `limits.maxActiveSessions` | `taskIds`: the tasks that hold the slots |
-| `quarantine_capacity` | owner reconciliation of quarantined results (section 11.5) | |
-| `resource_cleanup` | an owner's resource cleanup to finish | |
-| `execution_conflict` | the owner to resolve an execution evidence conflict | |
-| `storage` | storage to leave backpressure, or a rollover to settle | |
-| `session_busy` | its session, which another task holds | `sessionId`, and `taskIds`: the tasks that hold it |
-| `write_conflict` | a task whose write paths overlap its own | `taskIds`: those tasks |
-| `scheduling` | nothing: the next scheduler pass takes it | |
-| `dependency` | its dependencies to complete | `taskIds`: the ones not completed |
+| `reason`              | The task waits for                                               | Also given                                         |
+| --------------------- | ---------------------------------------------------------------- | -------------------------------------------------- |
+| `scheduler_failed`    | a restart: an internal failure stopped the engine (section 11.6) |                                                    |
+| `host_stopping`       | nothing: the host is closing                                     |                                                    |
+| `capacity`            | a free execution slot, `limits.maxActiveSessions`                | `taskIds`: the tasks that hold the slots           |
+| `quarantine_capacity` | owner reconciliation of quarantined results (section 11.5)       |                                                    |
+| `resource_cleanup`    | an owner's resource cleanup to finish                            |                                                    |
+| `execution_conflict`  | the owner to resolve an execution evidence conflict              |                                                    |
+| `storage`             | storage to leave backpressure, or a rollover to settle           |                                                    |
+| `session_busy`        | its session, which another task holds                            | `sessionId`, and `taskIds`: the tasks that hold it |
+| `write_conflict`      | a task whose write paths overlap its own                         | `taskIds`: those tasks                             |
+| `scheduling`          | nothing: the next scheduler pass takes it                        |                                                    |
+| `dependency`          | its dependencies to complete                                     | `taskIds`: the ones not completed                  |
 
 A task whose budget does not allow a dispatch is paused, not queued, and says so in its `reason`.
 
@@ -480,7 +498,11 @@ const takeover = await orch.tasks.create({
   runtime: { provider: 'claude-read', model: 'claude-sonnet-4-6' },
   acceptance: { mode: 'human', criteria: ['Reviewed'] },
   parentTaskId: agentRootTaskId,
-  contextPlan: { requestedMode: 'reuse', independent: true, candidateSessionId: request.targetSessionId },
+  contextPlan: {
+    requestedMode: 'reuse',
+    independent: true,
+    candidateSessionId: request.targetSessionId,
+  },
 });
 await orch.handoffs.resolve(request.handoffId, {
   expectedRevision: request.revision,
@@ -521,6 +543,7 @@ const orch = await createOrchestrator({
 [SPEC-0018](./specs/0018-routing-layer.md) adds `@orchvia/sdk/routing` and `orchvia.routing`, and [SPEC-0019](./specs/0019-routing-corrections.md) corrects it; the published packages include both. A judge answers typed questions about a request and the agents of one group. Code turns the answers into an ordinary `TaskSpec` with `contextPlan`, and the host submits it or not. The router adds no engine rule or storage. Its one engine addition is the read-only `context.checkRefs` of [SPEC-0020](./specs/0020-context-check.md), after rc.13, and every engine rule still applies to what is submitted.
 
 **Setup.**
+
 - Create the router with `createRouter({ orchestrator, judge, runtimes, scope?, describe?, policy? })`, or `Router(orch, judge, read_only=..., writable=..., scope=..., describe=..., policy=...)` in Python.
 - `runtimes` names the provider and default model for fresh read-only and for fresh writable work, each with an optional `small` and `large` model. Those models must be in the provider's configured model list.
 - `scope` sets what a group is:
@@ -528,6 +551,7 @@ const orch = await createOrchestrator({
   - `'engine'`: a group is the whole engine. Run one engine per group, with its own workspace and `allowCrossRootReuse: true`. The engine does not report that flag, so a wrong scope shows up as `HISTORY_REUSE_FORBIDDEN` on submit.
 
 **Candidates.** `route({ goal, acceptance, members, rootTaskId?, needsWrites?, spec? })` considers only the given member session ids, at most 16.
+
 - It reads each member with `sessions.get` and its latest task with `tasks.get`.
 - It drops a member when:
   - the session is closed, paused, pausing or has an unknown outcome;
@@ -538,6 +562,7 @@ const orch = await createOrchestrator({
 - A reused member keeps its provider, model, write scope and write path.
 
 **What the judge receives.** One call per route.
+
 - State: `{ request: { goal }, agents: { A1: { description, status: 'idle' | 'busy', access: 'read-only' | 'writable' }, … } }`. Aliases follow the member order.
 - Questions:
   - `best`: a choice over the aliases and `fresh`;
@@ -549,17 +574,18 @@ const orch = await createOrchestrator({
 
 **Decisions.** The thresholds are `policy` fields.
 
-| Situation | Proposal |
-| --- | --- |
-| The judge fails or times out | Fresh session with no context; `JUDGE_UNAVAILABLE`; confirmation unless `onJudgeFailure: 'fresh'` |
-| `best` is `fresh`, or no eligible member reaches `relevantAt` (0.5) | Fresh session carrying the results of members at `contextAt` (0.7) or above, most relevant first, at most `maxContextRefs` (20); a result over 32 KiB is left out with `CONTEXT_OMITTED` |
-| The best member is idle | `reuse` it, wait up to `busyWaitMs` (20 minutes), fall back to `fresh` |
-| The best member is busy and `clash` ≥ `clashAt` (0.5) or P(essential) ≥ `essentialAt` (0.5) | `reuse` it and wait; no fallback when P(essential) ≥ `essentialNoFallbackAt` (0.7) |
-| The best member is busy otherwise | Fresh session now, carrying that member's result first |
-| The request needs writes | Read-only members are removed and the `best` probabilities renormalized; the shares only order the alternatives |
-| Model for fresh work | `small` when P(trivial) ≥ `smallAt` (0.85), `large` when P(large) ≥ `largeAt` (0.7), else the default |
+| Situation                                                                                   | Proposal                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The judge fails or times out                                                                | Fresh session with no context; `JUDGE_UNAVAILABLE`; confirmation unless `onJudgeFailure: 'fresh'`                                                                                        |
+| `best` is `fresh`, or no eligible member reaches `relevantAt` (0.5)                         | Fresh session carrying the results of members at `contextAt` (0.7) or above, most relevant first, at most `maxContextRefs` (20); a result over 32 KiB is left out with `CONTEXT_OMITTED` |
+| The best member is idle                                                                     | `reuse` it, wait up to `busyWaitMs` (20 minutes), fall back to `fresh`                                                                                                                   |
+| The best member is busy and `clash` ≥ `clashAt` (0.5) or P(essential) ≥ `essentialAt` (0.5) | `reuse` it and wait; no fallback when P(essential) ≥ `essentialNoFallbackAt` (0.7)                                                                                                       |
+| The best member is busy otherwise                                                           | Fresh session now, carrying that member's result first                                                                                                                                   |
+| The request needs writes                                                                    | Read-only members are removed and the `best` probabilities renormalized; the shares only order the alternatives                                                                          |
+| Model for fresh work                                                                        | `small` when P(trivial) ≥ `smallAt` (0.85), `large` when P(large) ≥ `largeAt` (0.7), else the default                                                                                    |
 
 `needsConfirmation` is set by any of these reasons:
+
 - `LOW_CONFIDENCE`: `confidence` is below `confirmBelow` (0.85). It is the lower of the judge's own `best` confidence (`judgeConfidence`) and the judge's probability for the proposed option; for a fresh session because no member is relevant, 1 minus the highest relevance takes that probability's place;
 - `NARROW_MARGIN`: the top two options are within `minMargin` (0.2);
 - `WRITES_UNCERTAIN`: the writes probability is between 0.3 and 0.7;
@@ -574,6 +600,7 @@ const orch = await createOrchestrator({
 Any client, including a socket client that is not the owner, can call `orch.context.checkRefs([{ artifactRef, version: 1 }])`, or `await orch.context.check_refs([{"artifact_ref": ref, "version": 1}])` in Python, with 1 to 20 references. The result lists, in order, `{ artifactRef, admissible, code?, bytes? }`: what task admission would decide at that moment. The codes are `ARTIFACT_TOO_LARGE`, `ARTIFACT_HISTORY_EXPIRED`, `ARTIFACT_CORRUPT`, `NOT_FOUND` and `ARTIFACT_UNREADABLE`. The call reads only: it returns no content, records nothing and does not extend retention. Admission reports a reference it cannot read as `ARTIFACT_UNREADABLE` too.
 
 **Findings.** `notifications({ text, fromSessionId, members, rootTaskId? })` first checks the group, before the judge is asked. The source must be one of `members`, or it fails with `RoutingError` `ROUTING_SOURCE_NOT_MEMBER`. Under `'root'` the group is the source's own root task, and a different `rootTaskId` fails with `ROUTING_ROOT_MISMATCH`; under `'engine'` `rootTaskId` is ignored. It returns three lists:
+
 - `notify`: members at `notifyAt` (0.7) or above whose task has not ended. `notify(plan)` sends them `finding` messages.
 - `confirm`: members between 0.5 and 0.7 whose task has not ended; the host decides.
 - `followUp`: affected members whose task ended. The engine does not accept messages for them, so start a follow-up task instead.
@@ -581,6 +608,7 @@ Any client, including a socket client that is not the owner, can call `orch.cont
 If the judge fails, the plan is empty and reports why.
 
 **Jev.** TypeSafe's Jev is a third-party paid service; Orchvia is not affiliated with TypeSafe. `createJevJudge({ apiKey, model?, baseUrl?, timeoutMs? })`, or `JevJudge(api_key, ...)` in Python:
+
 - calls `POST https://api.typesafe.ai/v1/systemone` with a bearer token, and pins `jev-1.13.0` by default;
 - retries once on HTTP 429, 529, 5xx or a network error, within `timeoutMs` (10 seconds by default), which bounds the whole evaluation, including the retry, its pause and a slowly arriving response. Python runs each request on its own thread and shuts the connection down at the deadline or on cancellation; a name lookup cannot be interrupted, so that thread then only ends when the lookup returns;
 - raises `JudgeError` with one of these codes: `JUDGE_AUTH`, `JUDGE_INVALID_REQUEST`, `JUDGE_RATE_LIMITED`, `JUDGE_UNAVAILABLE`, `JUDGE_TIMEOUT`, `JUDGE_PROTOCOL`.
@@ -665,13 +693,13 @@ Timeout retains dispatch/control/related messages as outcome_unknown and Task bl
 
 Evidence fields below map camelCase to snake_case in Python:
 
-| Field | Value |
-| --- | --- |
-| source / summary | "owner_attestation" / human investigation summary |
-| localResources / remoteExecution | Each "stopped" or "unknown" |
-| sideEffects | "resolved" or "unknown" |
-| outcome | "not_executed", "completed", "failed", "interrupted", or "unknown" |
-| result | Required for completed: reviewed complete string, genuinely empty allowed, maximum 524288 characters; still subject to human acceptance |
+| Field                            | Value                                                                                                                                   |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| source / summary                 | "owner_attestation" / human investigation summary                                                                                       |
+| localResources / remoteExecution | Each "stopped" or "unknown"                                                                                                             |
+| sideEffects                      | "resolved" or "unknown"                                                                                                                 |
+| outcome                          | "not_executed", "completed", "failed", "interrupted", or "unknown"                                                                      |
+| result                           | Required for completed: reviewed complete string, genuinely empty allowed, maximum 524288 characters; still subject to human acceptance |
 
 These functions accept **an existing owner SDK instance, task ID, reviewed human evidence, and durable business key**. They never infer stopped/resolved from timeout. They illustrate a first reconciliation: read an exact target, submit it, and return current state. Applications requiring recovery must save the complete target/evidence/key before the first RPC. After failure, do not rerun a helper that reads a new target; use the saved-parameter continuation below. The creating application still owns section 11.2 shutdown.
 
@@ -686,16 +714,24 @@ export async function reconcileReviewedTask(
 ) {
   const task = await orch.tasks.get(taskId);
   const session = await orch.sessions.get(task.sessionId);
-  if (task.status !== 'blocked' || session.status !== 'outcome_unknown' || !session.activeDispatchId) {
+  if (
+    task.status !== 'blocked' ||
+    session.status !== 'outcome_unknown' ||
+    !session.activeDispatchId
+  ) {
     throw new Error('Task is not awaiting reconciliation');
   }
-  const operation = await orch.sessions.reconcile({
-    sessionId: session.id,
-    expectedGeneration: session.generation,
-    expectedRevision: session.revision,
-    expectedDispatchId: session.activeDispatchId,
-    expectedState: session.status,
-  }, evidence, { idempotencyKey });
+  const operation = await orch.sessions.reconcile(
+    {
+      sessionId: session.id,
+      expectedGeneration: session.generation,
+      expectedRevision: session.revision,
+      expectedDispatchId: session.activeDispatchId,
+      expectedState: session.status,
+    },
+    evidence,
+    { idempotencyKey },
+  );
   const outcome = await operation.wait({ timeoutMs: 30_000 });
   return { operation: outcome, task: await orch.tasks.get(taskId) };
 }
@@ -783,12 +819,20 @@ Matched contradictory evidence after release durably blocks new dispatch through
 import type { Orchestrator, ReconcileEvidence } from './packages/sdk-typescript/src/index.ts';
 
 export async function resolveReviewedConflict(
-  owner: Orchestrator, conflictId: string, evidence: ReconcileEvidence, idempotencyKey: string,
+  owner: Orchestrator,
+  conflictId: string,
+  evidence: ReconcileEvidence,
+  idempotencyKey: string,
 ) {
   const conflict = await owner.scheduler.getConflict({ conflictId });
-  const operation = await owner.scheduler.resolveConflict({
-    conflictId: conflict.id, expectedRevision: conflict.revision, evidence,
-  }, { idempotencyKey });
+  const operation = await owner.scheduler.resolveConflict(
+    {
+      conflictId: conflict.id,
+      expectedRevision: conflict.revision,
+      evidence,
+    },
+    { idempotencyKey },
+  );
   return await operation.wait({ timeoutMs: 10_000 });
 }
 ```
@@ -830,12 +874,12 @@ await reader.close();
 
 ## 12. Layered acceptance
 
-| Evidence | What it establishes | Still required |
-| --- | --- | --- |
-| Full Node/Python suites | Engine, wire, actual local IPC, owned process and storage-fault behavior | Real upstream execution |
-| Installed pinned native SDK / generated CLI types | Actual offline MCP/permission transport and versioned API shape | Real model, history and sandbox behavior |
-| Clean package installation | Emitted npm packages and wheel/sdist run in fresh offline environments | Publication/license/release operation |
-| Local capacity report | Bounded measurements on the recorded host and data size | Unexecuted OS/runtime matrix cells and production sizing |
-| Opt-in native plan | Explicit version, identity source, spending estimate and evidence preparation | Separate authorization and real execution |
+| Evidence                                          | What it establishes                                                           | Still required                                           |
+| ------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Full Node/Python suites                           | Engine, wire, actual local IPC, owned process and storage-fault behavior      | Real upstream execution                                  |
+| Installed pinned native SDK / generated CLI types | Actual offline MCP/permission transport and versioned API shape               | Real model, history and sandbox behavior                 |
+| Clean package installation                        | Emitted npm packages and wheel/sdist run in fresh offline environments        | Publication/license/release operation                    |
+| Local capacity report                             | Bounded measurements on the recorded host and data size                       | Unexecuted OS/runtime matrix cells and production sizing |
+| Opt-in native plan                                | Explicit version, identity source, spending estimate and evidence preparation | Separate authorization and real execution                |
 
 Follow [native acceptance instructions](acceptance/README.md). A source/runtime probe is not packaged-application acceptance. A protocol response or main-turn result is not complete process/resource stop. A fixed price estimate is not a measured cost benefit. No application-specific implementation, external ledger integration, credentials or paid model requests are part of the offline suite.
