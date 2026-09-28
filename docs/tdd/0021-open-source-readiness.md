@@ -482,7 +482,7 @@ Pull request #65 carried SPEC-0039 and the version 0.1.16 together. Its second c
 - Before the merge, one pull request check failed once: a Python test connected to the host's socket before the socket accepted connections. The owner reran the failed job, which passed. SPEC-0040 R01 corrects the test.
 - The build and the test matrix passed. The owner approved the `npm` and `pypi` deployments; both passed, and so did the GitHub release "Orchvia 0.1.16".
 - The npm registry lists 0.1.16 as the `latest` version of all five packages. PyPI's JSON API showed the 0.1.16 wheel and sdist, uploaded at 11:55 UTC.
-- Both `registry` jobs failed with `No matching distribution found for orchvia==0.1.16`. PyPI's simple index still listed nothing after 0.1.14 when the jobs gave up after 10 minutes; it listed 0.1.16 later that day. SPEC-0040 R02 lets the check wait 25 minutes.
+- Both `registry` jobs failed with `No matching distribution found for orchvia==0.1.16`. PyPI's simple index still listed nothing after 0.1.14 when the jobs gave up after 10 minutes; it listed 0.1.16 later that day. The owner then reran the failed jobs, and both passed (attempt 2). SPEC-0040 R02 lets the check wait 25 minutes.
 
 ## P10: no document names the latest release (D-rel-3)
 
