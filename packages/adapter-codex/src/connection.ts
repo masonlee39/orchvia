@@ -7,6 +7,9 @@ import {
   connectionHome,
   supportedVersion,
   withStartLock,
+  HOST_HOOK_KEY,
+  hostHookCommand,
+  hostHookSetting,
   type CodexClientInfo,
 } from './local.ts';
 import { VERSION } from '../../engine/src/version.ts';
@@ -49,6 +52,16 @@ export interface CodexConnection {
   /** C05. */
   logout(): Promise<Message>;
   rateLimits(): Promise<Message>;
+  /**
+   * C09: Codex's `model/list`, the models this sign-in can use, one page at a time; the answer is
+   * Codex's own (`{ data, nextCursor }`).
+   */
+  models(params?: { cursor?: string; includeHidden?: boolean; limit?: number }): Promise<Message>;
+  /**
+   * C08: trusts, in the home's `config.toml` and through Codex's own configuration API, the hook
+   * that `hostHook` passes; the one entry Orchvia ever writes to the home (SPEC-0035 D-35-5).
+   */
+  trustHostHook(): Promise<{ key: string; hash: string }>;
   /** Ends every sign-in still waiting. */
   close(): Promise<void>;
 }
@@ -77,11 +90,12 @@ export function codexConnection(config: CodexConnectionConfig): CodexConnection 
   /** Starts an app-server on the home and initializes it, holding the start lock meanwhile. */
   const open = (
     deadline: () => number,
+    extraArgs: string[] = [],
   ): Promise<{ connection: AppServerConnection; initialized: Message }> =>
     withStartLock(home, callMs, async () => {
       const child: ChildProcessWithoutNullStreams = spawn(
         config.command ?? 'codex',
-        config.args ?? ['app-server'],
+        [...(config.args ?? ['app-server']), ...extraArgs],
         {
           env: {
             PATH: process.env.PATH,
@@ -160,6 +174,40 @@ export function codexConnection(config: CodexConnectionConfig): CodexConnection 
     account: () => call('account/read'),
     logout: () => call('account/logout'),
     rateLimits: () => call('account/rateLimits/read'),
+    models: (params = {}) => {
+      const forwarded: Message = {};
+      if (params.cursor !== undefined) forwarded.cursor = params.cursor;
+      if (params.includeHidden !== undefined) forwarded.includeHidden = params.includeHidden;
+      if (params.limit !== undefined) forwarded.limit = params.limit;
+      return call('model/list', forwarded);
+    },
+    async trustHostHook() {
+      const end = performance.now() + callMs;
+      // The same hook a dispatch passes, so Codex computes the same key and hash.
+      const { connection } = await open(() => end - performance.now(), ['-c', hostHookSetting()]);
+      try {
+        const listed = await connection.request('hooks/list', { cwds: [home] });
+        const entry = ((listed.data as { hooks?: Message[] }[] | undefined) ?? [])
+          .flatMap((item) => item.hooks ?? [])
+          .find((hook) => hook.key === HOST_HOOK_KEY && hook.command === hostHookCommand());
+        if (!entry || typeof entry.currentHash !== 'string')
+          throw new Error('Codex does not list the host hook');
+        await connection.request('config/batchWrite', {
+          edits: [
+            {
+              keyPath: `hooks.state.${JSON.stringify(HOST_HOOK_KEY)}.trusted_hash`,
+              value: entry.currentHash,
+              mergeStrategy: 'upsert',
+            },
+          ],
+        });
+        return { key: HOST_HOOK_KEY, hash: entry.currentHash };
+      } catch (error) {
+        throw Object.assign(new Error(errorMessage(error)), { code: 'CODEX_REQUEST_FAILED' });
+      } finally {
+        await connection.close();
+      }
+    },
     async login(login) {
       if (login?.type === 'apiKey') {
         if (typeof login.apiKey !== 'string' || !login.apiKey)

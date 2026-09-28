@@ -9,7 +9,7 @@ import { createServer as createNetServer } from 'node:net';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, writeFileSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import os, { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { codexConnection, createCodexAdapter } from '../packages/adapter-codex/src/index.ts';
 
@@ -85,7 +85,17 @@ const gateway = createServer(async (request, response) => {
       arguments: JSON.stringify({
         cmd: step.cmd,
         ...(step.yield ? { yield_time_ms: step.yield } : {}),
+        ...(step.shell ? { shell: step.shell, login: false } : {}),
       }),
+    };
+  else if (step?.code)
+    item = {
+      type: 'custom_tool_call',
+      id: `item_${n}`,
+      call_id: `call_${n}`,
+      status: 'completed',
+      name: 'exec',
+      input: step.code,
     };
   else if (step?.search)
     item = {
@@ -191,6 +201,9 @@ async function dispatch(name, adapter, script, input = {}) {
       async requestPermission(request) {
         record.asked.push(request.toolName);
         return input.allow ?? true;
+      },
+      reportExecutionEvidence(item) {
+        record.remoteExecution = item.remoteExecution;
       },
       ...input,
     })) {
@@ -461,6 +474,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       'connection: clientInfo in userAgent',
     );
     record.before = await connection.account();
+    const models = await connection.models();
+    record.models = Array.isArray(models.data) ? models.data.length : null;
+    check(() => assert.ok(Array.isArray(models.data)), "connection: models() returns Codex's list");
     await connection.login({ type: 'apiKey', apiKey: 'sk-synthetic-not-a-key' });
     record.signedIn = existsSync(join(scratchHome, 'auth.json'));
     await connection.logout();
@@ -477,6 +493,177 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       'connection: a browser sign-in cancelled',
     );
     await connection.close();
+  }
+
+  // SPEC-0035 0.1.15 ----------------------------------------------------------------------
+  const alivePids = (pattern) => {
+    const out = spawnSync('pgrep', ['-f', pattern], { encoding: 'utf8' }).stdout.trim();
+    return out ? out.split('\n').map(Number) : [];
+  };
+  const settle = async (pattern) => {
+    for (let i = 0; i < 40 && alivePids(pattern).length; i++)
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    return alivePids(pattern).length;
+  };
+  const detach = (seconds) =>
+    `perl -e 'use POSIX; if (fork() == 0) { POSIX::setsid(); exec "sleep", "${seconds}" }'`;
+
+  // AC-0035-R02, C08, R01: the host's hook, refused until trusted, then asked before each call.
+  {
+    const hookHome = join(root, 'hook-home');
+    await mkdir(hookHome, { mode: 0o700 });
+    const hookEvents = [];
+    const hookConfig = {
+      policy: () => ({ mode: 'auto' }),
+      async hostHook(event) {
+        hookEvents.push(
+          `${event.kind}:${(event.command ?? event.patch ?? event.tool).slice(0, 40)}`,
+        );
+        if (event.kind === 'command' && event.command?.includes('orch-denied'))
+          return { allow: false, reason: 'the host refuses this command' };
+        if (event.kind === 'fileChange' && event.patch?.includes('blocked.txt'))
+          return { allow: false, reason: 'the host refuses this file' };
+        return { allow: true };
+      },
+    };
+    const untrusted = await dispatch(
+      'hook-untrusted',
+      member(hookHome, { config: hookConfig }),
+      () => [],
+    );
+    check(
+      () => assert.match(untrusted.record.events.at(-1) ?? '', /^error:HOST_HOOK_UNTRUSTED: /),
+      `hook-untrusted: ${untrusted.record.events.at(-1)}`,
+    );
+    const trusted = await codexConnection({
+      home: hookHome,
+      command: binary,
+      args: providerArgs,
+      env: process.env,
+    }).trustHostHook();
+    evidence.cases.trust = trusted;
+    const hooked = await dispatch('hook', member(hookHome, { config: hookConfig }), (workspace) => [
+      { cmd: `echo ok > '${join(workspace, 'allowed.txt')}'` },
+      { cmd: `echo orch-denied > '${join(workspace, 'denied.txt')}'` },
+      { patch: patch(workspace, 'blocked.txt') },
+      { patch: patch(workspace, 'allowed-patch.txt') },
+    ]);
+    hooked.record.hookEvents = hookEvents;
+    const made = (file) => existsSync(join(hooked.workspace, file));
+    hooked.record.files = Object.fromEntries(
+      ['allowed.txt', 'denied.txt', 'blocked.txt', 'allowed-patch.txt'].map((file) => [
+        file,
+        made(file),
+      ]),
+    );
+    check(
+      () => assert.equal(hooked.record.events.at(-1), 'result'),
+      `hook ended: ${hooked.record.events.at(-1)}`,
+    );
+    check(
+      () =>
+        assert.deepEqual(hooked.record.files, {
+          'allowed.txt': true,
+          'denied.txt': false,
+          'blocked.txt': false,
+          'allowed-patch.txt': true,
+        }),
+      `hook: the host's decisions were not kept: ${JSON.stringify(hooked.record.files)}`,
+    );
+    check(
+      () => assert.equal(hookEvents.length, 4),
+      `hook: the host was asked ${hookEvents.length} times`,
+    );
+  }
+
+  // AC-0035-I01: a detached command holds its marker and ends with the dispatch.
+  const markerRoot = join(root, 'markers');
+  {
+    const { record } = await dispatch(
+      'marker',
+      member(home, {
+        config: {
+          executionStop: undefined,
+          stopMarker: { directory: markerRoot },
+          policy: () => ({ mode: 'auto' }),
+        },
+      }),
+      () => [{ cmd: detach(95) }],
+    );
+    record.leftAfter = await settle('^sleep 95$');
+    record.loginShell = os.userInfo().shell;
+    // CI changes the runner's login shell to check bash as well as zsh (SPEC-0035 I01).
+    if (process.env.ORCH_EXPECT_SHELL)
+      check(
+        () =>
+          assert.match(record.loginShell ?? '', new RegExp(`/${process.env.ORCH_EXPECT_SHELL}$`)),
+        `marker: the login shell is ${record.loginShell}`,
+      );
+    check(
+      () => assert.equal(record.events.at(-1), 'result'),
+      `marker ended: ${record.events.at(-1)}`,
+    );
+    check(
+      () => assert.equal(record.leftAfter, 0),
+      'marker: the detached command outlived its dispatch',
+    );
+    check(
+      () => assert.equal(record.remoteExecution, 'stopped'),
+      `marker: not proven stopped (${record.remoteExecution})`,
+    );
+  }
+
+  // AC-0035-I04: a command the model runs with /bin/sh holds no marker; the turn stops there.
+  {
+    const { record } = await dispatch(
+      'marker-bypass',
+      member(home, {
+        config: {
+          executionStop: undefined,
+          stopMarker: { directory: markerRoot },
+          policy: () => ({ mode: 'auto' }),
+        },
+      }),
+      () => [{ cmd: 'sleep 2', shell: '/bin/sh' }, { text: 'after' }],
+    );
+    check(
+      () => assert.match(record.events.at(-1) ?? '', /^error:STOP_MARKER_BYPASSED: /),
+      `marker-bypass: ${record.events.at(-1)}`,
+    );
+    check(() => assert.notEqual(record.remoteExecution, 'stopped'), 'marker-bypass: released');
+  }
+
+  // AC-0035-X01: a command from code mode's exec tool is asked about and marked like any other.
+  {
+    const seenByHook = [];
+    const hookHome = join(root, 'hook-home');
+    const { record } = await dispatch(
+      'code-mode',
+      member(hookHome, {
+        config: {
+          executionStop: undefined,
+          stopMarker: { directory: markerRoot },
+          policy: () => ({ mode: 'auto' }),
+          hostHook: (event) => (seenByHook.push(event.kind), { allow: true }),
+        },
+      }),
+      () => [
+        {
+          code: `const r = await tools.exec_command({ cmd: ${JSON.stringify(detach(96))} }); text(JSON.stringify(r).slice(0, 100));`,
+        },
+      ],
+      { model: 'gpt-6-astra' },
+    );
+    record.hook = seenByHook;
+    record.leftAfter = await settle('^sleep 96$');
+    check(
+      () => assert.ok(seenByHook.includes('command')),
+      `code-mode: the hook saw ${JSON.stringify(seenByHook)}`,
+    );
+    check(
+      () => assert.equal(record.leftAfter, 0),
+      'code-mode: the nested command outlived its dispatch',
+    );
   }
 
   // AC-0035-A02: two members on one home at once.
