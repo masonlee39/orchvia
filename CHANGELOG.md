@@ -2,6 +2,19 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+Codex file changes stay inside the write paths, and commands no longer see credentials.
+
+### Fixed
+
+- The Codex adapter declines a file change approval whose paths are not all inside the workspace or `writePaths`, resolving symbolic links, without asking the host; before, the request named no paths and an approved patch was written anywhere, outside the command sandbox. The host's `permission` payload now carries `changes: [{ path, kind, movePath? }]` (SPEC-0038 P01).
+- Codex commands no longer see the orchestration bridge's token or the app-server's credentials: Codex's shell snapshot had made every environment exclude ineffective, so with `networkAccess: true` a command could call an orchestration tool itself. Codex now starts with `features.shell_snapshot=false` and `shell_environment_policy.ignore_default_excludes=false` (SPEC-0038 P02).
+
+### Changed
+
+- Codex commands no longer get variables whose names contain `KEY`, `SECRET` or `TOKEN` from the host's environment, such as `GITHUB_TOKEN` (SPEC-0038 P02).
+
 ## [0.1.12] - 2026-09-28
 
 Stop marker proofs kept until the host acknowledges them, and one synchronous cleanup per host directory.

@@ -8,7 +8,7 @@ import {
   realpathSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
   ExecutionEvidence,
@@ -22,7 +22,7 @@ import type {
 } from '../../engine/src/types.ts';
 import { observeRuntimeStop, requireStopProof } from '../../engine/src/stop-observation.ts';
 import { adapterProviderName } from '../../engine/src/runtime.ts';
-import { workspacePath } from '../../engine/src/verification.ts';
+import { contains, workspacePath } from '../../engine/src/verification.ts';
 import { createToolBridge } from '../../engine/src/tool-bridge.ts';
 import { TOOL_NAMES } from '../../engine/src/tools.ts';
 import { VERSION } from '../../engine/src/version.ts';
@@ -33,6 +33,55 @@ function record(value: unknown): Message | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Message)
     : null;
+}
+/** The real location of a path that may not exist yet, or null when it cannot be resolved. */
+function canonicalPath(path: string): string | null {
+  const rest: string[] = [];
+  for (let current = path; ; current = dirname(current)) {
+    try {
+      return join(realpathSync(current), ...rest);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+      try {
+        lstatSync(current);
+        return null; // a dangling symbolic link
+      } catch {
+        /* missing: look at the parent */
+      }
+    }
+    if (dirname(current) === current) return null;
+    rest.unshift(basename(current));
+  }
+}
+
+/**
+ * SPEC-0038 P01: the paths a file change item names, resolved, when every one of them lies inside
+ * a write path; null otherwise, and when the item is missing or malformed.
+ */
+function checkedChanges(item: unknown, cwd: string, roots: readonly string[]): Json[] | null {
+  const changes = record(item)?.changes;
+  if (!Array.isArray(changes) || !changes.length) return null;
+  const inside = (path: unknown): string | null => {
+    if (typeof path !== 'string' || !path) return null;
+    const target = canonicalPath(resolve(cwd, path));
+    return target && roots.some((root) => contains(root, target)) ? target : null;
+  };
+  const checked: Json[] = [];
+  for (const value of changes) {
+    const change = record(value);
+    const kind = record(change?.kind);
+    const type = kind?.type;
+    const path = inside(change?.path);
+    if (!path || (type !== 'add' && type !== 'delete' && type !== 'update')) return null;
+    const entry: { [key: string]: Json } = { path, kind: type };
+    if (type === 'update' && kind!.move_path != null) {
+      const moved = inside(kind!.move_path);
+      if (!moved) return null;
+      entry.movePath = moved;
+    }
+    checked.push(entry);
+  }
+  return checked;
 }
 function nonnegativeInt(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -354,6 +403,12 @@ function defensiveArgs(args: string[], workspace: string, bridge = false): strin
       : 'mcp_servers={}',
     '-c',
     'shell_environment_policy.exclude=["AGENT_ORCH_BRIDGE_*"]',
+    // SPEC-0038 P02: the shell snapshot re-exports the whole environment and so defeats the
+    // excludes; without it Codex also drops names containing KEY, SECRET or TOKEN.
+    '-c',
+    'features.shell_snapshot=false',
+    '-c',
+    'shell_environment_policy.ignore_default_excludes=false',
     '-c',
     'project_root_markers=[]',
     ...untrustedProjects,
@@ -660,6 +715,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
       const seenUsage = new Set<string>();
       let previousUsageTotal: Message | null = null;
       const permissionRequests = new Set<string>();
+      // SPEC-0038 P01: a file change approval names only its item, which arrives first.
+      const fileChanges = new Map<string, unknown>();
       const requestInterrupt = (): void => {
         if (!input.signal.aborted || !threadId || !turnId || interruptSent) return;
         interruptSent = true;
@@ -767,12 +824,25 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
               connection.respond(message.id, { decision: 'decline' });
               continue;
             }
+            let permission = params as Json;
+            if (method === 'item/fileChange/requestApproval') {
+              const changes = checkedChanges(
+                typeof params.itemId === 'string' ? fileChanges.get(params.itemId) : undefined,
+                workspace,
+                writePaths,
+              );
+              if (!changes) {
+                connection.respond(message.id, { decision: 'decline' });
+                continue;
+              }
+              permission = { ...(params as { [key: string]: Json }), changes };
+            }
             const capturedTurn = turnId;
             void input
               .requestPermission({
                 requestId: `${params.approvalId ?? params.itemId ?? key}:${key}`,
                 toolName: method,
-                permission: params as Json,
+                permission,
                 providerSessionId: threadId,
                 providerTurnId: capturedTurn,
               })
@@ -798,6 +868,11 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): RuntimeAdap
           }
           if (!turnId) continue;
           if (params.turnId && params.turnId !== turnId) continue;
+          if (message.method === 'item/started') {
+            const item = record(params.item);
+            if (item?.type === 'fileChange' && typeof item.id === 'string')
+              fileChanges.set(item.id, item);
+          }
           if (message.method === 'item/completed') {
             const item = record(params.item);
             if (item?.type === 'contextCompaction') compactBoundary = item as Json;
