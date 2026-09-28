@@ -19,6 +19,7 @@ A host wants to run the Codex CLI that the user installed and signed in to as a 
 | D-35-7  | A command run by `/bin/sh` ends the turn and fails the dispatch                                                                                                   |
 | D-35-9  | Internet use under the proxy verified locally and in CI                                                                                                           |
 | D-35-10 | This specification approved                                                                                                                                       |
+| D-35-13 | Fix the bridge's tools under `never` in 0.1.14                                                                                                                    |
 | D-35-11 | Two releases: 0.1.14 without the host hook, stop markers and code-mode record; 0.1.15 with them                                                                   |
 
 ## A. The connection home
@@ -69,10 +70,12 @@ A host wants to run the Codex CLI that the user installed and signed in to as a 
   - `{ domains }` is the same proxy with only those domains and without local addresses.
 - **F04** Before a dispatch with network opens its thread, the adapter checks the proxy with Codex's `command/exec` (which, without a sandbox parameter, runs under the dispatch's profile), running this Node on a short script: `HTTPS_PROXY` is set, a connection to a Unix socket the adapter listens on is refused, and a direct connection to TEST-NET-1 (192.0.2.1:80) is refused, with `EPERM` or `EACCES`. With Codex 0.153.4 and 0.157.1 the three states differ: the proxy gives set, refused, refused; network without the proxy gives unset, connected, a timeout; no network gives unset, refused, refused. If the check cannot run or any part differs, the dispatch fails before submission with `CODEX_NETWORK_PROXY_UNAVAILABLE`; the adapter never falls back to network without the proxy.
 - **F05** Under `'direct'`, programs that ignore the proxy variables, such as `git` over ssh, cannot connect; this is documented.
+- **F06** Local ports differ by platform under `'direct'`: on macOS a command reaches a port on 127.0.0.1 (the host's tool port answers 401 without its token); in CI's Linux sandbox it reaches none, so local services such as a development server or a database are out of reach there. Either way a host tool without its token is never called.
 
 ## G. Approvals
 
 - **G01** Command, file change and MCP tool approvals reach the host's one `requestPermission` (whose `toolName` is the request's method) with their kind: `item/commandExecution/requestApproval`, `item/fileChange/requestApproval` (with `changes`), and `mcpServer/elicitation/request` whose `_meta.codex_approval_kind` is `mcp_tool_call`, answered `{ action: 'accept' | 'decline', content: {} }`. Every other request is declined.
+- **G02** The orchestration bridge's MCP server (`agent_orch`) has `default_tools_approval_mode = "approve"`: its tools act on the dispatch's own grant, and Codex's `never` policy refused every call to them since the bridge existed (D-35-13).
 
 ## H. Host tools
 
@@ -136,6 +139,7 @@ Environments: Codex 0.153.4 and 0.157.1 on macOS arm64 (locally) and in CI on ma
 | AC-0035-N05 | The proxy check fails (a scripted app-server, any version): `CODEX_NETWORK_PROXY_UNAVAILABLE`, nothing submitted, no fallback                         | `tests/contract/codex-local-0035.test.ts`                                                    |
 | AC-0035-N06 | A real Codex whose proxy does not come up (a wrapper that appends `-c features.network_proxy=false`): the same, and no model request                  | `scripts/native-codex-local-smoke.mjs`                                                       |
 | AC-0035-G01 | Command, file change and MCP tool approvals reach the host; an unknown request is declined                                                            | `tests/contract/codex-local-0035.test.ts` and `scripts/native-codex-local-smoke.mjs`         |
+| AC-0035-G02 | The bridge's tools need no Codex approval; with the real binary a `work_read` call returns the engine's task                                          | `tests/contract/codex-local-0035.test.ts` and `scripts/native-gateway-smoke.mjs`             |
 | AC-0035-H01 | A command server and a URL server with a token work; `approve` needs no question                                                                      | `tests/contract/codex-local-0035.test.ts` and `scripts/native-codex-local-smoke.mjs`         |
 | AC-0035-R01 | The host hook denies a command and a patch in every mode; `HOST_HOOK_UNTRUSTED` without trust                                                         | 0.1.15                                                                                       |
 | AC-0035-I01 | A detached command holds the marker and a sweep ends it, for zsh and bash login shells                                                                | 0.1.15                                                                                       |

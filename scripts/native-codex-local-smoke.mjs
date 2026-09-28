@@ -344,6 +344,11 @@ try {
       ...internetProbes,
     ]);
     record.toolCalls = toolCalls;
+    record.localPort = /tool=401/.test(out)
+      ? 'reached, 401'
+      : /tool=000/.test(out)
+        ? 'unreachable'
+        : 'other';
     check(
       () => assert.equal(record.events.at(-1), 'result'),
       `${name} ended: ${record.events.at(-1)}`,
@@ -352,7 +357,9 @@ try {
       check(() => assert.match(out, /agent=2\b/), `${name}: a command reached the ssh-agent`);
     check(() => assert.match(out, /docker=000/), `${name}: a command reached the Docker socket`);
     check(
-      () => assert.match(out, /tool=401/),
+      // macOS reaches the port and is refused without the token; Linux's sandbox reaches no local
+      // port at all under the proxy. Either way no tool runs, which toolCalls checks.
+      () => assert.match(out, /tool=(401|000)\b/),
       `${name}: the host tool port answered otherwise than 401`,
     );
     check(() => assert.equal(toolCalls, 0), `${name}: a command called a host tool`);

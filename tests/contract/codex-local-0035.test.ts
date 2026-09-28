@@ -708,3 +708,24 @@ test('AC-0035-C01 a browser sign-in can be cancelled, and a missing binary is na
   const missing = codexConnection({ home: paths.home, command: join(paths.base, 'no-codex') });
   await assert.rejects(missing.probe(), { code: 'CODEX_NOT_FOUND' });
 });
+
+test('AC-0035-G02 the orchestration bridge needs no Codex approval', async (t) => {
+  const { workspace, state } = await dirs(t);
+  const { ORCHESTRATION_TOOLS } = await import('../../packages/engine/src/tools.ts');
+  const adapter = createCodexAdapter({
+    executionStop: 'owner-reconcile',
+    command: process.execPath,
+    args: [fixture('codex-policy.ts')],
+  });
+  t.after(() => adapter.close?.());
+  const events = await run(adapter, {
+    workspace,
+    stateDir: state,
+    orchestrationTools: { definitions: ORCHESTRATION_TOOLS, call: async () => ({}) },
+  });
+  const last = events.at(-1);
+  const args: string[] = JSON.parse(last?.type === 'result' ? last.text : '{}').args;
+  const servers = args.find((arg) => arg.startsWith('mcp_servers='))!;
+  // Its grant is bound to the dispatch; Codex's `never` would otherwise refuse every call.
+  assert.match(servers, /agent_orch=\{[^}]*default_tools_approval_mode="approve"/);
+});

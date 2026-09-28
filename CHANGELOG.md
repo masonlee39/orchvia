@@ -14,6 +14,7 @@ The user's own Codex CLI as a member (SPEC-0035, first part).
 
 ### Fixed
 
+- The orchestration tools (`work_delegate`, `work_send`, `work_read`, `work_control`) failed for a Codex member without an approval callback: Codex's `never` policy refused every MCP tool call, and the bridge's server asked for approval. It now needs none; its tools act on the dispatch's own grant (SPEC-0035 G02).
 - A Codex compaction on a resumed thread counted the thread's previous request again. Codex usage events carry the thread's totals as `sessionTotals`, which the next dispatch uses as its baseline (SPEC-0035 J01).
 
 ### Changed

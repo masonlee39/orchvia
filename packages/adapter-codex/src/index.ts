@@ -187,10 +187,12 @@ function defensiveArgs(
   bridge = false,
   host: { entries: string[]; exclude: string[] } = { entries: [], exclude: [] },
 ): string[] {
+  // SPEC-0035 G02: the bridge's tools act on the dispatch's own grant, so Codex asks for no
+  // approval of them; under `never` it would refuse every call.
   const servers = [
     ...(bridge
       ? [
-          `agent_orch={command=${JSON.stringify(process.execPath)},args=[${JSON.stringify(fileURLToPath(new URL('../../engine/src/tool-bridge.ts', import.meta.url)))}],env_vars=["AGENT_ORCH_BRIDGE_TOKEN","AGENT_ORCH_BRIDGE_SOCKET"],enabled_tools=${JSON.stringify(TOOL_NAMES)},required=true}`,
+          `agent_orch={command=${JSON.stringify(process.execPath)},args=[${JSON.stringify(fileURLToPath(new URL('../../engine/src/tool-bridge.ts', import.meta.url)))}],env_vars=["AGENT_ORCH_BRIDGE_TOKEN","AGENT_ORCH_BRIDGE_SOCKET"],enabled_tools=${JSON.stringify(TOOL_NAMES)},required=true,default_tools_approval_mode="approve"}`,
         ]
       : []),
     ...host.entries,
