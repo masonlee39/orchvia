@@ -16,7 +16,9 @@ import {
   createCodexAdapter,
   hostHookCommandFor,
   hostHookProgram,
+  toolBridgeProgram,
 } from '../packages/adapter-codex/src/index.ts';
+import { ORCHESTRATION_TOOLS } from '../packages/engine/src/tools.ts';
 
 const [outputPath, executable] = process.argv.slice(2);
 if (!outputPath)
@@ -51,6 +53,8 @@ const check = (run, message) => {
 
 // Each case scripts the model's calls; after the last one the model answers with text.
 let steps = [];
+// Each request's input, for the cases that check what reached the model.
+const bodies = [];
 let requests = 0;
 // What the model saw from its last tool call: the next request carries it.
 let toolOutputs = [];
@@ -63,6 +67,7 @@ const gateway = createServer(async (request, response) => {
     return response.writeHead(404).end();
   if (++requests > 200) return response.writeHead(500).end();
   const body = JSON.parse(raw);
+  bodies.push(JSON.stringify(body.input ?? []));
   for (const entry of body.input ?? [])
     if (/_call_output$/.test(entry.type ?? ''))
       toolOutputs.push(
@@ -128,7 +133,7 @@ const gateway = createServer(async (request, response) => {
       status: 'completed',
       name: tool.name,
       ...(tool.ns ? { namespace: tool.ns } : {}),
-      arguments: JSON.stringify({ text: 'hello' }),
+      arguments: JSON.stringify(step.args ?? { text: 'hello' }),
     };
   } else
     item = {
@@ -220,6 +225,7 @@ async function dispatch(name, adapter, script, input = {}) {
             : event.type,
       );
       if (event.type === 'usage') (record.usage ??= []).push(event.usage.inputTokens);
+      if (event.type === 'result') record.thread = event.providerSessionId;
     }
   } finally {
     await adapter.close?.();
@@ -689,6 +695,98 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       `host-command-bypassed: ${bypassed.record.events.at(-1)}`,
     );
     check(() => assert.deepEqual(asked, []), `host-command-bypassed: the host was asked ${asked}`);
+  }
+
+  // AC-0039-N02: the bridge through the host's command, and the member's instructions.
+  {
+    const bridgeHome = join(root, 'bridge-home');
+    await mkdir(bridgeHome, { mode: 0o700 });
+    const ran = join(root, 'bridge-ran');
+    const runtime = join(root, 'bridge runtime.sh');
+    writeFileSync(
+      runtime,
+      `#!/bin/sh\n[ "$ORCH_BRIDGE_PREFIX" = on ] || exit 1\necho ran > '${ran}'\nexec ${JSON.stringify(process.execPath)} "$@"\n`,
+    );
+    chmodSync(runtime, 0o755);
+    const calls = [];
+    const asked = [];
+    const MARK = 'ORCH_MEMBER_INSTRUCTIONS_7f3a';
+    // The dispatch helper closes its adapter, so the resumed dispatch gets another one.
+    const make = () =>
+      member(bridgeHome, {
+        config: {
+          toolBridge: {
+            command: runtime,
+            args: [toolBridgeProgram()],
+            env: { ORCH_BRIDGE_PREFIX: 'on' },
+          },
+          instructions: (input) => (
+            asked.push(input.dispatchId),
+            asked.length > 1 ? `${MARK}_AGAIN` : MARK
+          ),
+        },
+      });
+    const tools = {
+      definitions: ORCHESTRATION_TOOLS,
+      async call(name) {
+        calls.push(name);
+        return { ok: true };
+      },
+    };
+    bodies.length = 0;
+    const first = await dispatch(
+      'bridge',
+      make(),
+      () => [
+        { search: 'agent_orch work_read' },
+        { call: 'work_read', args: { request: { kind: 'task', id: 'task' } } },
+      ],
+      { orchestrationTools: tools, permissionProfile: 'read-only' },
+    );
+    const firstBodies = [...bodies];
+    bodies.length = 0;
+    const resumed = await dispatch('bridge-resumed', make(), () => [], {
+      providerSessionId: first.record.thread,
+      permissionProfile: 'read-only',
+    });
+    const count = (list, text) => list.map((body) => body.split(text).length - 1);
+    first.record.bridge = { ran: existsSync(ran), calls: [...calls], asked: [...asked] };
+    first.record.instructions = {
+      first: count(firstBodies, MARK),
+      resumed: count(bodies, MARK),
+      again: count(bodies, `${MARK}_AGAIN`),
+      developer: firstBodies.some((body) =>
+        JSON.parse(body).some(
+          (item) => item.role === 'developer' && JSON.stringify(item.content).includes(MARK),
+        ),
+      ),
+    };
+    check(
+      () => assert.equal(first.record.events.at(-1), 'result'),
+      `bridge ended: ${first.record.events.at(-1)}`,
+    );
+    check(
+      () => assert.equal(resumed.record.events.at(-1), 'result'),
+      `bridge-resumed ended: ${resumed.record.events.at(-1)}`,
+    );
+    check(
+      () =>
+        assert.deepEqual(first.record.bridge, {
+          ran: true,
+          calls: ['work_read'],
+          asked: ['bridge'],
+        }),
+      `bridge: ${JSON.stringify(first.record.bridge)}`,
+    );
+    check(
+      () => {
+        assert.equal(first.record.instructions.developer, true);
+        assert.ok(first.record.instructions.first.every((n) => n === 1));
+        assert.ok(first.record.instructions.resumed.every((n) => n === 1));
+        assert.ok(first.record.instructions.again.every((n) => n === 0));
+      },
+      `instructions: ${JSON.stringify(first.record.instructions)}`,
+    );
   }
 
   // AC-0035-I01: a detached command holds its marker and ends with the dispatch.

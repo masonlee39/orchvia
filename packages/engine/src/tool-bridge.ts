@@ -1,5 +1,6 @@
 import { createServer, createConnection, type Socket } from 'node:net';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -196,7 +197,17 @@ export async function runToolBridge(): Promise<void> {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/** Whether this module is the program, also when it was started through a symbolic link. */
+function isProgram(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isProgram()) {
   runToolBridge().catch(() => {
     process.stderr.write('Tool bridge stopped\n');
     process.exitCode = 1;

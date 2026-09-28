@@ -38,7 +38,7 @@ export type CodexHostMcpServer =
 export interface CodexClientInfo {
   name: string;
   title?: string;
-  version?: string;
+  version: string;
 }
 
 /** The oldest Codex CLI verified with these settings (SPEC-0035 E01). */
@@ -83,13 +83,15 @@ export function clientInfo(value: unknown): CodexClientInfo | undefined {
     typeof info.name !== 'string' ||
     !/^[A-Za-z0-9._-]{1,64}$/.test(info.name) ||
     (info.title !== undefined && typeof info.title !== 'string') ||
-    (info.version !== undefined && typeof info.version !== 'string')
+    // SPEC-0039 K01: Codex's initialize requires the version.
+    typeof info.version !== 'string' ||
+    !info.version
   )
-    invalidConfig('clientInfo');
+    invalidConfig('clientInfo needs name and version');
   return {
     name: info.name,
     ...(info.title ? { title: info.title } : {}),
-    ...(info.version ? { version: info.version } : {}),
+    version: info.version,
   };
 }
 
@@ -523,16 +525,52 @@ export function hostHookCommandFor(options: {
     invalidConfig('hostHookCommandFor needs an absolute runtime');
   if (typeof program !== 'string' || !isAbsolute(program))
     invalidConfig('hostHookCommandFor needs an absolute program');
-  if (typeof env !== 'object' || env === null || Array.isArray(env))
-    invalidConfig('hostHookCommandFor env must be an object');
-  const prefix = Object.entries(env).map(([name, value]) => {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
-      invalidConfig(`hostHookCommandFor env has an invalid name ${JSON.stringify(name)}`);
-    if (typeof value !== 'string' || /[\0\r\n]/.test(value))
-      invalidConfig(`hostHookCommandFor env ${name} must be one line of text`);
-    return `${name}=${quoteShell(value)}`;
-  });
+  const prefix = Object.entries(checkEnv(env, 'hostHookCommandFor env')).map(
+    ([name, value]) => `${name}=${quoteShell(value)}`,
+  );
   return [...prefix, quoteShell(runtime), quoteShell(program)].join(' ');
+}
+
+/** Variables for one child process: POSIX names, one line of text each. */
+function checkEnv(env: unknown, what: string): Record<string, string> {
+  if (typeof env !== 'object' || env === null || Array.isArray(env))
+    invalidConfig(`${what} must be an object`);
+  for (const [name, value] of Object.entries(env)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+      invalidConfig(`${what} has an invalid name ${JSON.stringify(name)}`);
+    if (typeof value !== 'string' || /[\0\r\n]/.test(value))
+      invalidConfig(`${what} ${name} must be one line of text`);
+  }
+  return env as Record<string, string>;
+}
+
+/** SPEC-0039 B01: how Codex starts the orchestration tool bridge. */
+export interface CodexToolBridge {
+  /** An absolute path, run without a shell. */
+  command: string;
+  args?: string[];
+  /** Variables for the bridge process alone. */
+  env?: Record<string, string>;
+}
+export function checkToolBridge(
+  value: unknown,
+): { command: string; args: string[]; env: Record<string, string> } | undefined {
+  if (value === undefined) return undefined;
+  const bridge = value as Record<string, unknown>;
+  if (typeof bridge !== 'object' || bridge === null || Array.isArray(bridge))
+    invalidConfig('toolBridge must be { command, args?, env? }');
+  if (Object.keys(bridge).some((key) => !['command', 'args', 'env'].includes(key)))
+    invalidConfig('toolBridge takes only command, args and env');
+  const line = (text: unknown) => typeof text === 'string' && !/[\0\r\n]/.test(text);
+  if (!line(bridge.command) || !isAbsolute(bridge.command as string))
+    invalidConfig('toolBridge.command must be an absolute path');
+  const args = bridge.args ?? [];
+  if (!Array.isArray(args) || args.length > 32 || !args.every(line))
+    invalidConfig('toolBridge.args must be at most 32 lines of text');
+  const env = checkEnv(bridge.env ?? {}, 'toolBridge.env');
+  if (Object.keys(env).some((name) => name.startsWith('AGENT_ORCH_BRIDGE_')))
+    invalidConfig('toolBridge.env cannot set the AGENT_ORCH_BRIDGE_ variables');
+  return { command: bridge.command as string, args: args as string[], env };
 }
 
 /**
@@ -542,6 +580,17 @@ export function hostHookCommandFor(options: {
 export function hostHookProgram(): string {
   const built = fileURLToPath(new URL('./hook.mjs', import.meta.url));
   return existsSync(built) ? built : fileURLToPath(new URL('./hook.ts', import.meta.url));
+}
+
+/**
+ * SPEC-0039 B02: the orchestration tool bridge a host copies beside its own files: the package's
+ * `tool-bridge.mjs`, which runs with no package beside it, or the engine's module in the repository.
+ */
+export function toolBridgeProgram(): string {
+  const built = fileURLToPath(new URL('./tool-bridge.mjs', import.meta.url));
+  return existsSync(built)
+    ? built
+    : fileURLToPath(new URL('../../engine/src/tool-bridge.ts', import.meta.url));
 }
 
 /** The hook `hooks/list` shows for `command`, if any. */

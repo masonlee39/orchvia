@@ -6,6 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./hook.mjs": "./src/hook.ts"
+    "./hook.mjs": "./src/hook.ts",
+    "./tool-bridge.mjs": "./src/tool-bridge.ts"
   }
 }

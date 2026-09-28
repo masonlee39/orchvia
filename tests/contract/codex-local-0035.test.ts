@@ -229,7 +229,10 @@ test('AC-0035-A01 connection configuration is checked when the adapter is made',
       'networkAccess with connection',
       { executionStop: 'owner-reconcile', connection: { home: paths.home }, networkAccess: true },
     ],
-    ['bad clientInfo', { executionStop: 'owner-reconcile', clientInfo: { name: 'a b' } }],
+    [
+      'bad clientInfo',
+      { executionStop: 'owner-reconcile', clientInfo: { name: 'a b', version: '1' } },
+    ],
     [
       'bad host MCP name',
       { executionStop: 'owner-reconcile', hostMcpServers: { agent_orch: { command: 'x' } } },

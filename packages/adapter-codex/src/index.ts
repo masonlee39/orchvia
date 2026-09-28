@@ -56,6 +56,8 @@ import {
   type CodexHostMcpServer,
   MIN_CODEX_VERSION,
   checkHostHookCommand,
+  checkToolBridge,
+  type CodexToolBridge,
   hostHookChannel,
   hostHookCommand,
   hostHookSetting,
@@ -67,6 +69,7 @@ import {
 } from './local.ts';
 export type {
   CodexClientInfo,
+  CodexToolBridge,
   CodexDispatchPolicy,
   CodexHookDecision,
   CodexHookEvent,
@@ -96,7 +99,7 @@ export {
   type CodexConnectionConfig,
   type CodexHostHookTrust,
 } from './connection.ts';
-export { hostHookCommandFor, hostHookProgram } from './local.ts';
+export { hostHookCommandFor, hostHookProgram, toolBridgeProgram } from './local.ts';
 
 /** The real location of a path that may not exist yet, or null when it cannot be resolved. */
 function canonicalPath(path: string): string | null {
@@ -192,6 +195,17 @@ export interface CodexAdapterConfig {
    */
   hostHookCommand?: string;
   /**
+   * How Codex starts the orchestration tool bridge, instead of this Node running the engine's
+   * module: for a host whose `process.execPath` is not Node, with `toolBridgeProgram()` copied
+   * beside its files (SPEC-0039 B01).
+   */
+  toolBridge?: CodexToolBridge;
+  /**
+   * Instructions for the member, given to Codex as developer instructions when a dispatch starts
+   * a new thread; a resumed or forked thread keeps the ones it started with (SPEC-0039 D).
+   */
+  instructions?: (input: RuntimeInput) => string | undefined | Promise<string | undefined>;
+  /**
    * Marks each zsh and bash command so that a dispatch is proven stopped when nothing holds its
    * marker, as the Claude adapter's `stopMarker`; replaces `executionStop` and the observer
    * (SPEC-0035 I).
@@ -207,6 +221,8 @@ export interface CodexRuntimeAdapter extends RuntimeAdapter {
 
 /** SPEC-0039 H05: the time a hook command has to answer its probe before a dispatch. */
 const HOOK_PROBE_MS = 15_000;
+/** SPEC-0039 D03. */
+const MAX_INSTRUCTIONS_BYTES = 256 * 1024;
 
 function timeout(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : fallback;
@@ -245,10 +261,19 @@ function isolatedEnv(configured?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   };
 }
 
+/** The bridge's default: this Node running the engine's module. */
+function defaultToolBridge(): { command: string; args: string[]; env: Record<string, string> } {
+  return {
+    command: process.execPath,
+    args: [fileURLToPath(new URL('../../engine/src/tool-bridge.ts', import.meta.url))],
+    env: {},
+  };
+}
+
 function defensiveArgs(
   args: string[],
   workspace: string,
-  bridge = false,
+  bridge?: { command: string; args: string[]; env: Record<string, string> },
   host: { entries: string[]; exclude: string[] } = { entries: [], exclude: [] },
   hooks = false,
 ): string[] {
@@ -257,7 +282,13 @@ function defensiveArgs(
   const servers = [
     ...(bridge
       ? [
-          `agent_orch={command=${JSON.stringify(process.execPath)},args=[${JSON.stringify(fileURLToPath(new URL('../../engine/src/tool-bridge.ts', import.meta.url)))}],env_vars=["AGENT_ORCH_BRIDGE_TOKEN","AGENT_ORCH_BRIDGE_SOCKET"],enabled_tools=${JSON.stringify(TOOL_NAMES)},required=true,default_tools_approval_mode="approve"}`,
+          `agent_orch={command=${JSON.stringify(bridge.command)},args=[${bridge.args.map((arg) => JSON.stringify(arg)).join(',')}],${
+            Object.keys(bridge.env).length
+              ? `env={${Object.entries(bridge.env)
+                  .map(([name, value]) => `${name}=${JSON.stringify(value)}`)
+                  .join(',')}},`
+              : ''
+          }env_vars=["AGENT_ORCH_BRIDGE_TOKEN","AGENT_ORCH_BRIDGE_SOCKET"],enabled_tools=${JSON.stringify(TOOL_NAMES)},required=true,default_tools_approval_mode="approve"}`,
         ]
       : []),
     ...host.entries,
@@ -373,6 +404,9 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
   if (config.hostHookCommand !== undefined && config.hostHook === undefined)
     invalidConfig('hostHookCommand needs hostHook');
   const hookCommand = checkHostHookCommand(config.hostHookCommand);
+  const toolBridge = checkToolBridge(config.toolBridge) ?? defaultToolBridge();
+  if (config.instructions !== undefined && typeof config.instructions !== 'function')
+    invalidConfig('instructions must be a function');
   if (local && config.networkAccess !== undefined)
     invalidConfig('with connection, the policy sets the network, not networkAccess');
   const denyRead = checkDenyRead(config.denyRead);
@@ -622,6 +656,39 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
         }
         policy = checked;
       }
+      // SPEC-0039 D01: a new thread takes the member's instructions; Codex keeps them after that.
+      let developerInstructions: string | undefined;
+      if (config.instructions && !input.providerSessionId && !input.forkSource) {
+        let text: unknown;
+        try {
+          text = await config.instructions(input);
+        } catch (error) {
+          yield preSubmission({
+            type: 'error',
+            message: coded(
+              'CODEX_INSTRUCTIONS_INVALID',
+              `instructions failed: ${errorMessage(error)}`,
+            ),
+            outcome: 'failed',
+          });
+          return;
+        }
+        if (
+          text !== undefined &&
+          (typeof text !== 'string' || Buffer.byteLength(text) > MAX_INSTRUCTIONS_BYTES)
+        ) {
+          yield preSubmission({
+            type: 'error',
+            message: coded(
+              'CODEX_INSTRUCTIONS_INVALID',
+              'instructions must return text of at most 256 KiB, or undefined',
+            ),
+            outcome: 'failed',
+          });
+          return;
+        }
+        if (text) developerInstructions = text;
+      }
       // SPEC-0035 I03: commands are marked through zsh's and bash's startup files only.
       const loginShell = markers ? markedLoginShell() : null;
       if (markers && !loginShell) {
@@ -738,7 +805,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
             ...defensiveArgs(
               config.args ?? ['app-server'],
               workspace,
-              !!bridge,
+              bridge ? toolBridge : undefined,
               hostMcp,
               !!config.hostHook,
             ),
@@ -879,6 +946,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
                   }
                 : {}),
               model: input.model,
+              ...(developerInstructions ? { developerInstructions } : {}),
               cwd: input.workspace,
               ...(local ? {} : { sandbox: profile }),
               approvalPolicy: approval,

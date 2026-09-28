@@ -1,6 +1,6 @@
-# SPEC-0039: The host's hook command, and hooks that fail open
+# SPEC-0039: The host's hook and tool bridge commands, hooks that fail open, and member instructions
 
-Date: 2026-09-28. Status: approved by the owner on 2026-09-28 (D-39-1 option 1, D-39-2 option 1). Release: 0.1.16. Extends: SPEC-0035 R and C08, SPEC-0036 and SPEC-0037. Environments: macOS and Linux. Engine, wire schema and storage are unchanged. Evidence: [TDD-0039](../tdd/0039-host-hook-command.md).
+Date: 2026-09-28. Status: approved by the owner on 2026-09-28 (D-39-1 to D-39-6, option 1 each). Release: 0.1.16. Extends: SPEC-0035 R and C08, SPEC-0036 and SPEC-0037. Environments: macOS and Linux. Engine, wire schema and storage are unchanged. Evidence: [TDD-0039](../tdd/0039-host-hook-command.md).
 
 ## Why
 
@@ -28,6 +28,31 @@ Measured while designing the change, with Codex CLI 0.153.4 and 0.157.1 behind a
   - A hook that fails during a call is caught by H06 only once the tool's item starts.
   - H05 runs the command in the adapter's process tree, not under Codex, so a difference between the two environments that Codex introduces is not seen.
 
+## B. The host's tool bridge command
+
+The orchestration tool bridge, the MCP server `agent_orch` that gives a member `work_delegate` and the other orchestration tools, runs `process.execPath` with the engine's `tool-bridge` module: the same problem as the hook in an Electron host, and a module that a bundled host may not be able to resolve. Measured with both Codex versions: a bridge command that cannot be found, or that exits before its handshake, makes Codex refuse the thread (`required MCP servers failed to initialize: agent_orch`), so no turn runs; the bridge fails closed and needs no probe.
+
+- **B01** `createCodexAdapter` takes an optional `toolBridge: { command, args?, env? }`, used for `agent_orch` instead of `process.execPath` and the engine's module:
+  - `command` is an absolute path;
+  - `args` is at most 32 strings;
+  - `env` holds variables for the bridge process alone, with H02's rules for names and values, and no name starting with `AGENT_ORCH_BRIDGE_`, which carries the bridge's socket and token.
+  - No string may contain NUL or a line break.
+  - Left out, the bridge is started as before.
+- **B02** The built package holds `dist/tool-bridge.mjs`, the bridge as one module that imports only `node:` modules and runs wherever it is copied. `@orchvia/adapter-codex/tool-bridge.mjs` resolves to it under every condition, and `toolBridgeProgram()` returns its absolute path (the engine's `tool-bridge.ts` in the repository).
+- **B03** A bridge that does not start ends the dispatch with Codex's error before submission, outcome `failed`, as before.
+
+## K. Client information
+
+- **K01** Codex's `initialize` requires `clientInfo.name` and `clientInfo.version` (both versions' protocol schema; a missing version is refused with `Invalid request: missing field 'version'`). A `clientInfo` without a non-empty `version` string fails `createCodexAdapter` and `codexConnection` with `INVALID_ADAPTER_CONFIG`. Without `clientInfo`, the default `{ name: 'agent_orch', version }` is unchanged.
+
+## D. Member instructions
+
+Measured with both Codex versions behind the loopback gateway: `developerInstructions` exists on `thread/start`, `thread/resume` and `thread/fork`, not on `turn/start`. Given at `thread/start`, it reaches the model as a developer message and stays in the thread. Given again at `thread/resume` or `thread/fork` with other text, Codex ignores it: the model still sees the first text only.
+
+- **D01** `createCodexAdapter` takes an optional `instructions(input) => string | undefined` (or a promise of one). A dispatch that starts a new thread calls it before its app-server starts. It passes a non-empty result as `developerInstructions` on `thread/start`. The text reaches the model and never the task's goal, prompt or events.
+- **D02** A dispatch that resumes or forks a thread does not call `instructions`: the thread keeps the text it was started with. A host that changes a member's instructions starts a new session.
+- **D03** A result that is not a string or undefined, a string over 256 KiB, or a thrown error ends the dispatch before its app-server starts, outcome `failed`, with `CODEX_INSTRUCTIONS_INVALID: …`.
+
 ## M. One marker directory for both adapters
 
 - **M01** `sweepStopMarkers(root)` and `staleStopMarkers(root)`, imported from either `@orchvia/adapter-claude` or `@orchvia/adapter-codex`, cover the markers that Claude and Codex dispatches of earlier instances left under `root`, whichever adapter made them.
@@ -41,18 +66,24 @@ Measured while designing the change, with Codex CLI 0.153.4 and 0.157.1 behind a
 
 ## Acceptance
 
-| ID       | Criterion                                                                                                                                                                            | Test                                                                                    |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
-| 0039-H01 | `hostHookCommand` is validated, reaches the setting, the trust check and `trustHostHook` unchanged; left out, the 0.1.15 command; a different command is refused as untrusted        | `tests/contract/codex-hook-command-0039.test.ts`                                        |
-| 0039-H02 | `hostHookCommandFor` quotes paths with spaces and quotes and a variable prefix, and rejects relative paths and bad names or values; the command it makes runs through a shell        | same                                                                                    |
-| 0039-H03 | The built package has `dist/hook.mjs`, exported as `./hook.mjs`; a copy in a directory without a package denies when it cannot reach the host; `hostHookProgram()` names a real file | same, and `scripts/package-smoke.mjs`                                                   |
-| 0039-H04 | `hostHookTrust` reports trust, hash and whether the command runs, and writes nothing                                                                                                 | `tests/contract/codex-hook-command-0039.test.ts`                                        |
-| 0039-H05 | A missing, failing, silent or chattering hook command refuses the dispatch before its app-server starts; a working one, including one with a variable prefix, passes                 | same                                                                                    |
-| 0039-H06 | A command or file change item the host did not allow interrupts the turn and ends it `HOST_HOOK_BYPASSED`; allowed items, parallel ones included, do not                             | same                                                                                    |
-| 0039-M01 | A sweep from either package ends the commands that a Claude and a Codex dispatch of a dead instance left under one root                                                              | `tests/contract/stop-marker-mixed-0039.test.ts`                                         |
-| 0039-M02 | A synchronous cleanup from either package ends the commands of a running Claude and a running Codex dispatch under one root                                                          | same                                                                                    |
-| 0039-N01 | [Native] Real Codex: a host command with a variable prefix is trusted and asked before each call; a broken command refuses the dispatch; `hostHookTrust` reports both                | `scripts/native-codex-local-smoke.mjs` (CI: macOS and Linux, Codex 0.153.4 and 0.157.1) |
+| ID       | Criterion                                                                                                                                                                                                                   | Test                                                                                    |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| 0039-H01 | `hostHookCommand` is validated, reaches the setting, the trust check and `trustHostHook` unchanged; left out, the 0.1.15 command; a different command is refused as untrusted                                               | `tests/contract/codex-hook-command-0039.test.ts`                                        |
+| 0039-H02 | `hostHookCommandFor` quotes paths with spaces and quotes and a variable prefix, and rejects relative paths and bad names or values; the command it makes runs through a shell                                               | same                                                                                    |
+| 0039-H03 | The built package has `dist/hook.mjs`, exported as `./hook.mjs`; a copy in a directory without a package denies when it cannot reach the host; `hostHookProgram()` names a real file                                        | same, and `scripts/package-smoke.mjs`                                                   |
+| 0039-H04 | `hostHookTrust` reports trust, hash and whether the command runs, and writes nothing                                                                                                                                        | `tests/contract/codex-hook-command-0039.test.ts`                                        |
+| 0039-H05 | A missing, failing, silent or chattering hook command refuses the dispatch before its app-server starts; a working one, including one with a variable prefix, passes                                                        | same                                                                                    |
+| 0039-H06 | A command or file change item the host did not allow interrupts the turn and ends it `HOST_HOOK_BYPASSED`; allowed items, parallel ones included, do not                                                                    | same                                                                                    |
+| 0039-B01 | `toolBridge` is validated; its command, arguments and variables make the `agent_orch` entry, the variables stay out of the app-server's environment; left out, the entry is unchanged                                       | `tests/contract/codex-hook-command-0039.test.ts`                                        |
+| 0039-B02 | `toolBridgeProgram()` serves the orchestration tools over the bridge's channel; the built `dist/tool-bridge.mjs` does so from a copy with no package beside it                                                              | same, and `scripts/package-smoke.mjs`                                                   |
+| 0039-K01 | A `clientInfo` without `version` is refused by the adapter and the connection; one with it reaches `initialize`                                                                                                             | same                                                                                    |
+| 0039-D01 | A new thread gets `instructions`' text as `developerInstructions`; a resumed or forked one neither calls it nor passes it; a bad result, an oversized one or an error ends the dispatch before its app-server starts        | same                                                                                    |
+| 0039-M01 | A sweep from either package ends the commands that a Claude and a Codex dispatch of a dead instance left under one root                                                                                                     | `tests/contract/stop-marker-mixed-0039.test.ts`                                         |
+| 0039-M02 | A synchronous cleanup from either package ends the commands of a running Claude and a running Codex dispatch under one root                                                                                                 | same                                                                                    |
+| 0039-N01 | [Native] Real Codex: a host command with a variable prefix is trusted and asked before each call; a broken command refuses the dispatch; one that fails after the probe is caught as a bypass; `hostHookTrust` reports both | `scripts/native-codex-local-smoke.mjs` (CI: macOS and Linux, Codex 0.153.4 and 0.157.1) |
+
+| 0039-N02 | [Native] Real Codex: a bridge started through `toolBridge` with a variable prefix serves a tool call to the host; the member's instructions reach the model once as a developer message and are not sent again on resume | `scripts/native-codex-local-smoke.mjs` |
 
 ## Rollback
 
-Reverting restores 0.1.15: the fixed command, and a hook that fails open when its command does not start. A host on 0.1.15 should use `hostHook` only where `process.execPath` is a Node binary and the package's files stay in place.
+Reverting restores 0.1.15: the fixed hook and bridge commands, a hook that fails open when its command does not start, no member instructions, and a `clientInfo` without `version` that fails at Codex's `initialize`. A host on 0.1.15 should use `hostHook` only where `process.execPath` is a Node binary and the package's files stay in place.

@@ -6,15 +6,21 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { chmod, copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import {
   codexConnection,
   createCodexAdapter,
   hostHookCommandFor,
   hostHookProgram,
+  toolBridgeProgram,
 } from '../../packages/adapter-codex/src/index.ts';
+import { createToolBridge } from '../../packages/engine/src/tool-bridge.ts';
+import { ORCHESTRATION_TOOLS, TOOL_NAMES } from '../../packages/engine/src/tools.ts';
 import type { RuntimeEvent, RuntimeInput } from '../../packages/engine/src/types.ts';
 
-// SPEC-0039 H: the host's hook command, its program, its trust, and hooks that fail open.
+// SPEC-0039: the host's hook and bridge commands, hooks that fail open, client information and
+// member instructions.
 
 const fixture = fileURLToPath(new URL('../fixtures/codex-local.ts', import.meta.url));
 const sourceHook = fileURLToPath(
@@ -367,4 +373,192 @@ test('AC-0039-H06 an item the host did not allow interrupts the turn', async (t)
       assert.equal(requested(log, 'turn/interrupt').length, 0, name);
     }
   }
+});
+
+const toolsFixture = fileURLToPath(new URL('../fixtures/codex-tools.ts', import.meta.url));
+const engineBridge = fileURLToPath(
+  new URL('../../packages/engine/src/tool-bridge.ts', import.meta.url),
+);
+
+test('AC-0039-B01 toolBridge is checked', () => {
+  for (const [name, toolBridge] of [
+    ['not an object', 'node'],
+    ['relative command', { command: 'node' }],
+    ['args not a list', { command: process.execPath, args: 'x' }],
+    ['too many args', { command: process.execPath, args: Array(33).fill('x') }],
+    ['a line break in an arg', { command: process.execPath, args: ['a\nb'] }],
+    ['a bad name', { command: process.execPath, env: { '1X': '1' } }],
+    ['the bridge channel', { command: process.execPath, env: { AGENT_ORCH_BRIDGE_TOKEN: 'x' } }],
+    ['a value not text', { command: process.execPath, env: { A: 1 } }],
+    ['another key', { command: process.execPath, cwd: '/' }],
+  ] as const)
+    assert.throws(
+      () => createCodexAdapter({ executionStop: 'owner-reconcile', toolBridge } as never),
+      { code: 'INVALID_ADAPTER_CONFIG' },
+      name,
+    );
+});
+
+test('AC-0039-B01 the host bridge command serves the tools, its variables to the bridge alone', async (t) => {
+  const dirs = await paths(t);
+  // A runtime that runs the bridge only with its variable, as Electron runs as Node.
+  const runtime = join(dirs.base, 'bridge runtime.sh');
+  await writeFile(
+    runtime,
+    `#!/bin/sh\n[ "$ORCH_0039_BRIDGE" = on ] || exit 1\necho ran > ${quote(join(dirs.base, 'bridge-ran'))}\nexec ${quote(process.execPath)} "$@"\n`,
+  );
+  await chmod(runtime, 0o755);
+  const envOut = join(dirs.base, 'app-server-env.json');
+  const calls: string[] = [];
+  const configs = {
+    host: { command: runtime, args: [engineBridge], env: { ORCH_0039_BRIDGE: 'on' } },
+    default: undefined,
+  };
+  for (const [name, toolBridge] of Object.entries(configs)) {
+    const adapter = createCodexAdapter({
+      executionStop: 'owner-reconcile',
+      command: process.execPath,
+      args: [toolsFixture],
+      env: { FIXTURE_ENV_OUT: envOut },
+      ...(toolBridge ? { toolBridge } : {}),
+    });
+    const events = await run(adapter, dirs, {
+      dispatchId: name,
+      permissionProfile: 'read-only',
+      orchestrationTools: {
+        definitions: ORCHESTRATION_TOOLS,
+        async call(tool) {
+          calls.push(`${name}:${tool}`);
+          return { ok: true };
+        },
+      },
+    });
+    await adapter.close?.();
+    assert.equal(events.at(-1)?.type, 'result', `${name}: ${JSON.stringify(events)}`);
+    if (name === 'host') {
+      assert.ok(existsSync(join(dirs.base, 'bridge-ran')), 'the host command started the bridge');
+      const names = JSON.parse(readFileSync(envOut, 'utf8')) as string[];
+      assert.equal(names.includes('ORCH_0039_BRIDGE'), false, 'the app-server never has it');
+    }
+  }
+  assert.deepEqual(calls, [
+    ...TOOL_NAMES.map((tool) => `host:${tool}`),
+    ...TOOL_NAMES.map((tool) => `default:${tool}`),
+  ]);
+});
+
+test('AC-0039-B02 toolBridgeProgram serves the tools over the bridge channel', async (t) => {
+  const program = toolBridgeProgram();
+  assert.ok(existsSync(program), program);
+  const control = new AbortController();
+  const bridge = await createToolBridge(
+    { definitions: ORCHESTRATION_TOOLS, call: async () => ({ ok: true }) },
+    control.signal,
+  );
+  t.after(() => bridge.close());
+  const child = spawn(process.execPath, [program], {
+    env: { PATH: process.env.PATH, ...bridge.env },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  t.after(() => child.kill());
+  const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) + '\n');
+  const listed = JSON.parse((await lines.next()).value!);
+  assert.deepEqual(
+    listed.result.tools.map((tool: { name: string }) => tool.name),
+    TOOL_NAMES,
+  );
+});
+
+test('AC-0039-K01 clientInfo needs a version', async (t) => {
+  const dirs = await paths(t);
+  for (const clientInfo of [{ name: 'host' }, { name: 'host', version: '' }]) {
+    assert.throws(
+      () => createCodexAdapter({ executionStop: 'owner-reconcile', clientInfo } as never),
+      { code: 'INVALID_ADAPTER_CONFIG' },
+    );
+    assert.throws(() => codexConnection({ home: dirs.home, clientInfo } as never), {
+      code: 'INVALID_ADAPTER_CONFIG',
+    });
+  }
+  const adapter = member(dirs, {}, { clientInfo: { name: 'host', version: '2.0.0' } });
+  t.after(() => adapter.close?.());
+  await run(adapter, dirs);
+  assert.deepEqual(requested(dirs.log, 'initialize')[0].params.clientInfo, {
+    name: 'host',
+    version: '2.0.0',
+  });
+});
+
+test('AC-0039-D01 a new thread gets the instructions; a resumed or forked one does not', async (t) => {
+  const dirs = await paths(t);
+  const asked: string[] = [];
+  const adapter = member(
+    dirs,
+    {},
+    {
+      instructions: (input) => (asked.push(input.dispatchId), `You review ${input.taskId}.`),
+    },
+  );
+  t.after(() => adapter.close?.());
+  const started = await run(adapter, dirs, { dispatchId: 'new', prompt: 'the goal' });
+  assert.equal(started.at(-1)?.type, 'result', JSON.stringify(started));
+  const [start] = requested(dirs.log, 'thread/start');
+  assert.equal(start.params.developerInstructions, 'You review task.');
+  const [turn] = requested(dirs.log, 'turn/start');
+  assert.deepEqual(
+    turn.params.input,
+    [{ type: 'text', text: 'the goal' }],
+    'the prompt is untouched',
+  );
+  assert.ok(
+    !JSON.stringify(started).includes('You review'),
+    'the text is in no event the engine records',
+  );
+  await run(adapter, dirs, { dispatchId: 'resumed', providerSessionId: 'thread' });
+  await run(adapter, dirs, {
+    dispatchId: 'forked',
+    forkSource: { providerSessionId: 'thread', nativeCheckpoint: 'turn' },
+  } as never);
+  for (const method of ['thread/resume', 'thread/fork'])
+    for (const entry of requested(dirs.log, method))
+      assert.equal(entry.params.developerInstructions, undefined, method);
+  assert.deepEqual(asked, ['new'], 'only the dispatch that starts a thread asks');
+});
+
+test('AC-0039-D01 instructions are checked, and a bad result stops the dispatch before Codex', async (t) => {
+  const dirs = await paths(t);
+  assert.throws(
+    () => createCodexAdapter({ executionStop: 'owner-reconcile', instructions: 'text' } as never),
+    { code: 'INVALID_ADAPTER_CONFIG' },
+  );
+  for (const [name, instructions] of [
+    ['not text', () => 42],
+    ['too long', () => 'x'.repeat(256 * 1024 + 1)],
+    [
+      'throws',
+      () => {
+        throw new Error('no instructions today');
+      },
+    ],
+    [
+      'rejects',
+      async () => {
+        throw new Error('no instructions today');
+      },
+    ],
+  ] as const) {
+    const log = join(dirs.base, `${name.replace(/ /g, '-')}.log`);
+    const adapter = member({ ...dirs, log }, {}, { instructions } as never);
+    const events = await run(adapter, dirs, { dispatchId: name.replace(/ /g, '-') });
+    await adapter.close?.();
+    assert.equal(events.at(-1)?.type, 'error', name);
+    assert.equal(outcome(events), 'failed', name);
+    assert.equal(spawned(log).length, 0, `${name}: no app-server was started`);
+  }
+  // Nothing to say starts the thread without instructions.
+  const quiet = member(dirs, {}, { instructions: () => undefined });
+  t.after(() => quiet.close?.());
+  await run(quiet, dirs, { dispatchId: 'quiet' });
+  assert.equal(requested(dirs.log, 'thread/start')[0].params.developerInstructions, undefined);
 });

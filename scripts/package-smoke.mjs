@@ -235,10 +235,28 @@ assert.match(hostHookCommand(),/dist\\/hook\\.js'$/);
 const copy=${JSON.stringify(join(copied, 'hook.mjs'))};copyFileSync(imported,copy);
 const ran=spawnSync(process.execPath,[copy],{input:'{}',encoding:'utf8',env:{PATH:process.env.PATH,ORCHVIA_HOOK_SOCKET:'/nonexistent/s',ORCHVIA_HOOK_TOKEN:'x'}});
 assert.equal(JSON.parse(ran.stdout).hookSpecificOutput.permissionDecision,'deny',ran.stderr);
+// SPEC-0039 B02: the tool bridge serves the tools from a copy, started through a symbolic link.
+const {toolBridgeProgram}=await import('@orchvia/adapter-codex');
+const {createToolBridge}=await import('@orchvia/engine/internal/tool-bridge');
+const {ORCHESTRATION_TOOLS,TOOL_NAMES}=await import('@orchvia/engine/internal/tools');
+const {symlinkSync}=await import('node:fs');
+const bridgeFile=fileURLToPath(import.meta.resolve('@orchvia/adapter-codex/tool-bridge.mjs'));
+assert.equal(createRequire(import.meta.url).resolve('@orchvia/adapter-codex/tool-bridge.mjs'),bridgeFile);
+assert.equal(toolBridgeProgram(),bridgeFile);
+const bridgeCopy=${JSON.stringify(join(copied, 'tool-bridge.mjs'))};copyFileSync(bridgeFile,bridgeCopy);
+const linked=${JSON.stringify(join(copied, 'linked.mjs'))};symlinkSync(bridgeCopy,linked);
+const bridge=await createToolBridge({definitions:ORCHESTRATION_TOOLS,call:async()=>({ok:true})},new AbortController().signal);
+const listed=spawnSync(process.execPath,[linked],{input:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})+'\\n',encoding:'utf8',env:{PATH:process.env.PATH,...bridge.env},timeout:10000});
+await bridge.close();
+assert.deepEqual(JSON.parse(listed.stdout.split('\\n')[0]).result.tools.map((tool)=>tool.name),TOOL_NAMES,listed.stderr);
 console.log('hook-ok');`,
       );
       assertOutput(run(process.execPath, ['hook.mjs'], { cwd: isolated }), 'hook-ok');
-      results.push({ mode: 'installed-codex-hook-program', standalone: true, modelCalls: 0 });
+      results.push({
+        mode: 'installed-codex-hook-and-bridge-programs',
+        standalone: true,
+        modelCalls: 0,
+      });
     }
     results.push({
       mode: `installed-${selected}-only`,

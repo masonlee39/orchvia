@@ -57,3 +57,36 @@ All on this Mac, with Codex CLI 0.153.4 and 0.157.1, a scratch Codex home, a syn
 The first local run of `host-command-bypassed` failed because the wrapper piped its input into `exec`. That runs `exec` in a subshell, so the wrapper went on to `exit 1` after the probe, and the adapter refused the dispatch with `HOST_HOOK_UNAVAILABLE`, which was correct. The wrapper now passes the input with a here-document.
 
 CI runs the same smoke with 0.157.1 on Ubuntu and macOS and with 0.153.4 on macOS, including the macOS runner with a bash login shell.
+
+## B, K and D: the bridge command, client information and instructions (same release)
+
+Requested after the first part was pushed, and approved on 2026-09-28 (D-39-4, D-39-5 and D-39-6, option 1 each). Measured first, with both Codex versions and the loopback gateway:
+
+- A bridge command that does not exist, or that exits before its handshake, makes Codex refuse the thread: `required MCP servers failed to initialize: agent_orch`.
+- Codex's protocol schema requires `clientInfo.name` and `clientInfo.version`.
+- `developerInstructions` exists on `thread/start`, `thread/resume` and `thread/fork`. Given at the start, it reached the model's request once as a `developer` message. Different text given at a resume or a fork did not reach the model; the first text stayed.
+
+RED, with only `toolBridgeProgram()` added so that the file loads: 4 of 14 failed.
+
+- `AC-0039-B01 toolBridge is checked`: no error was thrown.
+- `AC-0039-B01 the host bridge command serves the tools…`: `the host command started the bridge`. Its first version passed on the unchanged code, since the default bridge served the tools too; the runtime wrapper now leaves a file when it runs.
+- `AC-0039-K01`: a `clientInfo` without `version` was accepted.
+- Both `AC-0039-D01` tests: `instructions` was ignored.
+
+Changes:
+
+- `local.ts`: `checkToolBridge`, a shared `checkEnv`, `toolBridgeProgram`, and a `clientInfo` that needs its version.
+- `index.ts`: `toolBridge` makes the `agent_orch` entry's `command`, `args` and `env`. `instructions` runs before startup only for a new thread, and its text goes on `thread/start` as `developerInstructions`; a bad result ends the dispatch with `CODEX_INSTRUCTIONS_INVALID`.
+- `packages/adapter-codex/src/tool-bridge.ts`: the bridge as a program of the package.
+- `scripts/build-packages.mjs` now bundles each `.mjs` export with esbuild, refused unless it imports only `node:` modules, with the release version in it.
+- The engine's bridge compares its own URL with the real path of the program, so a copy started through a symbolic link, such as one under `/tmp` on macOS, still runs.
+- The tools fixture starts the bridge from the entry's command, arguments and `env`, as Codex does, and can write the app-server's variable names.
+
+GREEN:
+
+- `codex-hook-command-0039.test.ts`, 14 of 14.
+- The built package, installed offline: `tool-bridge.mjs` resolves by `import` and `require` to what `toolBridgeProgram()` returns, and a copy started through a symbolic link lists the four tools over a real bridge channel. With the real-path comparison taken out of that installed copy, the check failed (`Unexpected end of JSON input`: the bridge never ran).
+- Native (0039-N02), locally with 0.153.4 and 0.157.1:
+  - through a runtime that runs the bridge only with its variable, the model's `work_read` call reached the host;
+  - the instructions reached each request of the first dispatch once, as a `developer` message;
+  - the resumed dispatch neither asked for instructions nor sent new ones, and its request still held the first text once.
