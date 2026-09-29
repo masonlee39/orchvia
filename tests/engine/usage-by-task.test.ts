@@ -35,6 +35,7 @@ type TaskTotals = {
   byModel: (Totals & { provider: string; model: string | null })[];
   totals: Totals;
   completeness: 'reported' | 'unknown';
+  reasoningEfforts: string[];
 };
 type ByTask = { tasks: TaskTotals[]; missing: string[] };
 
@@ -162,6 +163,7 @@ test('0029-A01 usage.byTask totals each task’s own records per model, in the o
       byModel: [{ provider: 'fake', model: 'large', ...totals(2) }],
       totals: totals(2),
       completeness: 'reported',
+      reasoningEfforts: [],
     });
     // A task's own records only: the root does not count its children.
     assert.deepEqual(rootTotals.totals, totals(1));

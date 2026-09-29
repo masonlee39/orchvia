@@ -17,6 +17,10 @@ import { createInterface } from 'node:readline';
 // - FIXTURE_HOOKED_ITEMS: JSON [{ hooks?: [PreToolUse input], item }]: for each entry, its hook inputs
 //   run through the hook command, as Codex runs it, then its item starts and completes, as Codex
 //   does whatever the hook answered; the hooks' outputs become the final message;
+// - FIXTURE_MODELS: JSON pages of model/list entries ({ id, hidden?, supportedReasoningEfforts,
+//   defaultReasoningEffort }), paged by `nextCursor`; hidden ones only with includeHidden;
+// - FIXTURE_MODELS_ERROR: model/list fails with this message;
+// - FIXTURE_USAGE: the turn reports one token usage observation before it completes;
 // - FIXTURE_BACKGROUND: a bash command run with the app-server's environment when the turn starts,
 //   whose output (a background process's PID) is logged; the turn then waits for an interrupt.
 const send = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
@@ -89,6 +93,13 @@ let finished = false;
 const finish = (status = 'completed') => {
   if (finished) return;
   finished = true;
+  if (process.env.FIXTURE_USAGE) {
+    const counts = { inputTokens: 20, cachedInputTokens: 0, outputTokens: 4, totalTokens: 24 };
+    send({
+      method: 'thread/tokenUsage/updated',
+      params: { threadId: 'thread', turnId: 'turn', tokenUsage: { last: counts, total: counts } },
+    });
+  }
   const text = process.env.FIXTURE_HOOK_EVENTS
     ? JSON.stringify(hookOutputs())
     : JSON.stringify(answers);
@@ -236,7 +247,19 @@ for await (const line of createInterface({ input: process.stdin })) {
       },
     });
   else if (value.method === 'config/batchWrite') send({ id: value.id, result: { status: 'ok' } });
-  else if (value.method === 'model/list')
+  else if (value.method === 'model/list' && process.env.FIXTURE_MODELS_ERROR)
+    send({ id: value.id, error: { code: -32000, message: process.env.FIXTURE_MODELS_ERROR } });
+  else if (value.method === 'model/list' && process.env.FIXTURE_MODELS) {
+    const pages = JSON.parse(process.env.FIXTURE_MODELS) as { hidden?: boolean }[][];
+    const index = Number(/^page-(\d+)$/.exec(value.params?.cursor ?? '')?.[1] ?? 0);
+    send({
+      id: value.id,
+      result: {
+        data: (pages[index] ?? []).filter((m) => value.params?.includeHidden || !m.hidden),
+        nextCursor: index + 1 < pages.length ? `page-${index + 1}` : null,
+      },
+    });
+  } else if (value.method === 'model/list')
     send({
       id: value.id,
       result: {

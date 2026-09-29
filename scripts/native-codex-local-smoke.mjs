@@ -54,8 +54,11 @@ const check = (run, message) => {
 
 // Each case scripts the model's calls; after the last one the model answers with text.
 let steps = [];
+let lastSearch = null;
 // Each request's input, for the cases that check what reached the model.
 const bodies = [];
+// The reasoning effort of each request, for the effort case.
+const reasonings = [];
 let requests = 0;
 // What the model saw from its last tool call: the next request carries it.
 let toolOutputs = [];
@@ -69,12 +72,28 @@ const gateway = createServer(async (request, response) => {
   if (++requests > 200) return response.writeHead(500).end();
   const body = JSON.parse(raw);
   bodies.push(JSON.stringify(body.input ?? []));
+  reasonings.push(body.reasoning?.effort ?? null);
   for (const entry of body.input ?? [])
     if (/_call_output$/.test(entry.type ?? ''))
       toolOutputs.push(
         typeof entry.output === 'string' ? entry.output : JSON.stringify(entry.output),
       );
+  // SPEC-0042 C03: a search for a tool that is not listed yet, since its MCP server is still
+  // starting, is repeated, up to 20 times, before the next step.
+  if (lastSearch) {
+    const listed = (body.input ?? [])
+      .filter((entry) => entry.type === 'tool_search_output')
+      .flatMap((entry) => entry.tools ?? [])
+      .flatMap((tool) => (tool.type === 'namespace' ? (tool.tools ?? []) : [tool]))
+      .some((tool) => tool.name === lastSearch.until);
+    if (!listed && lastSearch.tries < 20) {
+      steps.unshift({ ...lastSearch, tries: lastSearch.tries + 1 });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    lastSearch = null;
+  }
   const step = steps.shift();
+  if (step?.until) lastSearch = { tries: 0, ...step };
   const n = requests;
   let item;
   if (step?.patch)
@@ -195,6 +214,7 @@ async function dispatch(name, adapter, script, input = {}) {
   await mkdir(workspace, { recursive: true });
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   steps = script(workspace);
+  lastSearch = null;
   toolOutputs = [];
   const record = (evidence.cases[name] = { asked: [], events: [] });
   try {
@@ -225,7 +245,10 @@ async function dispatch(name, adapter, script, input = {}) {
             ? `error:${event.message}`
             : event.type,
       );
-      if (event.type === 'usage') (record.usage ??= []).push(event.usage.inputTokens);
+      if (event.type === 'usage') {
+        (record.usage ??= []).push(event.usage.inputTokens);
+        (record.efforts ??= []).push(event.usage.raw?._reasoningEffort ?? null);
+      }
       if (event.type === 'result') record.thread = event.providerSessionId;
     }
   } finally {
@@ -453,7 +476,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     const { record } = await dispatch(
       name,
       adapter,
-      () => [{ search: 'host_echo' }, { call: 'host_echo' }],
+      () => [{ search: 'host_echo', until: 'host_echo' }, { call: 'host_echo' }],
       { model: 'gpt-6-astra' },
     );
     check(
@@ -868,6 +891,65 @@ createInterface({ input: process.stdin }).on('line', (line) => {
         assert.ok(first.record.instructions.again.every((n) => n === 0));
       },
       `instructions: ${JSON.stringify(first.record.instructions)}`,
+    );
+  }
+
+  // AC-0042-N01: a dispatch's reasoning effort, checked against the model's list.
+  {
+    const effortHome = join(root, 'effort-home');
+    await mkdir(effortHome, { mode: 0o700 });
+    const run = async (name, effort) => {
+      reasonings.length = 0;
+      const before = requests;
+      const { record } = await dispatch(
+        name,
+        member(effortHome, {
+          config: { policy: () => ({ mode: 'auto', ...(effort ? { effort } : {}) }) },
+        }),
+        () => [],
+        { model: 'gpt-5.5', permissionProfile: 'workspace-write' },
+      );
+      record.sent = [...reasonings];
+      record.modelRequests = requests - before;
+      return record;
+    };
+    const high = await run('effort-high', 'high');
+    const unsupported = await run('effort-max', 'max');
+    const fallback = await run('effort-default', undefined);
+    evidence.cases.effort = { high, unsupported, fallback };
+    check(
+      () => {
+        assert.equal(high.events.at(-1), 'result');
+        assert.deepEqual(high.sent, ['high']);
+        assert.deepEqual(high.efforts?.at(-1), {
+          requested: 'high',
+          effective: 'high',
+          source: 'requested',
+        });
+      },
+      `effort-high: ${JSON.stringify(high)}`,
+    );
+    check(
+      () => {
+        assert.match(
+          unsupported.events.at(-1) ?? '',
+          /^error:CODEX_EFFORT_UNSUPPORTED: gpt-5\.5 supports low, medium, high, xhigh; max was requested$/,
+        );
+        assert.equal(unsupported.modelRequests, 0);
+      },
+      `effort-max: ${JSON.stringify(unsupported)}`,
+    );
+    check(
+      () => {
+        assert.equal(fallback.events.at(-1), 'result');
+        assert.deepEqual(fallback.sent, ['medium']);
+        assert.deepEqual(fallback.efforts?.at(-1), {
+          requested: null,
+          effective: 'medium',
+          source: 'modelDefault',
+        });
+      },
+      `effort-default: ${JSON.stringify(fallback)}`,
     );
   }
 

@@ -701,6 +701,8 @@ export interface UsageTaskTotals {
   byModel: UsageModelTotals[];
   totals: UsageTotals;
   completeness: 'reported' | 'unknown';
+  /** SPEC-0042 E05: the efforts the task's records ran with, in first-recorded order. */
+  reasoningEfforts: string[];
 }
 /** The result of `usage.byTask`, each list in the order requested (SPEC-0029 A01). */
 export interface UsageByTaskResult {

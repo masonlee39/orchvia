@@ -68,6 +68,7 @@ class ReadOnlyView implements ReadOnlyEngine {
               taskQueries: true,
               ruleRetirement: true,
               usageByTask: true,
+              reasoningEfforts: true,
             },
           },
         };

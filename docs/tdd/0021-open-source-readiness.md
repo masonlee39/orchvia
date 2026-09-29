@@ -492,6 +492,10 @@ Pull request #66 carried SPEC-0040 and the version 0.1.17. A local Claude Code s
 - Both `registry` jobs failed at 14:07 UTC, eight minutes after npm's publication: `npm view` already showed 0.1.17, but `npm install` got `404 Not Found` for `engine-0.1.17.tgz`. At 14:10 all five archives downloaded. The owner reran the failed jobs, which passed (attempt 3). SPEC-0041 C03 retries `npm install`.
 - The npm registry lists 0.1.17 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.17 with its wheel and sdist.
 
+## The seventeenth release, 0.1.18
+
+Pull request #67 carried SPEC-0041 and the version 0.1.18. One native job failed once before the merge: on the macOS Intel runner, the host MCP case of the local-member smoke searched for the host's tool before its MCP server was ready (`unsupported call: host_echo`), and passed when rerun; SPEC-0042 C03 corrects the case. A local Claude Code session merged the pull request and pushed the tag `v0.1.18` on the merge commit `1452b42`, on the owner's authorization ([36438900364](https://github.com/masonlee39/orchvia/actions/runs/36438900364)). The owner approved the deployments, and every job passed at the first attempt, the registry check included, which now retries `npm install`. npm lists 0.1.18 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.18 with its wheel and sdist.
+
 ## P10: no document names the latest release (D-rel-3)
 
 On 2026-09-27 the owner chose D-rel-3: a release is recorded by the next release pull request, and no document names the latest release.

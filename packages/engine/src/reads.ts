@@ -185,6 +185,20 @@ function usageSummary(store: Store, rootTaskId: string): UsageSummary {
  * Each task's own totals, as `usage.summary` computes a tree's (SPEC-0029 A01): the records of all
  * the tasks come from one statement (A02).
  */
+/**
+ * SPEC-0042 E05: the distinct efforts that a task's records report as `raw._reasoningEffort`, the
+ * convention of the Codex adapter, in the order they were first recorded.
+ */
+function reasoningEfforts(records: UsageRecord[]): string[] {
+  const seen = new Set<string>();
+  for (const record of records) {
+    const effort = (record.raw as { _reasoningEffort?: { effective?: unknown } } | null)
+      ?._reasoningEffort?.effective;
+    if (typeof effort === 'string') seen.add(effort);
+  }
+  return [...seen];
+}
+
 function usageByTask(store: Store, ids: string[]): UsageByTaskResult {
   const found = store.existingTaskIds(ids);
   const present = ids.filter((id) => found.has(id));
@@ -192,7 +206,11 @@ function usageByTask(store: Store, ids: string[]): UsageByTaskResult {
   for (const record of store.usageOfTasks(present)) records.get(record.taskId)?.push(record);
   const modelOf = modelResolver(store);
   return {
-    tasks: present.map((taskId) => ({ taskId, ...modelTotals(records.get(taskId)!, modelOf) })),
+    tasks: present.map((taskId) => ({
+      taskId,
+      ...modelTotals(records.get(taskId)!, modelOf),
+      reasoningEfforts: reasoningEfforts(records.get(taskId)!),
+    })),
     missing: ids.filter((id) => !found.has(id)),
   };
 }
