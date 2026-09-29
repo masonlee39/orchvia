@@ -29,6 +29,19 @@ Complete each increment in this order:
 5. Run relevant tests and `npm run typecheck`. Shared wire or lifecycle changes require both `npm test` and `npm run test:python`.
 6. Update the specification, runnable README examples, and verification evidence. Distinguish future interfaces from implemented behavior.
 
+## Tests that depend on time
+
+CI runners are several times slower than a developer's machine, and slower still when busy. Every CI flake so far came from a test that assumed otherwise ([docs/ci-flakes.md](docs/ci-flakes.md)). A test that depends on time:
+
+- takes its clock from `EngineClock`, which the engine accepts through its configuration, instead of waiting for a real deadline, lifetime or interval of under a second;
+- waits for a condition, polling with a bound of at least 10 seconds, instead of sleeping a fixed time; the bound only ends a test that is failing anyway;
+- waits for a socket, server or tool to say it is ready before using it;
+- asserts what happened, not how many milliseconds it took. A product bound, such as a cleanup deadline, is asserted with the engine's clock, or with a margin measured under load.
+
+Before pushing such a test, run it under load: `node scripts/stress.mjs --copies 6 -- node --import ./tests/fixtures/reserve-guard.mjs --test <files>` keeps every core busy and runs six copies at once. The weekly stress workflow runs the whole suite the same way. When a CI run passes only on a second attempt, find the cause and record it in [docs/ci-flakes.md](docs/ci-flakes.md).
+
+## Test environment
+
 Ordinary tests use temporary workspace/stateDir directories and a deterministic fake runtime, without login credentials or paid model requests. A test engine uses a 4 KiB emergency reserve (`storage: { emergencyBytes: 4096 }`); the test commands fail any other process that would write a larger one, except the runnable examples. Real Claude/Codex acceptance must separately record versions, identity sources, task budgets, and model results; fake fixtures cannot prove it.
 
 The foundation assumes a trusted local boundary under one OS user. Contributions must not silently expand network listeners, tool permissions, directory access, or automatic recovery. Preserve unknown external outcomes without blind retries. Generated idempotency keys must remain available for recovery after a lost receipt.

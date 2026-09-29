@@ -264,6 +264,16 @@ the session clears its active dispatch. Conflicts survive restart and all open c
 must be resolved before dispatch resumes; resolution does not rewrite business outcomes
 or acceptance history. Keep the same key when recovering a lost receipt.
 
+## Steer a running turn
+
+Where the host lists `workflow.steer`, `await orch.sessions.steer(target, text,
+idempotency_key=...)` adds a line to the turn a Codex member is running, without interrupting
+it, and returns an `OperationHandle` (SPEC-0048). `target` is `{"session_id",
+"expected_generation", "expected_dispatch_id"}`. A turn that is not running raises
+`STEER_TURN_ENDED`, whose `error.data` holds `turnOutcome` and `taskStatus`; nothing is queued
+for a later turn. The operation ends `completed`, or with `STEER_TURN_ENDED`,
+`STEER_NOT_STEERABLE`, `STEER_REJECTED` or `STEER_OUTCOME_UNKNOWN`, and is never sent twice.
+
 ## Reconcile an unknown outcome as the owner
 
 `await orch.sessions.reconcile(target, evidence, idempotency_key=...)` returns an

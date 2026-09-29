@@ -58,6 +58,7 @@ import type {
   RuntimeCapabilities,
   EngineRuntimeInput,
   RuntimeEvent,
+  RuntimeSteerAnswer,
   RuntimeUsageEvent,
   UsageRecord,
   Json,
@@ -2005,6 +2006,7 @@ class LocalEngine implements Engine {
         ![
           'tasks.create',
           'messages.send',
+          'sessions.steer',
           'sessions.open',
           'sessions.fork',
           'sessions.compact',
@@ -2122,6 +2124,17 @@ class LocalEngine implements Engine {
           code: 'OUTCOME_UNKNOWN',
           message: 'Previous owner exited before operation completion',
         };
+        // SPEC-0048 S05: a steer the runtime never answered may or may not have reached it.
+        if (op.method === 'sessions.steer') {
+          op.error = {
+            code: 'STEER_OUTCOME_UNKNOWN',
+            message: 'The previous owner exited before the runtime answered the steer',
+          };
+          const messageId = (op.result as { messageId?: string } | null)?.messageId;
+          const message = messageId && this.store.get<MessageSnapshot>('messages', messageId);
+          if (message && message.status === 'dispatching')
+            this.store.put('messages', message.id, { ...message, status: 'outcome_unknown' });
+        }
         if (op.lifecycle && Date.parse(op.lifecycle.deadlineAt) <= this.wall())
           op.lifecycle.expiredAt ??= this.time();
         this.store.saveOperation(op);
@@ -2626,6 +2639,7 @@ class LocalEngine implements Engine {
               usageByTask: true,
               reasoningEfforts: true,
               reconcileRecordedResult: true,
+              steer: true,
             },
             providers: [...this.adapters.keys()],
             lifecycle: { version: 1, reconcile: 'owner-attestation', durableDeadlines: true },
@@ -3142,6 +3156,8 @@ class LocalEngine implements Engine {
       }
       case 'sessions.control':
         return this.control(p, context);
+      case 'sessions.steer':
+        return this.steer(p, context);
       case 'sessions.reconcile':
         if (!context.owner)
           fail('UNAUTHORIZED', 'Only the host owner may attest reconciliation evidence');
@@ -3620,6 +3636,157 @@ class LocalEngine implements Engine {
     }
   }
 
+  /** SPEC-0048: what a steer's dispatch and task are now, for STEER_TURN_ENDED's data. */
+  private turnState(dispatchId: string, task: TaskSnapshot) {
+    const dispatch = this.store.get<Dispatch & { taskId?: string }>('dispatches', dispatchId);
+    const terminal = dispatch?.terminalEvidence as RuntimeEvent | undefined;
+    const turnOutcome =
+      terminal?.type === 'result'
+        ? 'completed'
+        : terminal?.type === 'interrupted'
+          ? 'interrupted'
+          : terminal?.type === 'error' && terminal.outcome === 'failed'
+            ? 'failed'
+            : !terminal && dispatch?.status === 'completed'
+              ? 'completed'
+              : 'unknown';
+    const owner =
+      (dispatch?.taskId && this.store.get<TaskSnapshot>('tasks', dispatch.taskId)) || task;
+    return { dispatchId, turnOutcome, taskStatus: owner.status };
+  }
+  /** Whether `dispatchId` is the session's running turn, not yet ended (SPEC-0048 S02). */
+  private turnRunning(sessionId: string, dispatchId: string): boolean {
+    const flight = this.flights.get(sessionId);
+    if (flight?.dispatchId !== dispatchId) return false;
+    const dispatch = this.store.get<Dispatch>('dispatches', dispatchId);
+    return !dispatch?.terminalEvidence && this.task(flight.taskId).status === 'running';
+  }
+  private steer(p: Record<string, unknown>, context: CallContext): OperationSnapshot {
+    if (context.runtimeActor) fail('UNAUTHORIZED', 'Only a client may steer a turn');
+    fields(p, ['target', 'text', 'idempotencyKey']);
+    const target = object(p.target, 'target');
+    fields(target, ['sessionId', 'expectedGeneration', 'expectedDispatchId', 'expectedRevision']);
+    const sessionId = string(target.sessionId, 'sessionId', 128);
+    integer(target.expectedGeneration, 'expectedGeneration', 1);
+    const dispatchId = string(target.expectedDispatchId, 'expectedDispatchId', 128);
+    if (target.expectedRevision !== undefined)
+      integer(target.expectedRevision, 'expectedRevision', 1);
+    const text = p.text;
+    if (typeof text !== 'string' || !text.length || Buffer.byteLength(text) > 16_384)
+      fail('VALIDATION_ERROR', 'text must be 1 to 16384 UTF-8 bytes');
+    let created: { session: SessionSnapshot; messageId: string } | undefined;
+    const op = this.operation(
+      'sessions.steer',
+      sessionId,
+      string(p.idempotencyKey, 'idempotencyKey'),
+      { target, text },
+      (op) => {
+        this.admitWork();
+        const session = this.session(sessionId);
+        op.targetId = sessionId;
+        const adapter = this.adapters.get(session.provider);
+        if (!adapter?.steer || readRuntimeCapabilities(adapter).steer !== true)
+          fail('UNSUPPORTED_CAPABILITY', 'This runtime cannot be steered');
+        if (
+          session.generation !== target.expectedGeneration ||
+          (target.expectedRevision !== undefined && session.revision !== target.expectedRevision)
+        )
+          fail('STALE_TARGET', 'Steer target changed');
+        if (session.status === 'closed') fail('SESSION_CLOSED', 'The session is stopped');
+        const task = this.associatedTask(session);
+        if (!this.turnRunning(sessionId, dispatchId))
+          fail('STEER_TURN_ENDED', 'The turn is not running', this.turnState(dispatchId, task));
+        // Invariant 1: recorded, never to be delivered in a prompt, before the runtime is asked.
+        const messageId = randomUUID();
+        this.store.put('messages', messageId, {
+          id: messageId,
+          fromSessionId: 'client:local',
+          idempotencyKey: op.idempotencyKey,
+          status: 'dispatching',
+          taskId: task.id,
+          toSessionId: sessionId,
+          expectedGeneration: session.generation,
+          kind: 'steer',
+          summary: text,
+          dispatchId,
+          createdAt: this.time(),
+        } as MessageSnapshot);
+        op.status = 'persisted';
+        op.result = { messageId, dispatchId };
+        created = { session, messageId };
+      },
+    );
+    if (created)
+      void this.deliverSteer(op.id, created.session, dispatchId, created.messageId, text);
+    return op;
+  }
+  /** SPEC-0048 S04, C02: asks the runtime once, then records its answer. */
+  private async deliverSteer(
+    operationId: string,
+    session: SessionSnapshot,
+    dispatchId: string,
+    messageId: string,
+    text: string,
+  ): Promise<void> {
+    let answer: RuntimeSteerAnswer | undefined;
+    try {
+      answer = await this.adapters.get(session.provider)!.steer!(
+        { sessionId: session.id, dispatchId, generation: session.generation },
+        text,
+        messageId,
+      );
+    } catch {
+      answer = undefined;
+    }
+    // Codex may answer before its notification that the turn ended arrives.
+    if (answer?.status === 'rejected' && !answer.turnEnded && !answer.notSteerable) {
+      const deadline = this.clock.monotonicNow() + 2000;
+      while (this.clock.monotonicNow() < deadline && this.turnRunning(session.id, dispatchId))
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      if (!this.turnRunning(session.id, dispatchId)) answer = { ...answer, turnEnded: true };
+    }
+    try {
+      this.store.transaction(() => {
+        const op = this.store.operation(operationId);
+        const message = this.store.get<MessageSnapshot>('messages', messageId);
+        if (op.status !== 'persisted' || !message) return;
+        const task = this.task(message.taskId);
+        if (answer?.status === 'accepted') {
+          message.status = 'completed';
+          op.status = 'completed';
+          this.store.event(
+            'session.steered',
+            { dispatchId, taskId: task.id, messageId, text },
+            { taskId: task.id, sessionId: session.id, operationId },
+          );
+        } else if (answer) {
+          message.status = 'failed';
+          op.status = 'failed';
+          op.error = answer.turnEnded
+            ? {
+                code: 'STEER_TURN_ENDED',
+                message: 'The turn ended before the steer reached it',
+                data: this.turnState(dispatchId, task),
+              }
+            : answer.notSteerable
+              ? { code: 'STEER_NOT_STEERABLE', message: answer.message }
+              : { code: 'STEER_REJECTED', message: answer.message };
+        } else {
+          message.status = 'outcome_unknown';
+          op.status = 'outcome_unknown';
+          op.error = {
+            code: 'STEER_OUTCOME_UNKNOWN',
+            message: 'The runtime gave no answer; the steer may or may not have reached the turn',
+          };
+        }
+        this.store.put('messages', messageId, message);
+        this.store.saveOperation(op);
+        this.store.event('operation.updated', { status: op.status }, { operationId });
+      });
+    } catch {
+      // A host that closed meanwhile leaves the steer persisted; its next start records it unknown.
+    }
+  }
   private control(p: Record<string, unknown>, context: CallContext): OperationSnapshot {
     fields(p, ['target', 'command', 'idempotencyKey']);
     const target = object(p.target, 'target');

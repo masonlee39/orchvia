@@ -60,8 +60,25 @@ class MessageQueue {
   }
 }
 
+/** A JSON-RPC error answer: the request reached Codex, which refused it (SPEC-0048 C01). */
+export class AppServerRequestError extends Error {
+  readonly code: unknown;
+  readonly data: unknown;
+  constructor(message: string, code: unknown, data: unknown) {
+    super(message);
+    this.name = 'AppServerRequestError';
+    this.code = code;
+    this.data = data;
+  }
+}
+
 export class AppServerConnection {
   private child: ChildProcessWithoutNullStreams;
+  /** Answers routed by id to `callWhileReading`, beside the reader of the turn's messages. */
+  private waiters = new Map<
+    unknown,
+    { resolve: (message: Message) => void; reject: (error: Error) => void }
+  >();
   private queue = new MessageQueue();
   private deferred: Message[] = [];
   private nextId = 0;
@@ -108,6 +125,12 @@ export class AppServerConnection {
         try {
           const message = record(JSON.parse(line));
           if (!message) throw new Error('non-object message');
+          const waiter = message.method === undefined ? this.waiters.get(message.id) : undefined;
+          if (waiter) {
+            this.waiters.delete(message.id);
+            waiter.resolve(message);
+            continue;
+          }
           if (!this.queue.push(message)) {
             this.protocolError = 'Codex app-server queue limit exceeded';
             this.queue.push(null);
@@ -134,7 +157,51 @@ export class AppServerConnection {
       this.protocolError = error.message;
       this.queue.push(null);
     });
-    child.on('close', () => this.queue.push(null));
+    child.on('close', () => {
+      this.queue.push(null);
+      this.failWaiters();
+    });
+  }
+  private failWaiters(): void {
+    for (const waiter of this.waiters.values())
+      waiter.reject(new Error(this.protocolError ?? 'Codex app-server disconnected'));
+    this.waiters.clear();
+  }
+  /**
+   * SPEC-0048 C01: a request sent while another reader consumes the turn's messages. Its answer
+   * is routed to it by id and never reaches that reader. A JSON-RPC error rejects with
+   * `AppServerRequestError`; a closed connection or the timeout with a plain error.
+   */
+  callWhileReading(method: string, params: Message, timeoutMs: number): Promise<Message> {
+    if (this.shutdownRequested || this.exitConfirmed)
+      return Promise.reject(new Error('Codex app-server connection is closed'));
+    const id = ++this.nextId;
+    return new Promise<Message>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.waiters.delete(id);
+        reject(new Error(`${method} got no answer within ${timeoutMs} ms`));
+      }, timeoutMs);
+      this.waiters.set(id, {
+        resolve: (message) => {
+          clearTimeout(timer);
+          if (message.error) {
+            const failure = record(message.error);
+            reject(
+              new AppServerRequestError(
+                typeof failure?.message === 'string' ? failure.message : `${method} failed`,
+                failure?.code,
+                failure?.data,
+              ),
+            );
+          } else resolve(record(message.result) ?? {});
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.child.stdin.write(JSON.stringify({ method, id, params }) + '\n');
+    });
   }
   send(method: string, params?: Message): number {
     if (this.shutdownRequested || this.exitConfirmed)
@@ -195,6 +262,7 @@ export class AppServerConnection {
     this.shutdownRequested = true;
     this.deferred = [];
     this.queue.push(null);
+    this.failWaiters();
     const closing = this.stop();
     this.closing = closing;
     void closing.then(

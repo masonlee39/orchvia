@@ -212,7 +212,7 @@ function member(home, options = {}) {
     ...options.config,
   });
 }
-async function dispatch(name, adapter, script, input = {}) {
+async function dispatch(name, adapter, script, { onEvent, ...input } = {}) {
   const workspace = join(root, name);
   const stateDir = join(root, `${name}-state`);
   await mkdir(workspace, { recursive: true });
@@ -245,6 +245,7 @@ async function dispatch(name, adapter, script, input = {}) {
       },
       ...input,
     })) {
+      onEvent?.(event);
       record.events.push(
         event.type === 'result'
           ? 'result'
@@ -404,6 +405,50 @@ try {
     });
     accounted(first.record, 'usage first');
     accounted(second.record, 'usage resumed');
+  }
+
+  // AC-0048-N01: a steer reaches the running turn while a command runs, and while an approval
+  // waits; after the turn it is refused as ended, without a request.
+  {
+    const target = (name) => ({ sessionId: name, dispatchId: name, generation: 1 });
+    const running = member(home, { config: { policy: () => ({ mode: 'auto' }) } });
+    let during;
+    const first = await dispatch('steer-running', running, () => [{ cmd: 'sleep 3' }], {
+      onEvent: (event) => {
+        if (event.type === 'accepted')
+          during = new Promise((resolve) => setTimeout(resolve, 1000)).then(() =>
+            running.steer(target('steer-running'), 'STEER-RUNNING', 'steer-1'),
+          );
+      },
+    });
+    first.record.steer = await during;
+    first.record.steerReached = bodies.some((body) => body.includes('STEER-RUNNING'));
+    first.record.late = await running.steer(target('steer-running'), 'late', 'steer-2');
+    check(
+      () => assert.deepEqual(first.record.steer, { status: 'accepted' }),
+      'steer while a command runs',
+    );
+    check(() => assert.equal(first.record.steerReached, true), 'the steer reached the model');
+    check(
+      () => assert.equal(first.record.late?.turnEnded, true),
+      `a steer after the turn: ${JSON.stringify(first.record.late)}`,
+    );
+    const asking = member(home, { config: { policy: () => ({ mode: 'default' }) } });
+    let answer;
+    const second = await dispatch('steer-approval', asking, () => [{ cmd: 'echo approved' }], {
+      async requestPermission() {
+        // Steered while the approval waits; the approval is still the host's to give.
+        answer = await asking.steer(target('steer-approval'), 'STEER-PENDING', 'steer-3');
+        return true;
+      },
+    });
+    second.record.steer = answer;
+    second.record.steerReached = bodies.some((body) => body.includes('STEER-PENDING'));
+    check(() => assert.deepEqual(answer, { status: 'accepted' }), 'steer while an approval waits');
+    check(
+      () => assert.equal(second.record.steerReached, true),
+      'the steer reached the model after approval',
+    );
   }
 
   // AC-0035-N02, N03, N04: direct network through the proxy.

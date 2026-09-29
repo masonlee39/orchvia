@@ -1,0 +1,76 @@
+# SPEC-0046 S01: the contract tests in several copies at once while every core is kept busy, every
+# week. A test that depends on time and passes only on an idle runner fails here before it fails a
+# pull request. It opens no issue and changes no file: its summary lists each copy's result and the
+# tests that failed, and a failed copy fails the run.
+name: Stress
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+    inputs:
+      copies:
+        description: 'Copies of the tests run at once (1 to 6)'
+        required: false
+        default: '3'
+
+permissions:
+  contents: read
+
+jobs:
+  stress:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Node 22 applies --test-timeout to a whole file, Node 24 to each test.
+          - os: ubuntu-24.04
+            node: 22.18.0
+            python: 3.11.13
+          - os: ubuntu-24.04
+            node: 24.14.0
+            python: 3.14.6
+          - os: macos-14
+            node: 24.14.0
+            python: 3.14.6
+          - os: macos-15-intel
+            node: 24.14.0
+            python: 3.14.6
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: npm ci --ignore-scripts
+      - name: Node contract tests under load
+        id: node
+        continue-on-error: true
+        env:
+          COPIES: ${{ inputs.copies || '3' }}
+        run: node scripts/stress.mjs --copies "$COPIES" --summary "$GITHUB_STEP_SUMMARY" --logs dist/stress/node
+      - name: Python contract tests under load
+        id: python
+        continue-on-error: true
+        env:
+          COPIES: ${{ inputs.copies || '3' }}
+        run: node scripts/stress.mjs --copies "$COPIES" --summary "$GITHUB_STEP_SUMMARY" --logs dist/stress/python -- npm run test:python
+      - name: Result
+        if: ${{ always() }}
+        env:
+          NODE_OUTCOME: ${{ steps.node.outcome }}
+          PYTHON_OUTCOME: ${{ steps.python.outcome }}
+        run: |
+          echo "Node: $NODE_OUTCOME, Python: $PYTHON_OUTCOME"
+          [ "$NODE_OUTCOME" = success ] && [ "$PYTHON_OUTCOME" = success ]
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() }}
+        with:
+          name: stress-${{ matrix.os }}-node-${{ matrix.node }}
+          path: dist/stress/
+          if-no-files-found: ignore

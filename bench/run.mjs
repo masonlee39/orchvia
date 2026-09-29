@@ -16,6 +16,7 @@ import { createFakeAdapter } from '../packages/engine/src/fake.ts';
 import { createClaudeAdapter } from '../packages/adapter-claude/src/index.ts';
 import { startGateway } from './gateway.mjs';
 import { executionStopped } from './stop.mjs';
+import { continuesTotals, costOf, directUsage, engineUsage, PRICES, priceFor } from './meter.mjs';
 
 const run = promisify(execFile);
 const bench = dirname(fileURLToPath(import.meta.url));
@@ -46,21 +47,20 @@ const gateway = args.gateway;
 assert.ok(!(fake && gateway), '--fake and --gateway exclude each other');
 const requests = JSON.parse(await readFile(join(bench, 'requests.json'), 'utf8'));
 
-// US dollars per million tokens: Anthropic's list prices, checked on 2026-09-23 at
-// https://platform.claude.com/docs/en/about-claude/pricing. Every arm prices cache writes at the
-// 5-minute rate, because the engine's usage records do not separate 1-hour writes ($4). A
-// subscription plan is not billed per token; the estimate then measures usage, not a bill.
-const PRICES = { 'claude-sonnet-5': { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 } };
-const price = PRICES[model];
-if (!fake) assert.ok(price, `no list price for ${model}; add it to PRICES`);
-const costOf = (u) =>
-  price
-    ? (u.input * price.input +
-        u.output * price.output +
-        u.cacheRead * price.cacheRead +
-        u.cacheWrite * price.cacheWrite) /
-      1e6
-    : 0;
+// SPEC-0047: every arm is metered by bench/meter.mjs and priced per model there.
+if (!fake) assert.ok(priceFor(model), `no list price for ${model}; add it to bench/meter.mjs`);
+/** A request's estimated cost: known when every part's is; the budget counts the known part. */
+function priced(usage) {
+  const parts = [usage.main, ...usage.outside].map(costOf);
+  const known = parts.reduce((total, part) => total + (part.usd ?? 0), 0);
+  const unpriced = parts.filter((part) => part.usd === null).length;
+  return {
+    costUsd: unpriced ? null : known,
+    knownCostUsd: known,
+    unpricedParts: unpriced,
+    cacheWriteAt5mRate: parts.some((part) => part.estimated5m),
+  };
+}
 
 // Every arm gets the same tools, permission mode, settings isolation and sandbox, matching the
 // engine's writable Claude profile. Node lives in the home directory on some machines, and the
@@ -142,13 +142,25 @@ async function check(workspace, request) {
   return result;
 }
 
-const zero = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+const zeroPart = (name = model) => ({
+  model: name,
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+});
+const zero = () => ({ main: zeroPart(), outside: [], total: zeroPart('*') });
 
 /** One request through the Claude Agent SDK directly, as a host without the engine would do. */
-async function sdkRequest(workspace, request, resume) {
+async function sdkRequest(workspace, request, resume, previousTotals) {
   if (fake) {
     await applySolution(workspace, request.id);
-    return { sessionId: resume ?? `fake-${request.id}`, usage: zero(), reportedCostUsd: null };
+    return {
+      sessionId: resume ?? `fake-${request.id}`,
+      usage: zero(),
+      totals: {},
+      reportedCostUsd: null,
+    };
   }
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   let result;
@@ -169,16 +181,19 @@ async function sdkRequest(workspace, request, resume) {
   }))
     if (message.type === 'result') result = message;
   assert.ok(result, 'the SDK returned no result');
-  const u = result.usage ?? {};
+  // A resumed session's totals continue from its previous request (SPEC-0047 M01).
+  const continues = continuesTotals((await claudeVersions())?.claudeCode);
+  const { totals, ...usage } = directUsage(
+    result,
+    model,
+    resume ? previousTotals : undefined,
+    continues,
+  );
   return {
     sessionId: result.session_id,
     ok: result.subtype === 'success',
-    usage: {
-      input: u.input_tokens ?? 0,
-      output: u.output_tokens ?? 0,
-      cacheRead: u.cache_read_input_tokens ?? 0,
-      cacheWrite: u.cache_creation_input_tokens ?? 0,
-    },
+    usage,
+    totals,
     reportedCostUsd: result.total_cost_usd ?? null,
   };
 }
@@ -189,16 +204,19 @@ async function sdkArm(arm, rep) {
   const rows = [];
   const started = performance.now();
   let session;
+  let totals;
   try {
     for (const request of requests) {
       if (overBudget()) break;
       const begin = performance.now();
-      const turn = await sdkRequest(workspace, request, arm === 'single' ? session : undefined);
+      const resume = arm === 'single' ? session : undefined;
+      const turn = await sdkRequest(workspace, request, resume, totals);
       const end = performance.now();
       session = turn.sessionId;
+      totals = turn.totals;
       const pass = await check(workspace, request);
-      const costUsd = costOf(turn.usage);
-      spent.usd += costUsd;
+      const cost = priced(turn.usage);
+      spent.usd += cost.knownCostUsd;
       rows.push({
         id: request.id,
         track: request.track,
@@ -206,7 +224,7 @@ async function sdkArm(arm, rep) {
         endMs: Math.round(end - started),
         wallMs: Math.round(end - begin),
         usage: turn.usage,
-        costUsd,
+        ...cost,
         reportedCostUsd: turn.reportedCostUsd,
         pass,
       });
@@ -298,15 +316,10 @@ async function orchviaArm(rep) {
         : await task.wait({ timeoutMs: 1_800_000 });
       const end = performance.now();
       session = done.sessionId;
-      const usage = zero();
-      for (const record of (await orch.usage.get(task.id)).records) {
-        usage.input += record.inputTokens ?? 0;
-        usage.output += record.outputTokens ?? 0;
-        usage.cacheRead += record.cachedInputTokens ?? 0;
-        usage.cacheWrite += record.cacheWriteInputTokens ?? 0;
-      }
-      const costUsd = costOf(usage);
-      spent.usd += costUsd;
+      const records = (await orch.usage.get(task.id)).records;
+      const usage = fake ? zero() : engineUsage(records, model);
+      const cost = priced(usage);
+      spent.usd += cost.knownCostUsd;
       rows.push({
         id: request.id,
         track: name,
@@ -316,7 +329,7 @@ async function orchviaArm(rep) {
         endMs: Math.round(end - started),
         wallMs: Math.round(end - begin),
         usage,
-        costUsd,
+        ...cost,
         reportedCostUsd: null,
         pass: pass ?? { hidden: false, own: false },
       });
@@ -340,21 +353,42 @@ try {
     for (const arm of arms) {
       if (overBudget()) break;
       const result = arm === 'orchvia' ? await orchviaArm(rep) : await sdkArm(arm, rep);
-      const totals = result.rows.reduce(
-        (sum, row) => ({
-          input: sum.input + row.usage.input,
-          output: sum.output + row.usage.output,
-          cacheRead: sum.cacheRead + row.usage.cacheRead,
-          cacheWrite: sum.cacheWrite + row.usage.cacheWrite,
-          costUsd: sum.costUsd + row.costUsd,
-          passed: sum.passed + (row.pass.hidden && row.pass.own ? 1 : 0),
-        }),
-        { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0, passed: 0 },
-      );
+      // Main loop and outside it apart; a count unknown in any request is unknown in the total.
+      const add = (a, b) => (a === null || b === null ? null : a + b);
+      const part = (pick) =>
+        result.rows.reduce(
+          (sum, row) =>
+            Object.fromEntries(
+              ['input', 'output', 'cacheRead', 'cacheWrite'].map((field) => [
+                field,
+                add(
+                  sum[field],
+                  pick(row.usage).reduce((n, p) => add(n, p[field]), 0),
+                ),
+              ]),
+            ),
+          { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        );
+      const main = part((usage) => [usage.main]);
+      const outside = part((usage) => usage.outside);
+      const totals = {
+        main,
+        outside,
+        input: add(main.input, outside.input),
+        output: add(main.output, outside.output),
+        cacheRead: add(main.cacheRead, outside.cacheRead),
+        cacheWrite: add(main.cacheWrite, outside.cacheWrite),
+        costUsd: result.rows.some((row) => row.costUsd === null)
+          ? null
+          : result.rows.reduce((total, row) => total + row.costUsd, 0),
+        knownCostUsd: result.rows.reduce((total, row) => total + row.knownCostUsd, 0),
+        passed: result.rows.reduce((n, row) => n + (row.pass.hidden && row.pass.own ? 1 : 0), 0),
+      };
       runs.push({ arm, rep, wallMs: result.wallMs, requests: result.rows, totals });
       console.log(
         `${arm} #${rep}: ${totals.passed}/${requests.length} passed, ${(result.wallMs / 1000).toFixed(1)} s, ` +
-          `$${totals.costUsd.toFixed(4)} (in ${totals.input}, cache read ${totals.cacheRead}, ` +
+          `${totals.costUsd === null ? `at least $${totals.knownCostUsd.toFixed(4)}` : `$${totals.costUsd.toFixed(4)}`} ` +
+          `(in ${totals.input}, cache read ${totals.cacheRead}, ` +
           `cache write ${totals.cacheWrite}, out ${totals.output})`,
       );
     }
@@ -387,7 +421,7 @@ const report = {
   model,
   fake,
   gateway,
-  prices: price ?? null,
+  prices: PRICES,
   budget: { limitUsd: budgetUsd, spentUsd: spent.usd, stopped: overBudget() },
   machine: { platform: process.platform, arch: process.arch, node: process.version },
   claude: await claudeVersions(),

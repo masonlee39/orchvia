@@ -509,6 +509,26 @@ Task acceptance mode human uses purpose task_acceptance. `runtimeApprovals.enabl
 
 **Retiring rules.** Where `initialize` lists `workflow.ruleRetirement`, the owner calls `rules.retire({ id, version })` (Python `rules.retire(id, version)`) to retire a rule registered at runtime ([SPEC-0028](./specs/0028-host-queries-and-lifecycle.md) U). It leaves the effective rules at once: it no longer counts toward the 1,000, and a task admitted afterwards that names it fails with `RULE_RETIRED`. A task admitted before keeps its frozen copy for its verification and its repair retries. Retirement commits the event `rule.retired` and lasts across restarts, rollovers and imports; a retired rule never keeps a host from starting, even when the configuration now defines the same `id` and `version` differently. Registering a retired version again with the same content reactivates it: it is effective again, the event `rule.reactivated` is committed, and the operation's result holds `reactivated: true`; it counts toward the 1,000 again. Other content under a retired version fails with `RULE_RETIRED`: a changed rule takes a new version ([SPEC-0029](./specs/0029-usage-by-task-and-close-markers.md) C). An idempotency key names one request, not the state a host wants: sent again, it returns the first result and changes nothing. Registering a retired rule under the key of its first registration therefore leaves it retired, and retiring a reactivated rule under the key of an earlier retirement leaves it effective. Reactivate a version, or retire it again, under a new key, for example one that names the retirement it undoes ([SPEC-0030](./specs/0030-cache-write-durations-and-commit-time.md) C). A rule of the configuration cannot be retired (`VALIDATION_ERROR`); remove it from the configuration instead. `rules.list({ includeRetired: true })` lists the retired rules after the effective ones, each with `retiredAt`.
 
+**Steering a running turn** ([SPEC-0048](./specs/0048-steer.md)). Where `initialize` lists `workflow.steer`, `sessions.steer(target, text)` adds a line from the user to the turn a member is running, without interrupting it. A member's own tools cannot call it.
+
+- `target` is `{ sessionId, expectedGeneration, expectedDispatchId, expectedRevision? }`: the steer lands only in that dispatch's turn. `text` is 1 to 16,384 UTF-8 bytes.
+- Only a runtime that declares `steer: true` takes it; today that is the local and managed Codex member, through Codex's `turn/steer`. A Claude member is refused with `UNSUPPORTED_CAPABILITY`.
+- A turn that is not running, because the dispatch changed or its turn ended, is refused with `STEER_TURN_ENDED`, whose data holds `dispatchId`, `turnOutcome` (`completed`, `interrupted`, `failed` or `unknown`) and `taskStatus`, such as `verifying` or `waiting_approval`. Nothing is queued for a later turn: whether the line still applies is for the user to decide.
+- Otherwise the steer is recorded as a message of kind `steer` on that dispatch, then sent once. The returned operation ends `completed`, with the event `session.steered` (`dispatchId`, `taskId`, `messageId`, `text`); or fails with `STEER_TURN_ENDED`, `STEER_NOT_STEERABLE` (a compaction) or `STEER_REJECTED` (Codex's message); or, with no answer, `outcome_unknown` with `STEER_OUTCOME_UNKNOWN`. A retry under the same key returns the first result and never sends again, and a host that restarts before the answer records it unknown.
+- A turn that waits for a runtime approval can be steered; the approval still waits for the person.
+
+```ts
+const op = await orch.sessions.steer(
+  {
+    sessionId,
+    expectedGeneration: session.generation,
+    expectedDispatchId: session.activeDispatchId!,
+  },
+  "Don't change config.json",
+);
+const done = await op.wait({ timeoutMs: 30_000 });
+```
+
 **Listing tasks.** `task.created` data includes `parentTaskId` and `rootTaskId`. `tasks.list({parentTaskId? | sessionId?, limit?, afterCursor?})` returns creation-ordered pages (default 50, at most 100) with `nextCursor`.
 
 ```ts
@@ -731,13 +751,13 @@ Timeout retains dispatch/control/related messages as outcome_unknown and Task bl
 
 Evidence fields below map camelCase to snake_case in Python:
 
-| Field                            | Value                                                                                                                                   |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| source / summary                 | "owner_attestation" / human investigation summary                                                                                       |
-| localResources / remoteExecution | Each "stopped" or "unknown"                                                                                                             |
-| sideEffects                      | "resolved" or "unknown"                                                                                                                 |
-| outcome                          | "not_executed", "completed", "failed", "interrupted", "unknown", or "recorded" (`sessions.reconcile` only)                               |
-| result                           | For completed: reviewed complete string, genuinely empty allowed, maximum 524288 characters; still subject to human acceptance          |
+| Field                            | Value                                                                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| source / summary                 | "owner_attestation" / human investigation summary                                                                              |
+| localResources / remoteExecution | Each "stopped" or "unknown"                                                                                                    |
+| sideEffects                      | "resolved" or "unknown"                                                                                                        |
+| outcome                          | "not_executed", "completed", "failed", "interrupted", "unknown", or "recorded" (`sessions.reconcile` only)                     |
+| result                           | For completed: reviewed complete string, genuinely empty allowed, maximum 524288 characters; still subject to human acceptance |
 
 **Recorded outcomes** ([SPEC-0045](./specs/0045-host-reported-fixes.md) R). A dispatch that returned a result, an interruption or a failure, and whose stop was not proven, keeps that terminal; an attestation must agree with it (`EVIDENCE_CONFLICT`). Where `initialize` lists `workflow.reconcileRecordedResult`:
 

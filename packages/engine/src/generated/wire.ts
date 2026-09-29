@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 db1f741f3de141a8ec6b6e71d652499c85b328b8de875652a095d32ad9c42b02. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 1262e14ba734e533b27cfaad360b82b28687bd26a4d9aaab1c6d28fcbfbce21e. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -367,7 +367,14 @@ export type OperationSnapshot = {
   status: OperationStatus;
   targetId: string;
   result: unknown;
-  error: null | { code: string; message: string; [key: string]: unknown };
+  error: null | {
+    code: string;
+    message: string;
+    data?: {
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
   lifecycle?: OperationLifecycle;
   resolution?: { operationId: string; outcome: string; occurredAt: string; [key: string]: unknown };
   retryIdentity?: RetryIdentity;
@@ -421,7 +428,8 @@ export type MessageSnapshot = {
   taskId: string;
   toSessionId: string;
   expectedGeneration: number;
-  kind: 'assignment' | 'finding' | 'result' | 'question';
+  kind: 'assignment' | 'finding' | 'result' | 'question' | 'steer';
+  dispatchId?: string;
   summary: string;
   artifactRefs?: Array<string>;
   ttlMs?: number;
@@ -635,6 +643,17 @@ export type TaskMutationParams = {
   idempotencyKey: string;
   requestDigest?: string;
 };
+export type SessionSteerParams = {
+  target: {
+    sessionId: string;
+    expectedGeneration: number;
+    expectedDispatchId: string;
+    expectedRevision?: number;
+  };
+  text: string;
+  expectedStoreId?: string;
+  idempotencyKey: string;
+};
 export type SessionControlParams = {
   target: ControlTarget;
   command: { action: 'pause' | 'resume' | 'stop'; mode?: 'drain' | 'interrupt' };
@@ -785,5 +804,6 @@ export type WorkflowCapability = {
   usageByTask?: true;
   reasoningEfforts?: true;
   reconcileRecordedResult?: true;
+  steer?: true;
   [key: string]: unknown;
 };

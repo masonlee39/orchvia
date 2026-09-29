@@ -120,7 +120,7 @@ export function readRuntimeCapabilities(adapter: RuntimeAdapter): RuntimeCapabil
     if (typeof evidence.terminalCoversExecution !== 'boolean')
       invalid('executionEvidence.terminalCoversExecution');
   }
-  for (const key of ['forkModelChange', 'readFence'])
+  for (const key of ['forkModelChange', 'readFence', 'steer'])
     if (Object.hasOwn(value, key) && typeof value[key] !== 'boolean') invalid(key);
   return value as unknown as RuntimeCapabilities;
 }
