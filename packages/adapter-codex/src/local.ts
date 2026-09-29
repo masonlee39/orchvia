@@ -31,6 +31,17 @@ export type CodexNetwork = 'off' | 'direct' | { domains: string[] };
 export interface CodexDispatchPolicy {
   mode: CodexMode;
   network?: CodexNetwork;
+  /**
+   * Codex's reasoning effort for this dispatch, such as `low` or `xhigh`: a string, since Codex adds
+   * efforts, checked against the model's list (SPEC-0042 E01, E02). Left out, the model's default.
+   */
+  effort?: string;
+}
+/** SPEC-0042 E04: the effort a dispatch ran with, in each of its usage records' `raw`. */
+export interface CodexReasoningEffort {
+  requested: string | null;
+  effective: string | null;
+  source: 'requested' | 'modelDefault' | 'unverified';
 }
 export type CodexHostMcpServer =
   | { command: string; args?: string[]; env?: Record<string, string>; approval?: 'ask' | 'approve' }
@@ -226,7 +237,7 @@ const DOMAIN = /^(\*\.)?[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*$/;
 export function checkPolicy(
   value: unknown,
   input: Pick<RuntimeInput, 'permissionProfile' | 'requestPermission'>,
-): Required<CodexDispatchPolicy> | string {
+): (Required<Omit<CodexDispatchPolicy, 'effort'>> & { effort?: string }) | string {
   const policy = value as CodexDispatchPolicy;
   if (!policy || typeof policy !== 'object') return 'the policy is not an object';
   const { mode } = policy;
@@ -250,7 +261,44 @@ export function checkPolicy(
       return 'network must be off, direct or { domains } with valid domain names';
   }
   if (mode === 'plan' && network !== 'off') return 'mode plan has no network';
-  return { mode, network };
+  const { effort } = policy;
+  if (
+    effort !== undefined &&
+    (typeof effort !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(effort))
+  )
+    return 'effort must be 1 to 64 letters, digits, dots, dashes or underscores';
+  return { mode, network, ...(effort !== undefined ? { effort } : {}) };
+}
+
+/**
+ * SPEC-0042 E02, E04: the effort a dispatch runs with, from Codex's model list (hidden models and
+ * every page), or why the listed model refuses it; `models` is null when the list could not be read.
+ */
+export function resolveEffort(
+  models: readonly Record<string, unknown>[] | null,
+  model: string,
+  effort: string | undefined,
+): CodexReasoningEffort | string {
+  const requested = effort ?? null;
+  const entry = models?.find((item) => item.id === model || item.model === model);
+  if (!entry) return { requested, effective: requested, source: 'unverified' };
+  const supported = (
+    Array.isArray(entry.supportedReasoningEfforts) ? entry.supportedReasoningEfforts : []
+  ).flatMap((option: unknown) => {
+    const name = (option as { reasoningEffort?: unknown })?.reasoningEffort;
+    return typeof name === 'string' ? [name] : [];
+  });
+  if (effort === undefined) {
+    const fallback = entry.defaultReasoningEffort;
+    return {
+      requested,
+      effective: typeof fallback === 'string' ? fallback : null,
+      source: 'modelDefault',
+    };
+  }
+  if (!supported.includes(effort))
+    return `${model} supports ${supported.join(', ') || 'no listed effort'}; ${effort} was requested`;
+  return { requested, effective: effort, source: 'requested' };
 }
 
 export function approvalPolicy(mode: CodexMode, asks: boolean): string {

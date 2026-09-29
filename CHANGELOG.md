@@ -2,6 +2,24 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.19] - 2026-09-29
+
+Reasoning effort for each local Codex dispatch (SPEC-0042).
+
+### Added
+
+- `effort` in `CodexDispatchPolicy`: Codex's reasoning effort for that dispatch, a string such as `low` or `xhigh`. The adapter checks it against Codex's model list, hidden models and every page included, and refuses an effort the model does not list with `CODEX_EFFORT_UNSUPPORTED` before any thread or model request. Codex itself sends such an effort on unchanged, except `ultra`, which it lowers. Left out, the model's default applies, as before.
+- Each usage record of a local Codex dispatch carries `raw._reasoningEffort: { requested, effective, source }`, and `usage.byTask` lists each task's `reasoningEfforts` (Python `reasoning_efforts`); `initialize` lists `workflow.reasoningEfforts`.
+
+### Changed
+
+- The inline preview of a large result ends with an English note, `[Preview truncated; the full result is in artifact <ref>]`.
+- A tool bridge that Codex cannot start ends the dispatch with `CODEX_TOOL_BRIDGE_UNAVAILABLE`.
+
+### Fixed
+
+- The native local smoke repeats a tool search until the host's MCP server lists the tool.
+
 ## [0.1.18] - 2026-09-28
 
 A proxy check the sandbox cannot read is named (SPEC-0041).

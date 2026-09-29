@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 0524bce8cafa4d79a54c06f249090cf30577ee57a5df9aac905e4e13eadb2de3. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 262acd90efe563a83835bca808095caf88670933c0bcf167baf5f6133a2ec1f5. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -167,6 +167,7 @@ export type UsageTaskTotals = {
   byModel: Array<UsageModelTotals>;
   totals: UsageTotals;
   completeness: 'reported' | 'unknown';
+  reasoningEfforts: Array<string>;
 };
 export type UsageByTaskResult = { tasks: Array<UsageTaskTotals>; missing: Array<string> };
 export type SessionStatus =
@@ -781,5 +782,6 @@ export type WorkflowCapability = {
   pauseClose?: true;
   ruleRetirement?: true;
   usageByTask?: true;
+  reasoningEfforts?: true;
   [key: string]: unknown;
 };

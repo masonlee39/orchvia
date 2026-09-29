@@ -57,6 +57,8 @@ import {
   MIN_CODEX_VERSION,
   checkHostHookCommand,
   checkProxyCheck,
+  resolveEffort,
+  type CodexReasoningEffort,
   deniedCheckPath,
   checkToolBridge,
   type CodexToolBridge,
@@ -71,6 +73,7 @@ import {
 } from './local.ts';
 export type {
   CodexClientInfo,
+  CodexReasoningEffort,
   CodexToolBridge,
   CodexDispatchPolicy,
   CodexHookDecision,
@@ -650,7 +653,9 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
       }
       const dispatchProfile = input.permissionProfile;
       // SPEC-0035 F01 to F03: the host's choice for this dispatch, checked before anything starts.
-      let policy: Required<CodexDispatchPolicy> | null = null;
+      let policy: Exclude<ReturnType<typeof checkPolicy>, string> | null = null;
+      // SPEC-0042 E04: the effort this dispatch runs with, decided before its thread.
+      let reasoningEffort: CodexReasoningEffort | undefined;
       if (local) {
         let decided: unknown;
         try {
@@ -958,6 +963,28 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
                 ),
               );
           }
+          // SPEC-0042 E02: the model's efforts, hidden models and every page included.
+          if (input.nativeAction !== 'compact') {
+            let models: Record<string, unknown>[] | null = [];
+            try {
+              let cursor: string | null = null;
+              for (let page = 0; page < 50; page++) {
+                const listed: Message = await connection.request('model/list', {
+                  includeHidden: true,
+                  ...(cursor ? { cursor } : {}),
+                });
+                models.push(...((listed.data as Record<string, unknown>[] | undefined) ?? []));
+                cursor = typeof listed.nextCursor === 'string' ? listed.nextCursor : null;
+                if (!cursor) break;
+              }
+            } catch {
+              models = null;
+            }
+            const resolved = resolveEffort(models, input.model, policy!.effort);
+            if (typeof resolved === 'string')
+              throw new Error(coded('CODEX_EFFORT_UNSUPPORTED', resolved));
+            reasoningEffort = resolved;
+          }
         }
         const approval = policy
           ? approvalPolicy(policy.mode, !!input.requestPermission)
@@ -988,11 +1015,18 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
           );
         let thread: Message;
         try {
-          thread = await openThread();
+          try {
+            thread = await openThread();
+          } catch (error) {
+            // SPEC-0035 A03: a sign-in or sign-out on the same home can revoke a starting thread.
+            if (!local || !/permission was revoked/i.test(errorMessage(error))) throw error;
+            thread = await openThread();
+          }
         } catch (error) {
-          // SPEC-0035 A03: a sign-in or sign-out on the same home can revoke a starting thread.
-          if (!local || !/permission was revoked/i.test(errorMessage(error))) throw error;
-          thread = await openThread();
+          // SPEC-0042 C02: a bridge that does not start is named as the hook and the check are.
+          if (/required MCP servers failed to initialize: agent_orch/.test(errorMessage(error)))
+            throw new Error(coded('CODEX_TOOL_BRIDGE_UNAVAILABLE', errorMessage(error)));
+          throw error;
         }
         releaseStart();
         threadId =
@@ -1016,6 +1050,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
                 {
                   threadId,
                   input: [{ type: 'text', text: input.prompt }],
+                  ...(policy?.effort !== undefined ? { effort: policy.effort } : {}),
                   cwd: input.workspace,
                   approvalPolicy: approval,
                   // With a connection, the named profile of the command line applies instead.
@@ -1205,6 +1240,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
                     : total
                       ? 'last_observed_request'
                       : 'unknown_source_scope',
+                  ...(reasoningEffort ? { _reasoningEffort: { ...reasoningEffort } } : {}),
                 },
               },
             };
@@ -1330,7 +1366,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
                     cachedInputTokens: null,
                     cacheWriteInputTokens: null,
                     outputTokens: null,
-                    raw: null,
+                    raw: reasoningEffort ? { _reasoningEffort: { ...reasoningEffort } } : null,
                   },
                 };
                 input.reportUsage?.(observation);

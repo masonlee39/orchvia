@@ -57,6 +57,9 @@ class UsageByTaskTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(entry.totals.records, 0)
             self.assertEqual(entry.totals.unknown_records, 0)
             self.assertEqual(entry.completeness, "unknown")
+            # SPEC-0042 E05: the efforts it ran with, none for a task without records.
+            self.assertTrue(orch.info.capabilities.workflow.get("reasoning_efforts"))
+            self.assertEqual(entry.reasoning_efforts, [])
             with self.assertRaises(OrchestrationError) as raised:
                 await orch.usage.by_task([])
             self.assertEqual(raised.exception.code, "VALIDATION_ERROR")

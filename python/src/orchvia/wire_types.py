@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 0524bce8cafa4d79a54c06f249090cf30577ee57a5df9aac905e4e13eadb2de3. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 262acd90efe563a83835bca808095caf88670933c0bcf167baf5f6133a2ec1f5. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -172,6 +172,7 @@ class UsageTaskTotals(TypedDict):
     byModel: list[UsageModelTotals]
     totals: UsageTotals
     completeness: Literal["reported", "unknown"]
+    reasoningEfforts: list[str]
 
 class UsageByTaskResult(TypedDict):
     tasks: list[UsageTaskTotals]
@@ -809,6 +810,7 @@ class WorkflowCapability(TypedDict):
     pauseClose: NotRequired[Literal[True]]
     ruleRetirement: NotRequired[Literal[True]]
     usageByTask: NotRequired[Literal[True]]
+    reasoningEfforts: NotRequired[Literal[True]]
 
 TaskStatus: TypeAlias = Literal["queued", "running", "waiting_approval", "paused", "blocked", "completed", "failed", "cancelled", "waiting_dependency", "verifying"]
 SessionStatus: TypeAlias = Literal["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]

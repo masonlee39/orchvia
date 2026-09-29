@@ -860,7 +860,12 @@ test('AC11 large Unicode output stays in its artifact and has a bounded inline p
       Buffer.byteLength(JSON.stringify(result)) < 262144,
       'snapshot must fit in one RPC frame',
     );
-    assert.ok(result.result!.includes('完整结果'), 'preview must disclose that text was shortened');
+    // SPEC-0042 C01: the note is English.
+    assert.match(
+      result.result!,
+      /\n\[Preview truncated; the full result is in artifact [^\]]+\]$/,
+      'preview must disclose that text was shortened',
+    );
     const { readFile } = await import('node:fs/promises');
     const artifact = join(f.config.stateDir, 'artifacts', `${result.artifactRefs[0].slice(7)}.txt`);
     assert.equal(await readFile(artifact, 'utf8'), full);

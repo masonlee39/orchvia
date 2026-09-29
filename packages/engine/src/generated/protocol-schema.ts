@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 0524bce8cafa4d79a54c06f249090cf30577ee57a5df9aac905e4e13eadb2de3. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 262acd90efe563a83835bca808095caf88670933c0bcf167baf5f6133a2ec1f5. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -780,8 +780,17 @@ export const protocolSchema = {
         completeness: {
           enum: ['reported', 'unknown'],
         },
+        reasoningEfforts: {
+          type: 'array',
+          description:
+            "The distinct efforts the task's records ran with, in first-recorded order (SPEC-0042 E05).",
+          items: {
+            type: 'string',
+            minLength: 1,
+          },
+        },
       },
-      required: ['taskId', 'byModel', 'totals', 'completeness'],
+      required: ['taskId', 'byModel', 'totals', 'completeness', 'reasoningEfforts'],
       additionalProperties: false,
     },
     UsageByTaskResult: {
@@ -3681,6 +3690,9 @@ export const protocolSchema = {
           const: true,
         },
         usageByTask: {
+          const: true,
+        },
+        reasoningEfforts: {
           const: true,
         },
       },

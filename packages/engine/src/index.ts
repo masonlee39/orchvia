@@ -122,7 +122,10 @@ function resultPreview(text: string, artifactRef: string): string {
   if (bytes.length <= 64 * 1024) return text;
   let end = 64 * 1024;
   while ((bytes[end] & 0xc0) === 0x80) end--;
-  return bytes.subarray(0, end).toString('utf8') + `\n[预览已截断；完整结果见产物 ${artifactRef}]`;
+  return (
+    bytes.subarray(0, end).toString('utf8') +
+    `\n[Preview truncated; the full result is in artifact ${artifactRef}]`
+  );
 }
 interface Dispatch extends Record<string, unknown> {
   id: string;
@@ -2621,6 +2624,7 @@ class LocalEngine implements Engine {
               pauseClose: true,
               ruleRetirement: true,
               usageByTask: true,
+              reasoningEfforts: true,
             },
             providers: [...this.adapters.keys()],
             lifecycle: { version: 1, reconcile: 'owner-attestation', durableDeadlines: true },

@@ -767,9 +767,17 @@
         },
         "completeness": {
           "enum": ["reported", "unknown"]
+        },
+        "reasoningEfforts": {
+          "type": "array",
+          "description": "The distinct efforts the task's records ran with, in first-recorded order (SPEC-0042 E05).",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
-      "required": ["taskId", "byModel", "totals", "completeness"],
+      "required": ["taskId", "byModel", "totals", "completeness", "reasoningEfforts"],
       "additionalProperties": false
     },
     "UsageByTaskResult": {
@@ -3659,6 +3667,9 @@
           "const": true
         },
         "usageByTask": {
+          "const": true
+        },
+        "reasoningEfforts": {
           "const": true
         }
       },
