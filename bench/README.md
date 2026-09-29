@@ -6,12 +6,12 @@ This benchmark measures what running agents through Orchvia costs and saves, com
 
 A small JavaScript project ([fixture](fixture/)) gets four requests ([requests.json](requests.json)) on two independent tracks:
 
-| Request | Track | Asks for |
-| --- | --- | --- |
-| X1 | restock | `restock(inventory, name, quantity)` with tests |
-| Y1 | report | `lowStock(inventory, threshold)`, sorted by name, with tests |
-| X2 | restock | a `RangeError` for quantities that are not positive integers |
-| Y2 | report | sorting by stock, then by name |
+| Request | Track   | Asks for                                                     |
+| ------- | ------- | ------------------------------------------------------------ |
+| X1      | restock | `restock(inventory, name, quantity)` with tests              |
+| Y1      | report  | `lowStock(inventory, threshold)`, sorted by name, with tests |
+| X2      | restock | a `RangeError` for quantities that are not positive integers |
+| Y2      | report  | sorting by stock, then by name                               |
 
 Each request passes when its hidden check ([checks](checks/)) and the track's own tests pass. The checks never live inside the agent's workspace.
 
@@ -62,7 +62,12 @@ In the orchvia arm, the engine releases a writable dispatch only after the host 
 
 ## What is measured
 
-For every request: wall time, input, cache-read, cache-write and output tokens, and the estimated cost at [list prices](https://platform.claude.com/docs/en/about-claude/pricing) ($2 input, $10 output, $0.20 cache read and $2.50 cache write per million tokens for Claude Sonnet 5, checked on 2026-09-23). Every arm prices cache writes at the 5-minute rate, because the engine's usage records do not separate 1-hour writes ($4 per million); the two direct arms also record Claude Code's own cost figure, so a difference shows. A subscription plan is not billed per token; the estimate then measures usage, not a bill. Each report records the model, prices, machine and every request.
+For every request: wall time, and input, cache-read, cache-write and output tokens, in two parts that every arm counts the same way ([meter.mjs](meter.mjs), [SPEC-0047](../docs/specs/0047-bench-metering.md)):
+
+- **main:** the request's main loop. The direct arms take it from the result's `usage`; the orchvia arm from the engine's main record of the task.
+- **outside:** the calls Claude Code made outside the main loop, such as subagents and compactions, per model. The direct arms take them from the result's `modelUsage` minus the main loop; the orchvia arm from the engine's records of those calls. Claude Code 2.1.277 and later continue a resumed session's totals, so the single arm then subtracts its totals after the previous request, as the Claude adapter does.
+
+Each part is priced at its model's [list price](https://platform.claude.com/docs/en/about-claude/pricing) (the table is in [meter.mjs](meter.mjs) and in every report), with cache writes at the 5-minute or the 1-hour rate where the counts separate them; a cache write that is not separated, as outside the main loop, takes the 5-minute rate, and the request is marked `cacheWriteAt5mRate`. A count that is unknown stays unknown: the request's `costUsd` is then null, `unpricedParts` counts the parts without a cost, and `knownCostUsd` holds the rest, which the budget counts. The two direct arms also record Claude Code's own cost figure, so a difference shows. A subscription plan is not billed per token; the estimate then measures usage, not a bill. Each report records the model, prices, machine and every request.
 
 ## Results
 
