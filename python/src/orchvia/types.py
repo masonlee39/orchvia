@@ -49,7 +49,7 @@ class ReconcileEvidence:
     local_resources: Literal["stopped", "unknown"]
     remote_execution: Literal["stopped", "unknown"]
     side_effects: Literal["resolved", "unknown"]
-    outcome: Literal["not_executed", "completed", "failed", "interrupted", "unknown"]
+    outcome: Literal["not_executed", "completed", "failed", "interrupted", "unknown", "recorded"]
     result: str | None = None
 
 
@@ -84,7 +84,7 @@ _WIRE_TO_PYTHON = {
     "contextCheck": "context_check", "taskQueries": "task_queries", "queueReasons": "queue_reasons",
     "pauseClose": "pause_close", "ruleRetirement": "rule_retirement",
     "blockedBy": "blocked_by", "byModel": "by_model", "recordedAt": "recorded_at", "retiredAt": "retired_at",
-    "includeRetired": "include_retired", "usageByTask": "usage_by_task", "reasoningEfforts": "reasoning_efforts", "deliveredAt": "delivered_at",
+    "includeRetired": "include_retired", "usageByTask": "usage_by_task", "reasoningEfforts": "reasoning_efforts", "reconcileRecordedResult": "reconcile_recorded_result", "deliveredAt": "delivered_at",
     "pausedByClose": "paused_by_close", "wasRunning": "was_running",
     "handoffId": "handoff_id", "targetSessionId": "target_session_id", "fromTaskId": "from_task_id",
     "fromSessionId": "from_session_id", "fromDispatchId": "from_dispatch_id",

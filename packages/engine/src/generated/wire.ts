@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 262acd90efe563a83835bca808095caf88670933c0bcf167baf5f6133a2ec1f5. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 db1f741f3de141a8ec6b6e71d652499c85b328b8de875652a095d32ad9c42b02. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -340,6 +340,7 @@ export type SchedulerResolveConflictParams = {
   evidence: ReconcileEvidence & {
     localResources?: 'stopped';
     remoteExecution?: 'stopped';
+    outcome?: 'not_executed' | 'completed' | 'failed' | 'interrupted' | 'unknown';
     [key: string]: unknown;
   };
   idempotencyKey: string;
@@ -378,7 +379,7 @@ export type ReconcileEvidence = unknown & {
   localResources: 'stopped' | 'unknown';
   remoteExecution: 'stopped' | 'unknown';
   sideEffects: 'resolved' | 'unknown';
-  outcome: 'not_executed' | 'completed' | 'failed' | 'interrupted' | 'unknown';
+  outcome: 'not_executed' | 'completed' | 'failed' | 'interrupted' | 'unknown' | 'recorded';
   result?: string;
 };
 export type ReconcileParams = {
@@ -783,5 +784,6 @@ export type WorkflowCapability = {
   ruleRetirement?: true;
   usageByTask?: true;
   reasoningEfforts?: true;
+  reconcileRecordedResult?: true;
   [key: string]: unknown;
 };

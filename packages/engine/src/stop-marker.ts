@@ -37,6 +37,14 @@ export type StopMarkerReason =
   | 'metadata_missing'
   | 'instance_unknown';
 
+/** A process in a dispatch's workspace that started during it (SPEC-0045 K02). */
+export interface StrayProcess {
+  pid: number;
+  command: string;
+  /** Its nearest ancestor that started before the dispatch; null when none could be found. */
+  ancestor: { pid: number; command: string } | null;
+}
+
 /** One stop observation, reported to the host's `onObservation` (SPEC-0036 O01). */
 export interface StopMarkerObservation {
   kind: 'dispatch' | 'sweep' | 'stale' | 'sync';
@@ -47,6 +55,10 @@ export interface StopMarkerObservation {
   ended: number;
   /** Processes in the workspace that may have dropped the marker (SPEC-0034 B03). */
   strays: number;
+  /** SPEC-0045 K02: those processes, when there are any. */
+  strayProcesses?: StrayProcess[];
+  /** SPEC-0045 K01: processes left out because they belong to something already running. */
+  foreignProcesses?: StrayProcess[];
   stopped: boolean;
   reason?: StopMarkerReason;
 }
@@ -59,6 +71,9 @@ export interface StopMarkerDispatch {
   holders: number[];
   ended: number;
   strays: number[];
+  /** SPEC-0045 K02: the strays, and the processes left out as another tool's, when any. */
+  strayProcesses?: StrayProcess[];
+  foreignProcesses?: StrayProcess[];
   stopped: boolean;
   /** SPEC-0037 K: proven stopped by this or an earlier sweep with `keepProven`, and kept. */
   proven?: true;
@@ -190,20 +205,47 @@ function inWorkspace(workspace: string, timeoutMs: number): Promise<number[] | n
   });
 }
 
+interface Strays {
+  counted: StrayProcess[];
+  foreign: StrayProcess[];
+}
+
+/**
+ * SPEC-0045 K01, K03: whether a candidate whose nearest ancestor from before the dispatch is
+ * `ancestor` still counts as a stray. It does without such an ancestor, and when the ancestor is
+ * process 1 or a direct child of it (an orphan's adopter or a daemon), except, on macOS, an
+ * application's own executable (`*.app/Contents/MacOS/*`), which launchd starts for each running
+ * application. Exported for tests.
+ */
+export function countsAsStray(
+  ancestor: Pick<ProcessRow, 'pid' | 'ppid' | 'command'> | undefined,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (!ancestor || ancestor.pid === 1) return true;
+  if (ancestor.ppid !== 1) return false;
+  return !(platform === 'darwin' && /\.app\/Contents\/MacOS\/[^/]+$/.test(ancestor.command));
+}
+const detail = (list: StrayProcess[], key: 'strayProcesses' | 'foreignProcesses') =>
+  list.length ? { [key]: list } : {};
+
 /**
  * SPEC-0034 B03: processes that may be what a dispatch left behind without its marker. A program
  * that closes inherited descriptors, as Python's subprocess does by default, drops the marker, but
- * what it starts keeps the working directory. Counted: a process in the workspace, started during
+ * what it starts keeps the working directory. Candidates: a process in the workspace, started during
  * the dispatch, outside this host's own process tree (the runtimes of every session, and this
- * check's own lsof). Null when that cannot be shown.
+ * check's own lsof). SPEC-0045 K01: a candidate whose nearest ancestor from before the dispatch is
+ * an ordinary running process belongs to something already running, such as another terminal or
+ * agent, and is left out; one whose ancestor is process 1 or a direct child of it (an orphan, a
+ * per-user service manager, a daemon such as a tmux server), or has none, is counted. Null when
+ * that cannot be shown.
  */
 async function strays(
   marker: Pick<StopMarker, 'workspace' | 'startedAt'>,
   timeoutMs: number,
-): Promise<number[] | null> {
+): Promise<Strays | null> {
   const candidates = await inWorkspace(marker.workspace, timeoutMs);
   if (candidates === null) return null;
-  if (!candidates.length) return [];
+  if (!candidates.length) return { counted: [], foreign: [] };
   let rows: ProcessRow[];
   try {
     rows = processTable();
@@ -220,12 +262,33 @@ async function strays(
     return false;
   };
   const since = earliest(marker.startedAt);
-  return candidates.filter((pid) => {
-    const row = byPid.get(pid);
-    if (!row) return false; // Gone since lsof listed it.
+  // Invariant 2: only a process that started more than lstart's second before the dispatch.
+  const before = (row: ProcessRow) => {
     const started = Date.parse(row.started);
-    return !ownTree(pid) && (!Number.isFinite(started) || started >= since);
-  });
+    return Number.isFinite(started) && started < since;
+  };
+  const found: Strays = { counted: [], foreign: [] };
+  for (const pid of candidates) {
+    const row = byPid.get(pid);
+    if (!row || before(row) || ownTree(pid)) continue; // Gone since lsof listed it, or not new.
+    let ancestor: ProcessRow | undefined;
+    for (let up = byPid.get(row.ppid), steps = 0; up && steps < 4096; steps++) {
+      if (before(up)) {
+        ancestor = up;
+        break;
+      }
+      if (up.ppid === up.pid || up.ppid <= 0) break;
+      up = byPid.get(up.ppid);
+    }
+    const item: StrayProcess = {
+      pid,
+      command: row.command,
+      ancestor: ancestor ? { pid: ancestor.pid, command: ancestor.command } : null,
+    };
+    // Invariant 1: an ancestor that exited leaves its children to process 1, so they count.
+    (countsAsStray(ancestor) ? found.counted : found.foreign).push(item);
+  }
+  return found;
 }
 
 /** SIGTERM, then SIGKILL, what holds `path`; `stopped` once nothing does within the time. */
@@ -511,7 +574,8 @@ export class StopMarkers {
     const marker = this.#markers.get(dispatchId);
     if (!marker) return false;
     const held = await endHolders(marker.path, context.remainingMs, true);
-    const left = held.stopped ? await strays(marker, context.remainingMs()) : [];
+    const looked = held.stopped ? await strays(marker, context.remainingMs()) : null;
+    const left = held.stopped ? (looked?.counted ?? null) : [];
     const stopped = held.stopped && left !== null && !left.length;
     const reason: StopMarkerReason | undefined = stopped
       ? undefined
@@ -526,6 +590,8 @@ export class StopMarkers {
       holders: held.holders?.length ?? 0,
       ended: held.ended,
       strays: left?.length ?? 0,
+      ...detail(left ?? [], 'strayProcesses'),
+      ...detail(looked?.foreign ?? [], 'foreignProcesses'),
       stopped,
       ...(reason ? { reason } : {}),
     });
@@ -703,19 +769,26 @@ async function examine(
           for (const file of files) rmSync(join(instance, file), { force: true });
       } else {
         const held = await endHolders(join(instance, tag), remaining, end);
-        let left = held.stopped && meta ? await strays(meta, remaining()) : [];
+        let looked: Strays | null =
+          held.stopped && meta ? await strays(meta, remaining()) : { counted: [], foreign: [] };
         // The dead host's own runtime, such as Claude Code, can take a moment to notice that its
         // input closed; a sweep looks again while its time lasts. A stale check does not wait.
-        while (end && meta && left?.length && remaining() > 400) {
+        while (end && meta && looked?.counted.length && remaining() > 400) {
           await wait(200);
           // A look that fails keeps what the last one found: still not stopped, and still named.
           const again = await strays(meta, remaining());
           if (again === null) break;
-          left = again;
+          looked = again;
         }
+        const left = looked ? looked.counted.map((item) => item.pid) : null;
         found.holders = held.holders ?? [];
         found.ended = held.ended;
         found.strays = left ?? [];
+        Object.assign(
+          found,
+          detail(looked?.counted ?? [], 'strayProcesses'),
+          detail(looked?.foreign ?? [], 'foreignProcesses'),
+        );
         found.stopped = held.stopped && meta !== undefined && left !== null && !left.length;
         if (!found.stopped)
           found.reason =
@@ -748,6 +821,8 @@ async function examine(
         holders: found.holders.length,
         ended: found.ended,
         strays: found.strays.length,
+        ...detail(found.strayProcesses ?? [], 'strayProcesses'),
+        ...detail(found.foreignProcesses ?? [], 'foreignProcesses'),
         stopped: found.stopped,
         ...(found.reason ? { reason: found.reason } : {}),
       });

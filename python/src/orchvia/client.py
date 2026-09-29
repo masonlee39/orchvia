@@ -202,8 +202,13 @@ class _Sessions:
             lifecycle.get("version") != 1 or lifecycle.get("reconcile") != "owner-attestation" or
             lifecycle.get("durable_deadlines") is not True):
             raise OrchestrationError("UNSUPPORTED_CAPABILITY", "Host has not negotiated lifecycle version 1 reconciliation")
+        wire_evidence = to_wire(evidence)
+        # SPEC-0045 R02, R03: an attestation may leave its result, or its outcome, to the record.
+        if wire_evidence.get("outcome") == "recorded" or (
+                wire_evidence.get("outcome") == "completed" and "result" not in wire_evidence):
+            self._client._check_workflow("reconcile_recorded_result")
         return OperationHandle(self._client, await self._client._mutate(
-            "sessions.reconcile", {"target": to_wire(target), "evidence": to_wire(evidence)}, idempotency_key))
+            "sessions.reconcile", {"target": to_wire(target), "evidence": wire_evidence}, idempotency_key))
 
     async def open(self, spec: Mapping[str, Any], *, idempotency_key: str | None = None) -> SessionReceiptView:
         await self._client.start()

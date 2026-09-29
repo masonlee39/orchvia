@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 262acd90efe563a83835bca808095caf88670933c0bcf167baf5f6133a2ec1f5. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 db1f741f3de141a8ec6b6e71d652499c85b328b8de875652a095d32ad9c42b02. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -368,7 +368,7 @@ class ReconcileEvidence(TypedDict):
     localResources: Literal["stopped", "unknown"]
     remoteExecution: Literal["stopped", "unknown"]
     sideEffects: Literal["resolved", "unknown"]
-    outcome: Literal["not_executed", "completed", "failed", "interrupted", "unknown"]
+    outcome: Literal["not_executed", "completed", "failed", "interrupted", "unknown", "recorded"]
     result: NotRequired[str]
 
 class ReconcileParams(TypedDict):
@@ -811,6 +811,7 @@ class WorkflowCapability(TypedDict):
     ruleRetirement: NotRequired[Literal[True]]
     usageByTask: NotRequired[Literal[True]]
     reasoningEfforts: NotRequired[Literal[True]]
+    reconcileRecordedResult: NotRequired[Literal[True]]
 
 TaskStatus: TypeAlias = Literal["queued", "running", "waiting_approval", "paused", "blocked", "completed", "failed", "cancelled", "waiting_dependency", "verifying"]
 SessionStatus: TypeAlias = Literal["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]

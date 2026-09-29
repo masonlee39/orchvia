@@ -2,6 +2,21 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.22] - 2026-09-29
+
+Corrections an integrating host reported, and two found in review (SPEC-0045).
+
+### Added
+
+- `sessions.reconcile` may take a dispatch's recorded terminal: `outcome: "completed"` without `result` uses the recorded result's text, and `outcome: "recorded"` takes the recorded outcome (completed, interrupted or failed). `initialize` lists `workflow.reconcileRecordedResult`, and both SDKs check it.
+- Stop observations and sweeps list the processes they counted as `strayProcesses` and the ones they left out as `foreignProcesses`, each with its nearest earlier ancestor.
+- A local Codex dispatch whose counts are all differences of Codex's cumulative totals from a known start reports `usageComplete`, so its budget reservation is settled.
+
+### Fixed
+
+- A process in a dispatch's workspace that another running tool started, such as another terminal or agent, no longer keeps the dispatch from being proven stopped. Orphans and programs started through daemons still do; on macOS an application's own executable counts as an ordinary process.
+- A later task on a session no longer keeps the session's earlier tasks, and with them every later event, from being collected.
+
 ## [0.1.21] - 2026-09-29
 
 A stability policy, settling a task that waits on a person, and examples that run (SPEC-0044).

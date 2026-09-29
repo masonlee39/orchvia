@@ -614,6 +614,12 @@ export class Orchestrator {
           'Host does not advertise lifecycle v1 owner-attestation reconciliation',
         );
       }
+      // SPEC-0045 R02, R03: an attestation may leave its result, or its outcome, to the record.
+      if (
+        evidence.outcome === 'recorded' ||
+        (evidence.outcome === 'completed' && evidence.result === undefined)
+      )
+        this.requireWorkflow('reconcileRecordedResult');
       return this.operation('sessions.reconcile', target.sessionId, { target, evidence }, options);
     },
     open: async (spec: SessionOpenSpec, options?: MutationOptions) => {

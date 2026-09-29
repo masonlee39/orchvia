@@ -2625,6 +2625,7 @@ class LocalEngine implements Engine {
               ruleRetirement: true,
               usageByTask: true,
               reasoningEfforts: true,
+              reconcileRecordedResult: true,
             },
             providers: [...this.adapters.keys()],
             lifecycle: { version: 1, reconcile: 'owner-attestation', durableDeadlines: true },
@@ -3881,12 +3882,14 @@ class LocalEngine implements Engine {
     if (!['resolved', 'unknown'].includes(evidence.sideEffects as string))
       fail('VALIDATION_ERROR', 'Invalid sideEffects');
     if (
-      !['not_executed', 'completed', 'failed', 'interrupted', 'unknown'].includes(
+      !['not_executed', 'completed', 'failed', 'interrupted', 'unknown', 'recorded'].includes(
         evidence.outcome as string,
       )
     )
       fail('VALIDATION_ERROR', 'Invalid reconciliation outcome');
-    if (evidence.outcome === 'completed') resultText(evidence.result);
+    // SPEC-0045 R01: a completed attestation may leave its result to the recorded terminal.
+    if (evidence.outcome === 'completed' && evidence.result !== undefined)
+      resultText(evidence.result);
     else if (evidence.result !== undefined)
       fail('VALIDATION_ERROR', 'Only a completed attestation may include a result');
     const resolved =
@@ -3953,17 +3956,48 @@ class LocalEngine implements Engine {
           dispatch.terminalEvidence as RuntimeEvent | undefined,
           (dispatch as Dispatch).terminalCertificate?.terminal,
         ];
+        const recorded = terminalEvidence.find((late) => late?.type === 'result') as
+          | Extract<RuntimeEvent, { type: 'result' }>
+          | undefined;
+        // SPEC-0045 R03: `recorded` takes the outcome of the terminal the dispatch recorded.
+        let outcome = evidence.outcome as string;
+        if (outcome === 'recorded') {
+          const first = terminalEvidence.find(Boolean);
+          const mapped =
+            first?.type === 'result'
+              ? 'completed'
+              : first?.type === 'interrupted'
+                ? 'interrupted'
+                : first?.type === 'error' && first.outcome === 'failed'
+                  ? 'failed'
+                  : undefined;
+          if (!mapped)
+            fail(
+              'VALIDATION_ERROR',
+              'The dispatch recorded no result, interruption or failure; give the outcome',
+            );
+          outcome = mapped;
+        }
+        const attestedResult =
+          outcome === 'completed'
+            ? ((evidence.result as string | undefined) ?? recorded?.text)
+            : undefined;
+        if (outcome === 'completed' && attestedResult === undefined)
+          fail(
+            'VALIDATION_ERROR',
+            'A completed attestation needs result when the dispatch recorded none',
+          );
         if (
-          evidence.outcome !== 'unknown' &&
+          outcome !== 'unknown' &&
           terminalEvidence.some(
             (late) =>
               late &&
               ((late.type === 'result' &&
-                (evidence.outcome !== 'completed' || evidence.result !== late.text)) ||
-                (late.type === 'interrupted' && evidence.outcome !== 'interrupted') ||
+                (outcome !== 'completed' || attestedResult !== late.text)) ||
+                (late.type === 'interrupted' && outcome !== 'interrupted') ||
                 (late.type === 'error' &&
                   late.outcome === 'failed' &&
-                  !['failed', 'not_executed'].includes(evidence.outcome as string))),
+                  !['failed', 'not_executed'].includes(outcome))),
           )
         )
           fail(
@@ -3980,6 +4014,7 @@ class LocalEngine implements Engine {
           dispatchId,
           target,
           evidence,
+          ...(evidence.outcome === 'recorded' ? { recordedOutcome: outcome } : {}),
           ...(resourceDisposition.commit
             ? { resourceReconciliation: 'owner_attested_unobserved' }
             : {}),
@@ -3998,7 +4033,7 @@ class LocalEngine implements Engine {
           executionReleased,
           evidenceRef,
           actor: 'host_owner',
-          outcome: evidence.outcome as string,
+          outcome: outcome,
           unobservedResourcesReconciled: false,
           ...(resourceDisposition.commit
             ? { resourceCleanup: { status: 'pending', ownerInstanceId: this.instanceId } }
@@ -4012,18 +4047,18 @@ class LocalEngine implements Engine {
             ? {
                 status: 'reconciled',
                 quarantined: false,
-                resolution: { outcome: evidence.outcome, operationId: op.id, evidenceRef },
+                resolution: { outcome: outcome, operationId: op.id, evidenceRef },
               }
             : {}),
         });
         this.admissionEvent();
         if (resolved) {
-          const replaySafe = evidence.outcome === 'not_executed';
+          const replaySafe = outcome === 'not_executed';
           for (const id of (dispatch.messageIds as string[] | undefined) ?? []) {
             const message = this.store.require<MessageSnapshot>('messages', id);
             message.status = replaySafe
               ? 'persisted'
-              : evidence.outcome === 'completed'
+              : outcome === 'completed'
                 ? 'completed'
                 : 'failed';
             this.store.put('messages', id, message);
@@ -4041,14 +4076,14 @@ class LocalEngine implements Engine {
           }
           session.activeDispatchId = null;
           this.saveSession(session, 'paused');
-          if (evidence.outcome === 'completed') {
-            const full = evidence.result as string;
+          if (outcome === 'completed') {
+            const full = resultText(attestedResult);
             task.artifactRefs = [this.store.artifact(full)];
             task.result = resultPreview(full, task.artifactRefs[0]);
             this.saveTask(task, 'paused', 'reconciled_result');
           } else if (replaySafe) {
             this.saveTask(task, 'paused', 'reconciled_not_executed');
-          } else this.saveTask(task, 'failed', `reconciled_${evidence.outcome}`);
+          } else this.saveTask(task, 'failed', `reconciled_${outcome}`);
           for (const prior of this.store.operations()) {
             if (
               prior.status !== 'outcome_unknown' ||
@@ -4057,7 +4092,7 @@ class LocalEngine implements Engine {
               continue;
             prior.resolution = {
               operationId: op.id,
-              outcome: evidence.outcome as string,
+              outcome: outcome,
               occurredAt: this.time(),
             };
             this.store.saveOperation(prior);
@@ -4076,7 +4111,7 @@ class LocalEngine implements Engine {
             evidenceRef,
             dispatchId,
             actor: 'host_owner',
-            outcome: evidence.outcome as string,
+            outcome: outcome,
           },
           { taskId: task.id, sessionId, operationId: op.id },
         );

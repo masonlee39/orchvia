@@ -232,6 +232,8 @@ test('AC adapter Codex: handshake, thread and turn ack, deduplicated usage, term
       text: 'finished',
       providerSessionId: 'codex-thread-1',
       nativeCheckpoint: 'codex-turn-1',
+      // A new thread whose first total is its first request: the count is whole (SPEC-0045 U01).
+      usageComplete: true,
     },
   ]);
   assert.deepEqual(adapter.capabilities().permissionProfiles, ['read-only']);

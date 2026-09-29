@@ -396,7 +396,9 @@ export type WorkflowFeature =
   /** SPEC-0028 U: `rules.retire` and `rules.list({ includeRetired })`. */
   | 'ruleRetirement'
   /** SPEC-0029 A: `usage.byTask`. */
-  | 'usageByTask';
+  | 'usageByTask'
+  /** SPEC-0045 R02: a completed attestation without `result` takes the recorded one. */
+  | 'reconcileRecordedResult';
 /** A model's request that the host hand work to a session outside its subtree (SPEC-0014 H). */
 export interface HandoffRequest {
   handoffId: string;
@@ -573,7 +575,8 @@ export interface ReconcileEvidence {
   localResources: 'stopped' | 'unknown';
   remoteExecution: 'stopped' | 'unknown';
   sideEffects: 'resolved' | 'unknown';
-  outcome: 'not_executed' | 'completed' | 'failed' | 'interrupted' | 'unknown';
+  /** `recorded` (SPEC-0045 R03, `sessions.reconcile` only): the recorded terminal's outcome. */
+  outcome: 'not_executed' | 'completed' | 'failed' | 'interrupted' | 'unknown' | 'recorded';
   result?: string;
 }
 // In-process test seam; not accepted from JSON config or the wire.
