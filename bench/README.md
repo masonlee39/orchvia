@@ -1,4 +1,4 @@
-# Benchmark: the same work, three ways
+# Benchmark: the same work, four ways
 
 This benchmark measures what running agents through Orchvia costs and saves, compared with running Claude directly ([SPEC-0021](../docs/specs/0021-open-source-readiness.md) E03 to E06). Results are published whether or not they favor Orchvia.
 
@@ -15,17 +15,18 @@ A small JavaScript project ([fixture](fixture/)) gets four requests ([requests.j
 
 Each request passes when its hidden check ([checks](checks/)) and the track's own tests pass. The checks never live inside the agent's workspace.
 
-## The three arms
+## The four arms
 
 All arms use the same model (Claude Sonnet 5 by default), the same Claude Code build (the one bundled with `@anthropic-ai/claude-agent-sdk`), the same tools (Read, Glob, Grep, Edit, Write, Bash), no user or project settings, and the same operating-system sandbox as Orchvia's writable Claude profile.
 
 - **single:** one Claude session does all four requests in order, resuming its history each time.
 - **fresh:** each request starts a new Claude session, in order.
+- **parallel:** the two tracks run at the same time directly on the Agent SDK, each follow-up resuming its track's session: the orchvia arm without the engine, so that a difference between the two is the engine's, not parallelism's or reuse's ([SPEC-0050](../docs/specs/0050-reference-host.md) B04).
 - **orchvia:** the two tracks run at the same time, each on its own session; each follow-up reuses its track's warm session. The harness acts as the reviewer: it runs the checks and accepts the result.
 
 ## Running it
 
-This section is the only source for running the benchmark. A real run calls a model and spends money on the Claude Code account signed in on the machine; `--budget-usd` stops before the next request once the estimate reaches the limit.
+This section is the only source for running the benchmark. A real run calls a model and spends money on the Claude Code account signed in on the machine. Before each request starts, the harness reserves `--reserve-usd`, the most one request may cost, and starts it only while the estimate spent, the running requests' reservations and its own stay within `--budget-usd`; a paid run refuses to start without `--reserve-usd`. This limits what the harness starts, not the provider's bill: a request that costs more than its reservation still overruns.
 
 1. Sign in to Claude Code on the machine (the account owner, about 2 minutes, needs the internet):
 
@@ -48,11 +49,12 @@ This section is the only source for running the benchmark. A real run calls a mo
 3. Run the pilot, one repetition per arm, within $10:
 
    ```sh
-   node bench/run.mjs --reps 1 --budget-usd 10 --out bench/results/$(date +%F)-pilot.json
+   node bench/run.mjs --reps 1 --budget-usd 10 --reserve-usd 1 --out bench/results/$(date +%F)-pilot.json
    ```
 
    - Success: the last line prints `"stopped":false` and the spent estimate.
-   - Failure: `"stopped":true` means the budget ended the run before every request ran; the report keeps what ran.
+   - Failure: `"stopped":true` means the budget refused a request; its row says `not_run` with `reason: "budget"`, and the report keeps what ran.
+   - Every finished request is also in `bench/results/<name>-pilot.json.rows.jsonl` the moment it finishes, so a run that stops half-way keeps its rows. A request that failed is a row with `status: "error"` and its message, and an unknown cost is `null`, never 0.
 
 4. The full run repeats step 3 with `--reps 3`, a budget the owner sets from the pilot's cost, and a `-full.json` name.
 

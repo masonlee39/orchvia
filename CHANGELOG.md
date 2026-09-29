@@ -2,6 +2,20 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.25] - 2026-09-30
+
+A reference host that recovers from a crash at every step, and a benchmark that keeps what it measured (SPEC-0050).
+
+### Added
+
+- `examples/reference-host/`: a host in TypeScript and in Python that runs "change the code until the tests pass, then a review that a person decides". Its journal records each request before sending it and recovers through `operations.lookup`, its projection commits with its checkpoint, and `inspect.ts` shows why a run stopped and who acts next. Tests kill both hosts at each submission and projection step and check that nothing is created, run or counted twice.
+- The fake runtime's optional `usage` (`createFakeAdapter({ usage })`, and `providers.fake.usage` in the CLI configuration): each dispatch that returns a result reports those counts.
+- The benchmark's `parallel` arm, both tracks at once directly on the Agent SDK with each track resuming its own session; `--reserve-usd`, which a paid run requires, reserved before each request starts; each finished request saved to `<out>.rows.jsonl`; rows for requests that failed or did not run; and the report written when the harness itself fails.
+
+### Fixed
+
+- `docs/design.md` no longer states an old release state.
+
 ## [0.1.24] - 2026-09-30
 
 A correction to steering (SPEC-0048).
