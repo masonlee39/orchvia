@@ -156,6 +156,10 @@ jobs:
         run: |
           sudo chsh -s /bin/bash "$USER"
           node scripts/native-codex-local-smoke.mjs dist/verification/native-codex-local-bash.json ./node_modules/.bin/codex
+      # SPEC-0043 C02: what the writable Claude profile's Bash commands can read.
+      - name: Claude read fence with the real Claude binary and a scripted loopback gateway (no paid models)
+        if: ${{ !cancelled() }}
+        run: node scripts/native-read-fence-smoke.mjs dist/verification/native-read-fence.json
       # SPEC-0036: a killed host's leftover command is ended by the next host's sweep.
       - name: Stop markers across a host restart with the real Claude binary (no paid models)
         if: ${{ !cancelled() }}

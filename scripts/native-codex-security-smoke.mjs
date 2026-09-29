@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, realpath, rename, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createCodexAdapter } from '../packages/adapter-codex/src/index.ts';
@@ -116,9 +116,10 @@ const adapter = (options = {}) =>
     ...options.config,
   });
 
-async function runCase(name, script, options, input = {}) {
+async function runCase(name, script, options, input = {}, prepare = async () => {}) {
   const workspace = join(root, name);
   await mkdir(workspace);
+  await prepare(workspace);
   await mkdir(join(root, `${name}-state`), { mode: 0o700 });
   steps = script(workspace);
   const record = (evidence.cases[name] = { asked: [], events: [] });
@@ -151,6 +152,7 @@ async function runCase(name, script, options, input = {}) {
 
 // Every check is recorded, so one run shows each case's outcome.
 const failures = [];
+const swapTargets = [];
 const check = (run, message) => {
   try {
     run();
@@ -183,6 +185,55 @@ try {
   check(
     () => assert.deepEqual(files.record.asked, []),
     'the host was asked about a change outside the workspace',
+  );
+
+  // 0043-C01: with the user's connection and mode default, each file change reaches the host. The
+  // host approves after the adapter checked the paths, having replaced a directory of the change's
+  // path with a link to a directory that commands may only read. Codex writes the change within
+  // its sandbox, so it must not land there. (A link into the temporary directory, which the profile
+  // makes writable, does redirect it: TDD-0043.)
+  const swapHome = join(root, 'swap-home');
+  const swapTarget = join(process.cwd(), `.orch-swap-target-${process.pid}`);
+  await mkdir(swapHome, { mode: 0o700 });
+  await mkdir(swapTarget);
+  swapTargets.push(swapTarget);
+  const swap = await runCase(
+    'swap-after-check',
+    (workspace) => [{ patch: patch(join(workspace, 'sub', 'swapped.txt')) }],
+    {
+      config: {
+        permissionProfile: undefined,
+        connection: { home: swapHome },
+        policy: () => ({ mode: 'default' }),
+      },
+    },
+    {
+      async requestPermission(request) {
+        const workspace = join(root, 'swap-after-check');
+        evidence.cases['swap-after-check'].asked.push({
+          tool: request.toolName,
+          changes: request.permission?.changes ?? null,
+        });
+        if (request.toolName === 'item/fileChange/requestApproval') {
+          await rename(join(workspace, 'sub'), join(workspace, 'sub-moved'));
+          await symlink(swapTarget, join(workspace, 'sub'));
+        }
+        return true;
+      },
+    },
+    async (workspace) => mkdir(join(workspace, 'sub')),
+  );
+  swap.record.landed = {
+    outside: existsSync(join(swapTarget, 'swapped.txt')),
+    movedDirectory: existsSync(join(swap.workspace, 'sub-moved', 'swapped.txt')),
+  };
+  check(
+    () => assert.equal(swap.record.asked.length, 1),
+    `swap-after-check: the host was asked ${swap.record.asked.length} times`,
+  );
+  check(
+    () => assert.equal(swap.record.landed.outside, false),
+    'an approved change followed a link into a directory commands may only read',
   );
 
   // 0038-N02: with network access and the orchestration bridge, a command sees neither the
@@ -226,4 +277,6 @@ try {
   evidence.finishedAt = new Date().toISOString();
   await writeFile(outputPath, JSON.stringify(evidence, null, 2) + '\n');
   await rm(root, { recursive: true, force: true }).catch(() => {});
+  for (const target of swapTargets)
+    await rm(target, { recursive: true, force: true }).catch(() => {});
 }

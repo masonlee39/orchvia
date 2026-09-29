@@ -52,6 +52,15 @@ export interface CodexClientInfo {
   version: string;
 }
 
+/** SPEC-0043 A03: the Codex CLI versions CI runs; others are reported untested, not refused. */
+export const TESTED_CODEX_VERSIONS: readonly string[] = Object.freeze(
+  [
+    [0, 153, 4],
+    [0, 157, 1],
+    [0, 158, 0],
+  ].map((parts) => parts.join('.')),
+);
+
 /** The oldest Codex CLI verified with these settings (SPEC-0035 E01). */
 export const MIN_CODEX_VERSION = [0, 153, 4] as const;
 

@@ -11,13 +11,16 @@ const require = createRequire(import.meta.url);
 const sdk = process.argv[2] ?? require.resolve('@anthropic-ai/claude-agent-sdk');
 const codex = process.argv[3] ?? join(root, 'node_modules/.bin/codex');
 const sdkVersion = JSON.parse(await readFile(join(dirname(sdk), 'package.json'), 'utf8')).version;
+// SPEC-0043 A02: the drift workflow names the versions it installed; CI checks the pinned ones.
+const expectedSdk = process.env.ORCH_EXPECT_CLAUDE_SDK || '0.3.283';
+const expectedCodex = process.env.ORCH_EXPECT_CODEX || '0.157.1';
 assert.equal(
   sdkVersion,
-  '0.3.283',
+  expectedSdk,
   'Run a separate drift review before changing the supported SDK candidate',
 );
 const cliVersion = execFileSync(codex, ['--version'], { encoding: 'utf8', timeout: 3000 }).trim();
-assert.equal(cliVersion, 'codex-cli 0.157.1');
+assert.equal(cliVersion, `codex-cli ${expectedCodex}`);
 const directory = await mkdtemp(join(tmpdir(), 'orch-native-protocol-'));
 try {
   execFileSync(codex, ['app-server', 'generate-ts', '--out', directory], {

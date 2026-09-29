@@ -1,7 +1,7 @@
 /**
  * SPEC-0014 F04: the writable Claude profile's OS sandbox with the installed Claude binary and a
  * loopback scripted gateway. No credentials or paid models. It needs an available OS sandbox
- * (macOS Seatbelt or Linux bubblewrap), so it is a local check and not part of CI.
+ * (macOS Seatbelt or Linux bubblewrap). The native CI job runs it on each runner (SPEC-0043 C02).
  *
  * Usage: node scripts/native-read-fence-smoke.mjs EVIDENCE.json
  */

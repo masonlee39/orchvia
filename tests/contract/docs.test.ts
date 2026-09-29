@@ -276,3 +276,30 @@ test('0021-P10 no document states which version is the latest release', () => {
       if (claim.test(readFileSync(join(root, file), 'utf8'))) found.push(`${file}: ${claim}`);
   assert.deepEqual(found, []);
 });
+
+test('0043-L02 the status table lists exactly the specifications, and its summary names no older range', async () => {
+  const { readdirSync } = await import('node:fs');
+  const status = readFileSync(join(root, 'docs/status.md'), 'utf8');
+  const linked = [...status.matchAll(/\| \[SPEC-[^\]]+\]\(specs\/([^)]+)\)/g)].map((m) => m[1]!);
+  const files = readdirSync(join(root, 'docs/specs')).filter((name) => name.endsWith('.md'));
+  assert.deepEqual([...new Set(linked)].sort(), files.sort());
+  const newest = Math.max(...files.map((name) => Number(name.slice(0, 4))));
+  for (const [, end] of status.matchAll(/SPEC-0001 to SPEC-(\d{4})/g))
+    assert.equal(Number(end), newest, `the summary says SPEC-0001 to SPEC-${end}`);
+});
+
+test('0043-L03 the verified Codex versions, TESTED_CODEX_VERSIONS and CI agree', async () => {
+  const { TESTED_CODEX_VERSIONS } = await import('../../packages/adapter-codex/src/local.ts');
+  const workflow = readFileSync(join(root, '.github/workflows/offline.yml'), 'utf8');
+  const installed = [
+    ...new Set([...workflow.matchAll(/@openai\/codex@(\d+\.\d+\.\d+)/g)].map((m) => m[1]!)),
+  ];
+  const ledger = readFileSync(join(root, 'docs/acceptance/readiness.md'), 'utf8');
+  const line = /Codex CLI versions verified in CI: ([^\n]+)/.exec(ledger)?.[1];
+  assert.ok(line, 'the ledger names the Codex versions CI verifies');
+  const listed = [...line.matchAll(/\d+\.\d+\.\d+/g)].map((m) => m[0]);
+  const sort = (list: readonly string[]) =>
+    [...list].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+  assert.deepEqual(sort(listed), sort(installed));
+  assert.deepEqual(sort(TESTED_CODEX_VERSIONS), sort(installed));
+});

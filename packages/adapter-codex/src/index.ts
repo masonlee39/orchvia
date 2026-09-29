@@ -105,6 +105,7 @@ export {
   type CodexHostHookTrust,
 } from './connection.ts';
 export {
+  TESTED_CODEX_VERSIONS,
   hostHookCommandFor,
   hostHookProgram,
   proxyCheckProgram,
@@ -210,6 +211,12 @@ export interface CodexAdapterConfig {
    * beside its files (SPEC-0039 B01).
    */
   toolBridge?: CodexToolBridge;
+  /**
+   * Lets a dispatch run a model that Codex's model list does not name, such as a custom
+   * provider's; with `connection` (SPEC-0043 M02). Otherwise such a model is refused before the
+   * thread, since Codex gives it a reduced tool set without `apply_patch`.
+   */
+  allowUnlistedModel?: boolean;
   /**
    * How the proxy check runs before a networked dispatch, instead of this Node with the built-in
    * check: `[command, ...args, <socket>]`, with `env` for that process alone, and
@@ -423,6 +430,11 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
   const toolBridge = checkToolBridge(config.toolBridge) ?? defaultToolBridge();
   const proxyCheck = checkProxyCheck(config.proxyCheck);
   if (proxyCheck && !local) invalidConfig('proxyCheck needs connection');
+  if (
+    config.allowUnlistedModel !== undefined &&
+    (typeof config.allowUnlistedModel !== 'boolean' || !local)
+  )
+    invalidConfig('allowUnlistedModel must be true or false, with connection');
   if (config.instructions !== undefined && typeof config.instructions !== 'function')
     invalidConfig('instructions must be a function');
   if (local && config.networkAccess !== undefined)
@@ -980,6 +992,21 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
             } catch {
               models = null;
             }
+            // SPEC-0043 M01: a model Codex does not name gets reduced tools; an empty list tells nothing.
+            if (
+              models?.length &&
+              !config.allowUnlistedModel &&
+              !models.some((item) => item.id === input.model || item.model === input.model)
+            )
+              throw new Error(
+                coded(
+                  'CODEX_MODEL_UNLISTED',
+                  `${input.model} is not among Codex's models: ${models
+                    .slice(0, 20)
+                    .map((item) => String(item.id ?? item.model))
+                    .join(', ')}`,
+                ),
+              );
             const resolved = resolveEffort(models, input.model, policy!.effort);
             if (typeof resolved === 'string')
               throw new Error(coded('CODEX_EFFORT_UNSUPPORTED', resolved));

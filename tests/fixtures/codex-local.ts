@@ -259,7 +259,11 @@ for await (const line of createInterface({ input: process.stdin })) {
         nextCursor: index + 1 < pages.length ? `page-${index + 1}` : null,
       },
     });
-  } else if (value.method === 'model/list')
+  } else if (value.method === 'model/list' && value.params?.includeHidden && !value.params?.cursor)
+    // A dispatch reads the list with hidden models; without FIXTURE_MODELS it lists none, which
+    // the adapter cannot check against (SPEC-0043 M01).
+    send({ id: value.id, result: { data: [], nextCursor: null } });
+  else if (value.method === 'model/list')
     send({
       id: value.id,
       result: {

@@ -133,6 +133,7 @@ test('AC-0042-E01 an effort is an open string; a malformed one is a policy error
   const future = await dispatch(dirs, 'future', {
     policy: { effort: 'hyper-2' },
     model: 'gpt-unlisted',
+    config: { allowUnlistedModel: true },
   });
   assert.equal(future.last?.type, 'result', future.message);
 });
@@ -215,6 +216,8 @@ test('AC-0042-E04 each usage record says which effort it ran with', async (t) =>
       policy,
       model,
       env: { ...usage, ...env },
+      // SPEC-0043 M02: a model Codex does not list proceeds only when the host allows it.
+      ...(model === 'gpt-x' ? { config: { allowUnlistedModel: true } } : {}),
     });
     assert.equal(result.last?.type, 'result', `${name}: ${result.message}`);
     assert.ok(result.usage.length > 0, `${name}: usage was reported`);
