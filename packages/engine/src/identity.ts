@@ -10,6 +10,7 @@ export const MUTATIONS = new Set([
   'sessions.compact',
   'sessions.rotate',
   'sessions.control',
+  'sessions.steer',
   'sessions.reconcile',
   'approvals.decide',
   'scheduler.resolveConflict',

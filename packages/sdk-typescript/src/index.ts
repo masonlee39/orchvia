@@ -38,6 +38,7 @@ import type {
   RuntimeCapabilities,
   SchedulerSnapshot,
   SessionControlTarget,
+  SessionSteerTarget,
   SessionSnapshot,
   SessionOpenSpec,
   RegisteredVerificationRule,
@@ -593,6 +594,15 @@ export class Orchestrator {
       command: SessionControlCommand,
       options?: MutationOptions,
     ) => this.operation('sessions.control', target.sessionId, { target, command }, options),
+    /**
+     * SPEC-0048: adds `text` to the running turn of one dispatch, where `initialize` lists
+     * `workflow.steer`. The operation ends accepted, or with STEER_TURN_ENDED,
+     * STEER_NOT_STEERABLE, STEER_REJECTED or STEER_OUTCOME_UNKNOWN; nothing is sent twice.
+     */
+    steer: async (target: SessionSteerTarget, text: string, options?: MutationOptions) => {
+      this.requireWorkflow('steer');
+      return this.operation('sessions.steer', target.sessionId, { target, text }, options);
+    },
     reconcile: async (
       target: SessionControlTarget,
       evidence: ReconcileEvidence,

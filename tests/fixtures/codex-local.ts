@@ -23,6 +23,8 @@ import { createInterface } from 'node:readline';
 // - FIXTURE_USAGE: the turn reports one token usage observation before it completes, or, as JSON
 //   [{ last?, total? }], each observation given;
 // - FIXTURE_COMPACTION: the turn completes a contextCompaction item before it completes;
+// - FIXTURE_STEER_ERROR / FIXTURE_STEER_DATA: turn/steer is answered with this error message and
+//   data (JSON); FIXTURE_STEER_SILENT: it is not answered; otherwise it is accepted;
 // - FIXTURE_BACKGROUND: a bash command run with the app-server's environment when the turn starts,
 //   whose output (a background process's PID) is logged; the turn then waits for an interrupt.
 const send = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
@@ -222,6 +224,20 @@ for await (const line of createInterface({ input: process.stdin })) {
         });
       send({ id: `request-${index}`, method: request.method, params: request.params });
     });
+  } else if (value.method === 'turn/steer') {
+    if (process.env.FIXTURE_STEER_SILENT) continue;
+    if (process.env.FIXTURE_STEER_ERROR)
+      send({
+        id: value.id,
+        error: {
+          code: -32600,
+          message: process.env.FIXTURE_STEER_ERROR,
+          ...(process.env.FIXTURE_STEER_DATA
+            ? { data: JSON.parse(process.env.FIXTURE_STEER_DATA) }
+            : {}),
+        },
+      });
+    else send({ id: value.id, result: { turnId: 'turn' } });
   } else if (value.method === 'turn/interrupt') {
     send({ id: value.id, result: {} });
     finish('interrupted');

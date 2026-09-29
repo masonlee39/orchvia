@@ -31,7 +31,13 @@ import { contains, workspacePath } from '../../engine/src/verification.ts';
 import { createToolBridge } from '../../engine/src/tool-bridge.ts';
 import { TOOL_NAMES } from '../../engine/src/tools.ts';
 import { VERSION } from '../../engine/src/version.ts';
-import { AppServerConnection, errorMessage, record, type Message } from './app-server.ts';
+import {
+  AppServerConnection,
+  AppServerRequestError,
+  errorMessage,
+  record,
+  type Message,
+} from './app-server.ts';
 import {
   approvalPolicy,
   checkDenyRead,
@@ -452,6 +458,17 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
   const turnCapMs = timeout(config.turnTimeoutMs, 0) || null;
   const owned = new Map<string, Set<AppServerConnection>>();
   let stopping = false;
+  // SPEC-0048 C01: each dispatch's running turn, for steers.
+  const turns = new Map<
+    string,
+    {
+      connection: AppServerConnection;
+      threadId: string;
+      turnId: string;
+      compact: boolean;
+      ended: boolean;
+    }
+  >();
   const prune = (sessionId: string) => {
     const connections = owned.get(sessionId);
     if (!connections) return false;
@@ -476,6 +493,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
       compact: true,
       toolBridge: true,
       inspect: true,
+      steer: true,
       executionBudget: { version: 2, acceptanceCapMs, turnCapMs },
       executionEvidence: {
         version: 1,
@@ -483,6 +501,45 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
       },
     }),
     hasActiveResources: (sessionId) => prune(sessionId),
+    async steer(target, text, steerId) {
+      const turn = turns.get(target.dispatchId);
+      if (!turn || turn.ended)
+        return {
+          status: 'rejected',
+          turnEnded: true,
+          message: 'no running turn for this dispatch',
+        };
+      if (turn.compact)
+        return {
+          status: 'rejected',
+          turnEnded: false,
+          notSteerable: true,
+          message: 'a compaction cannot be steered',
+        };
+      try {
+        await turn.connection.callWhileReading(
+          'turn/steer',
+          {
+            threadId: turn.threadId,
+            expectedTurnId: turn.turnId,
+            input: [{ type: 'text', text, text_elements: [] }],
+            clientUserMessageId: steerId,
+          },
+          Math.max(1000, timeout(config.requestTimeoutMs, 30_000)),
+        );
+        return { status: 'accepted' };
+      } catch (error) {
+        // Only an error answer is a refusal; anything else may have reached Codex (S04).
+        if (!(error instanceof AppServerRequestError)) throw error;
+        const info = JSON.stringify(error.data ?? null);
+        return {
+          status: 'rejected',
+          turnEnded: turn.ended,
+          notSteerable: /activeTurnNotSteerable/.test(info),
+          message: error.message,
+        };
+      }
+    },
     endStopMarkersSync(timeoutMs: number): StopMarkerSyncResult {
       return markers?.endAllSync(timeoutMs) ?? { stopped: true, holders: 0, ended: 0 };
     },
@@ -1106,6 +1163,14 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
           typeof record(turn.turn)?.id === 'string' ? (record(turn.turn)!.id as string) : null;
         if (!turnId && input.nativeAction !== 'compact')
           throw new Error('Codex turn response lacks id');
+        if (turnId)
+          turns.set(input.dispatchId, {
+            connection,
+            threadId,
+            turnId,
+            compact: input.nativeAction === 'compact',
+            ended: false,
+          });
         yield { type: 'accepted', providerSessionId: threadId };
         requestInterrupt();
         while (true) {
@@ -1298,6 +1363,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
             const completed = record(params.turn);
             if (completed?.id !== turnId) continue;
             terminal = true;
+            const running = turns.get(input.dispatchId);
+            if (running) running.ended = true;
             if (completed.status === 'interrupted') observedTerminal = { type: 'interrupted' };
             else if (completed.status === 'failed')
               observedTerminal = {
@@ -1455,6 +1522,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
           };
         }
       } finally {
+        turns.delete(input.dispatchId);
         releaseStart();
         input.signal.removeEventListener('abort', requestInterrupt);
         await bridge?.close();

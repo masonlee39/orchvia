@@ -398,7 +398,9 @@ export type WorkflowFeature =
   /** SPEC-0029 A: `usage.byTask`. */
   | 'usageByTask'
   /** SPEC-0045 R02: a completed attestation without `result` takes the recorded one. */
-  | 'reconcileRecordedResult';
+  | 'reconcileRecordedResult'
+  /** SPEC-0048 S01: `sessions.steer`. */
+  | 'steer';
 /** A model's request that the host hand work to a session outside its subtree (SPEC-0014 H). */
 export interface HandoffRequest {
   handoffId: string;
@@ -547,7 +549,8 @@ export interface OperationSnapshot {
   status: OperationStatus;
   targetId: string;
   result: Json;
-  error: { code: string; message: string } | null;
+  /** `data` carries a code's details, such as STEER_TURN_ENDED's (SPEC-0048 S04). */
+  error: { code: string; message: string; data?: Json } | null;
   lifecycle?: OperationLifecycle;
   resolution?: { operationId: string; outcome: string; occurredAt: string };
 }
@@ -621,7 +624,11 @@ export interface MessageSpec {
   ttlMs?: number;
   replyToMessageId?: string;
 }
-export interface MessageSnapshot extends MessageSpec {
+export interface MessageSnapshot extends Omit<MessageSpec, 'kind'> {
+  /** `steer` (SPEC-0048 S03) records a line added to a running turn; never delivered in a prompt. */
+  kind: MessageSpec['kind'] | 'steer';
+  /** For a steer: the dispatch whose turn it was added to. */
+  dispatchId?: string;
   retryIdentity?: RetryIdentity;
   id: string;
   fromSessionId: string;
@@ -739,8 +746,14 @@ export interface RuntimeCapabilities {
   forkModelChange?: boolean;
   /** True when Read/Glob/Grep are fenced to the workspace and configured read roots. */
   readFence?: boolean;
+  /** True when `steer` adds a line to a running turn (SPEC-0048 C01). */
+  steer?: boolean;
   [key: string]: Json | undefined;
 }
+/** A runtime's answer to a steer (SPEC-0048 C01); a thrown error is no answer. */
+export type RuntimeSteerAnswer =
+  | { status: 'accepted' }
+  | { status: 'rejected'; turnEnded: boolean; notSteerable?: boolean; message: string };
 export interface RuntimeInput {
   taskId: string;
   sessionId: string;
@@ -859,6 +872,12 @@ export interface RuntimeAdapter {
    * the original finalizer. Abnormal Promise returns are observed without an unbounded wait.
    */
   prepareUnobservedCleanup?(target: RuntimeResourceTarget): (() => void) | null;
+  /**
+   * SPEC-0048 C01: adds `text` to the running turn of the target dispatch, for a runtime that
+   * declares `steer: true`. `steerId` identifies the steer for the runtime's own records. Never
+   * retried by the engine; a thrown error is recorded as an unknown outcome.
+   */
+  steer?(target: RuntimeResourceTarget, text: string, steerId: string): Promise<RuntimeSteerAnswer>;
 }
 export interface RuntimeInspectionInput {
   sessionId: string;
@@ -937,6 +956,13 @@ export interface EngineConfig {
     maxCallsPerDispatch?: number;
     maxRepeatedCalls?: number;
   };
+}
+/** SPEC-0048 S01: the running turn of one dispatch; `expectedRevision` is checked when given. */
+export interface SessionSteerTarget {
+  sessionId: string;
+  expectedGeneration: number;
+  expectedDispatchId: string;
+  expectedRevision?: number;
 }
 export interface SessionControlTarget {
   sessionId: string;

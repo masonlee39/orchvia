@@ -191,6 +191,15 @@ class _Sessions:
         return OperationHandle(self._client, await self._client._mutate(
             "sessions.control", {"target": to_wire(target), "command": to_wire(command)}, idempotency_key))
 
+    async def steer(self, target: Mapping[str, Any], text: str, *,
+                    idempotency_key: str | None = None) -> OperationHandle:
+        """SPEC-0048: adds `text` to the running turn of one dispatch, where the host lists
+        `workflow.steer`. The operation ends accepted, or with STEER_TURN_ENDED,
+        STEER_NOT_STEERABLE, STEER_REJECTED or STEER_OUTCOME_UNKNOWN; nothing is sent twice."""
+        await self._client._require_workflow("steer")
+        return OperationHandle(self._client, await self._client._mutate(
+            "sessions.steer", {"target": to_wire(target), "text": text}, idempotency_key))
+
     async def reconcile(self, target: Mapping[str, Any], evidence: ReconcileEvidence | Mapping[str, Any], *,
                         idempotency_key: str | None = None) -> OperationHandle:
         """Submit explicit owner evidence; the host authorizes and validates it."""

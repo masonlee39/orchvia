@@ -1661,6 +1661,10 @@
                 },
                 "message": {
                   "type": "string"
+                },
+                "data": {
+                  "description": "The details of the code, such as STEER_TURN_ENDED's dispatchId, turnOutcome and taskStatus (SPEC-0048 S04).",
+                  "type": "object"
                 }
               }
             }
@@ -1903,7 +1907,14 @@
           "minimum": 1
         },
         "kind": {
-          "enum": ["assignment", "finding", "result", "question"]
+          "description": "`steer` records a line added to a running turn (SPEC-0048 S03); it is never delivered in a prompt.",
+          "enum": ["assignment", "finding", "result", "question", "steer"]
+        },
+        "dispatchId": {
+          "description": "For kind steer: the dispatch whose turn it was added to.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
         },
         "summary": {
           "type": "string",
@@ -2851,6 +2862,28 @@
       "required": ["taskId", "expectedStoreId", "idempotencyKey"],
       "additionalProperties": false
     },
+    "SessionSteerParams": {
+      "description": "SPEC-0048 S01: adds text to the running turn of one dispatch.",
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "object",
+          "properties": {
+            "sessionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "expectedGeneration": { "type": "integer", "minimum": 1 },
+            "expectedDispatchId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "expectedRevision": { "type": "integer", "minimum": 1 }
+          },
+          "required": ["sessionId", "expectedGeneration", "expectedDispatchId"],
+          "additionalProperties": false
+        },
+        "text": { "type": "string", "minLength": 1, "maxLength": 16384 },
+        "expectedStoreId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "required": ["target", "text", "idempotencyKey"],
+      "additionalProperties": false
+    },
     "SessionControlParams": {
       "type": "object",
       "properties": {
@@ -3674,6 +3707,9 @@
           "const": true
         },
         "reconcileRecordedResult": {
+          "const": true
+        },
+        "steer": {
           "const": true
         }
       },

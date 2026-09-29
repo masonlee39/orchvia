@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 db1f741f3de141a8ec6b6e71d652499c85b328b8de875652a095d32ad9c42b02. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 1262e14ba734e533b27cfaad360b82b28687bd26a4d9aaab1c6d28fcbfbce21e. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -1678,6 +1678,11 @@ export const protocolSchema = {
                 message: {
                   type: 'string',
                 },
+                data: {
+                  description:
+                    "The details of the code, such as STEER_TURN_ENDED's dispatchId, turnOutcome and taskStatus (SPEC-0048 S04).",
+                  type: 'object',
+                },
               },
             },
           ],
@@ -1921,7 +1926,15 @@ export const protocolSchema = {
           minimum: 1,
         },
         kind: {
-          enum: ['assignment', 'finding', 'result', 'question'],
+          description:
+            '`steer` records a line added to a running turn (SPEC-0048 S03); it is never delivered in a prompt.',
+          enum: ['assignment', 'finding', 'result', 'question', 'steer'],
+        },
+        dispatchId: {
+          description: 'For kind steer: the dispatch whose turn it was added to.',
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
         },
         summary: {
           type: 'string',
@@ -2867,6 +2880,28 @@ export const protocolSchema = {
       required: ['taskId', 'expectedStoreId', 'idempotencyKey'],
       additionalProperties: false,
     },
+    SessionSteerParams: {
+      description: 'SPEC-0048 S01: adds text to the running turn of one dispatch.',
+      type: 'object',
+      properties: {
+        target: {
+          type: 'object',
+          properties: {
+            sessionId: { type: 'string', minLength: 1, maxLength: 128 },
+            expectedGeneration: { type: 'integer', minimum: 1 },
+            expectedDispatchId: { type: 'string', minLength: 1, maxLength: 128 },
+            expectedRevision: { type: 'integer', minimum: 1 },
+          },
+          required: ['sessionId', 'expectedGeneration', 'expectedDispatchId'],
+          additionalProperties: false,
+        },
+        text: { type: 'string', minLength: 1, maxLength: 16384 },
+        expectedStoreId: { type: 'string', minLength: 1, maxLength: 128 },
+        idempotencyKey: { type: 'string', minLength: 1, maxLength: 256 },
+      },
+      required: ['target', 'text', 'idempotencyKey'],
+      additionalProperties: false,
+    },
     SessionControlParams: {
       type: 'object',
       properties: {
@@ -3697,6 +3732,9 @@ export const protocolSchema = {
           const: true,
         },
         reconcileRecordedResult: {
+          const: true,
+        },
+        steer: {
           const: true,
         },
       },

@@ -2,6 +2,19 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.23] - 2026-09-29
+
+Steering a running turn, a benchmark that counts every arm alike, and tests run under load every week (SPEC-0046 to SPEC-0048).
+
+### Added
+
+- `sessions.steer(target, text)` in both SDKs, where `initialize` lists `workflow.steer`: adds a line from the user to the turn a Codex member is running, without interrupting it. It targets one dispatch, is recorded as a message of kind `steer` before it is sent, is sent once, and ends accepted (event `session.steered`) or with `STEER_TURN_ENDED`, `STEER_NOT_STEERABLE`, `STEER_REJECTED` or `STEER_OUTCOME_UNKNOWN`. Codex adapters declare `steer: true`; a Claude member is refused with `UNSUPPORTED_CAPABILITY`. An operation's error may carry `data`.
+- A weekly stress workflow and `scripts/stress.mjs`, which run the tests in several copies while every core is busy; rules in CONTRIBUTING for tests that depend on time, and `docs/ci-flakes.md`, a ledger of every CI run that passed only when run again.
+
+### Fixed
+
+- The benchmark counts the calls outside the main loop in every arm, subtracts a resumed session's totals only where Claude Code continues them, prices each model at its own rate and each cache write at its own duration's, and reports an unknown count as unknown instead of 0.
+
 ## [0.1.22] - 2026-09-29
 
 Corrections an integrating host reported, and two found in review (SPEC-0045).
