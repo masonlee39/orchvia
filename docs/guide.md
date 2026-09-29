@@ -94,6 +94,19 @@ const orch = await createOrchestrator({
 
 Creating an orchestrator is not submitting a task. Await task state and acceptance; save IDs and immutable retry identities. Close embedded owners explicitly. `SHUTDOWN_INCOMPLETE` retains the client and operationId for continuation. A connected client's close only disconnects.
 
+**Settling a task** ([SPEC-0044](./specs/0044-onboarding-and-stability.md) T). `task.wait()` returns only when a task completes, fails or is cancelled. A task that waits for a person's acceptance is paused when its approval expires, after 24 hours by default, and `wait()` then goes on until its own timeout. `task.settle({ onApproval?, timeoutMs?, signal? })`, `settle(on_approval=None, timeout=None)` in Python, returns `{ task, reason, approval?, session? }` as soon as the task needs no more waiting:
+
+- `terminal`: the task completed, failed or was cancelled;
+- `waiting_approval`: it waits for a pending approval that no handler decided, which is included;
+- `paused`, or `blocked` with its session, whose status may be `outcome_unknown` (section 11.3).
+
+`onApproval(approval, task)` sees each pending approval once per revision and may return `'approve'` or `'deny'`, which is submitted with that revision, or nothing, which ends settling at the approval. `settle()` never decides, retries, resends or reconciles anything by itself, and a timeout ends only the local wait. For a task that a model created, make a handle from its snapshot: `new TaskHandle(orch, await orch.tasks.get(id))`, or `TaskHandle(orch, await orch.tasks.get(id))` in Python.
+
+```ts
+const settled = await task.settle({ onApproval: (approval) => askReviewer(approval) });
+if (settled.reason === 'blocked') await reconcileAfterChecking(settled.session!);
+```
+
 ### 5.1 Integrating an existing application's runtime
 
 Use `createOrchestrator({ workspace, stateDir, adapters: [applicationAdapter] })` with an application-owned implementation of the current `RuntimeAdapter`. The built-in adapters are optional; do not start another provider runtime when the application already owns permission checks, tools, confirmations, and audit. This is an in-process extension point. The stock CLI currently allows only fake/Claude/Codex providers and is not a loader for arbitrary adapter modules.
@@ -378,6 +391,17 @@ const orch = await createOrchestrator({
 
 Run `PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py` from the checkout for a complete owned-host example, including known-fixture review and shutdown. Installed Python still needs the Node CLI and selected adapter in a stable tool directory.
 
+**Writable members from Python** ([SPEC-0044](./specs/0044-onboarding-and-stability.md) E05). The JSON configuration of `orchvia host` cannot pass a stop observer, so its writable Claude and its Codex members need `"executionStop": "owner-reconcile"`, and each of their dispatches waits blocked until the owner reconciles it (section 5.2). A Python host that wants these members to release their own dispatches starts a small Node host of its own instead of the CLI: `startStdioHost(engine)` from `@orchvia/cli` serves any engine over stdin and stdout, with the Python process as its owner, and the adapters then take every option of section 5.2, such as `stopMarker`. [writable-host.ts](../examples/typescript/writable-host.ts) builds one with writable Claude and Codex members that share a stop-marker directory, and sweeps that directory before its engine starts:
+
+```python
+host = [node, "examples/typescript/writable-host.ts", workspace, state_dir, marker_dir, codex_home]
+async with Orchestrator.local(engine_command=host) as orch:
+    task = await orch.tasks.create(TaskSpec(goal, RuntimeSpec("codex", "gpt-5.5"), acceptance))
+    settled = await task.settle(on_approval=ask_reviewer)
+```
+
+The offline [team_mailbox.py](../examples/python/team_mailbox.py) starts such a host too, with a scripted runtime instead of models.
+
 ```python
 from orchvia import Orchestrator, RuntimeSpec, TaskSpec, CheckAcceptanceSpec
 
@@ -607,6 +631,14 @@ Any client, including a socket client that is not the owner, can call `orch.cont
 
 If the judge fails, the plan is empty and reports why.
 
+**A rule judge.** `createRuleJudge({ answer? })`, or `RuleJudge(answer=None)` in Python, answers the router's questions without a model ([SPEC-0044](./specs/0044-onboarding-and-stability.md) E04). It is a baseline for trying the layer, not a judge of quality:
+
+- relevance (`relevant.*`, `clash.*`, `affects.*`, `depends.*` and `best`) comes from the words the request shares with an agent's description, leaving out common words and verbs of change: none 0.2, one 0.55, two or more 0.8; `best` picks `fresh` when no agent shares a word;
+- `writes` is 0.8 when the request contains a verb such as fix, add, change or implement, and 0.2 otherwise;
+- `size` comes from the request's length: up to 8 words trivial, up to 30 moderate, more large;
+- its confidence never exceeds 0.6, so the default policy asks for confirmation whenever there is an agent to choose, and its size answers never reach the thresholds for a smaller or larger model;
+- `answer(id, question, state)` may answer any question instead, and returns nothing to leave it to the rules; its answers are used as given.
+
 **Jev.** TypeSafe's Jev is a third-party paid service; Orchvia is not affiliated with TypeSafe. `createJevJudge({ apiKey, model?, baseUrl?, timeoutMs? })`, or `JevJudge(api_key, ...)` in Python:
 
 - calls `POST https://api.typesafe.ai/v1/systemone` with a bearer token, and pins `jev-1.13.0` by default;
@@ -675,6 +707,8 @@ If the host process ends before `close` completes, the next start finds:
 
 - Each running task `blocked` with reason `outcome_unknown: previous owner exited during a dispatch`. Its session is `outcome_unknown`, and it holds an execution slot and a quarantine slot.
 - Queued tasks paused with reason `owner_restart`.
+
+The offline [crash-recovery example](../examples/typescript/crash-recovery.ts), also [in Python](../examples/python/crash_recovery.py), kills a host once its dispatch was accepted, starts another on the same state directory, finds the task blocked, reconciles it as interrupted and shows that nothing was sent again.
 
 Reconcile each unknown dispatch with `sessions.reconcile` (section 11.4). The evidence decides what is released:
 

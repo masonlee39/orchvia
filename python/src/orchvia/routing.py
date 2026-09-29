@@ -10,6 +10,7 @@ import asyncio
 import http.client
 import json
 import math
+import re
 import socket
 import threading
 import time
@@ -316,6 +317,108 @@ class JevJudge:
                     else "JUDGE_UNAVAILABLE" if retryable else "JUDGE_INVALID_REQUEST")
             raise JudgeError(code, f"Jev answered HTTP {status}", status)
         raise JudgeError("JUDGE_UNAVAILABLE", "Jev request failed")
+
+
+_RULE_CONFIDENCE = 0.6
+"""The highest confidence the rule judge claims, below every threshold of the default policy."""
+_WRITE_VERBS = frozenset(
+    "add bump change create delete edit fix implement migrate modify move patch refactor remove rename replace "
+    "rewrite update upgrade write".split())
+_COMMON_WORDS = frozenset(
+    "about after all and any are can for from how into its not now our that the their them then this was what "
+    "when where which with you your".split())
+
+
+def _tokens(text: str) -> list[str]:
+    return re.findall(r"[^\W_]+", text.lower())
+
+
+def _rule_words(text: str) -> set[str]:
+    """The words of a text that can relate it to another: no verbs of change, no common words."""
+    return {word for word in _tokens(text)
+            if len(word) >= 3 and word not in _WRITE_VERBS and word not in _COMMON_WORDS}
+
+
+def _by_count(count: int, length: int) -> int:
+    """Level 0, the middle level or the last, for none, one, or two and more."""
+    return 0 if count == 0 else (length - 1) // 2 if count == 1 else length - 1
+
+
+def _score_answer(length: int, at: int, peak: float) -> dict[str, Any]:
+    rest = (1 - peak) / (length - 1) if length > 1 else 0
+    return {"type": "score", "probabilities": [peak if i == at else rest for i in range(length)],
+            "confidence": min(peak, _RULE_CONFIDENCE)}
+
+
+class RuleJudge:
+    """A judge without a model (SPEC-0044 E04), mirroring ``createRuleJudge``.
+
+    Relevance comes from the words a goal shares with an agent, ``writes`` from verbs of change, and
+    ``size`` from the goal's length. It is a baseline for trying the routing layer, not a judge of
+    quality: its confidence never exceeds 0.6, so the default policy asks for confirmation whenever
+    there is an agent to choose. ``answer(id, question, state)`` may answer any question instead;
+    ``None`` leaves it to the rules. Its answers are not capped.
+    """
+
+    model = "rules"
+
+    def __init__(self, *, answer: Callable[[str, Mapping[str, Any], Any], Mapping[str, Any] | None] | None = None):
+        self._answer = answer
+
+    async def evaluate(self, state: Any, questions: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+        state_map = state if isinstance(state, Mapping) else {}
+        request = state_map.get("request") or {}
+        finding = state_map.get("finding") or {}
+        text = str(request.get("goal") if request.get("goal") is not None else finding.get("text") or "")
+        words = _rule_words(text)
+        agents = state_map.get("agents") or {}
+
+        def shared(alias: str) -> int:
+            agent = agents.get(alias)
+            about = agent if isinstance(agent, str) else (agent or {}).get("description")
+            return len(words & _rule_words(str(about or "")))
+
+        answers: dict[str, Any] = {}
+        for question_id, question in questions.items():
+            custom = self._answer(question_id, question, state) if self._answer else None
+            if custom is not None:
+                answers[question_id] = custom
+                continue
+            alias = question_id.split(".", 1)[1] if "." in question_id else question_id
+            if question["type"] == "choice":
+                names = list(question["options"])
+                counts = [0 if name == "fresh" else shared(name) for name in names]
+                # Fresh wins when no agent shares a word, and otherwise counts as half a shared word.
+                fresh = 1 if max([0, *counts]) == 0 else 0.5
+                weights = [fresh if name == "fresh" else counts[i] for i, name in enumerate(names)]
+                total = sum(weights) or 1
+                probabilities = {name: weights[i] / total for i, name in enumerate(names)}
+                choice = names[0]
+                for name in names[1:]:
+                    if probabilities[name] > probabilities[choice]:
+                        choice = name
+                answers[question_id] = {"type": "choice", "choice": choice, "probabilities": probabilities,
+                                        "confidence": min(_RULE_CONFIDENCE, probabilities[choice])}
+            elif question["type"] == "yesno":
+                probability = 0.5
+                if question_id == "writes":
+                    probability = 0.8 if any(word in _WRITE_VERBS for word in _tokens(text)) else 0.2
+                elif re.match(r"^(relevant|clash|affects)\.", question_id):
+                    count = shared(alias)
+                    probability = 0.2 if count == 0 else 0.55 if count == 1 else 0.8
+                answers[question_id] = {"type": "yesno", "probability": probability}
+            else:
+                length = len(question["levels"])
+                if question_id == "size":
+                    count = len(text.split())
+                    at = _by_count(0 if count <= 8 else 1 if count <= 30 else 2, length)
+                    answers[question_id] = _score_answer(length, at, _RULE_CONFIDENCE)
+                elif question_id.startswith("depends."):
+                    answers[question_id] = _score_answer(length, _by_count(shared(alias), length), _RULE_CONFIDENCE)
+                else:
+                    # A question the rules do not know: every level equally likely.
+                    answers[question_id] = _score_answer(length, 0, 1 / length)
+        return {"answers": answers, "model": self.model}
 
 
 @dataclass(frozen=True)

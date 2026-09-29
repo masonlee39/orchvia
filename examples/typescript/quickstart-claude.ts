@@ -31,20 +31,9 @@ const acceptance = { mode: 'human' as const, criteria: ['A reviewer read the ans
 /** Runs one task to completion. A real host shows the answer to a person; this demo accepts it. */
 async function run(spec: Spec) {
   const task = await orch.tasks.create(spec);
-  for await (const event of orch.events({
-    taskId: task.id,
-    signal: AbortSignal.timeout(300_000),
-  })) {
-    if (event.type === 'task.failed' || event.type === 'task.blocked') break;
-    if (event.type !== 'approval.requested') continue;
-    const approval = await orch.approvals.get(String(event.data.approvalId));
-    await orch.approvals.decide(approval.approvalId, {
-      choice: 'approve',
-      expectedRevision: approval.revision,
-    });
-    break;
-  }
-  return task.wait({ timeoutMs: 300_000 });
+  // A failed or blocked task stops settling too, so the demo never waits on it.
+  const settled = await task.settle({ onApproval: () => 'approve', timeoutMs: 300_000 });
+  return settled.task;
 }
 
 try {

@@ -2,6 +2,22 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.21] - 2026-09-29
+
+A stability policy, settling a task that waits on a person, and examples that run (SPEC-0044).
+
+### Added
+
+- [Stability](docs/stability.md): from 0.1.21 on, a patch release never breaks a public export, a wire method or field, an event, an error code, a configuration field or a CLI flag; a change that does bumps the minor version, with a "Breaking" section and migration notes. A test checks this changelog for it.
+- `task.settle({ onApproval?, timeoutMs?, signal? })`, and `settle(on_approval=None, timeout=None)` in Python: returns as soon as a task ends, waits for an approval that no handler decided, is paused or is blocked, with the reason, the approval or the blocked task's session. It decides nothing by itself.
+- `createRuleJudge()` in `@orchvia/sdk/routing`, and `RuleJudge()` in `orchvia.routing`: a judge without a model or a key, for trying the routing layer. Its confidence stays at or below 0.6, so proposals among existing agents ask for confirmation.
+- Offline examples of crash recovery and of a team that shares a mailbox and hands work over, in TypeScript and Python, and a custom stdio host with writable Claude and Codex members for a Python owner. A test runs every example that needs no person and no model.
+
+### Changed
+
+- The quickstarts and the design document use `settle()`. The offline quickstart no longer asks for `npm ci`; the Claude quickstart still does.
+- `examples/python/fake_roundtrip.py` takes `--emergency-bytes`.
+
 ## [0.1.20] - 2026-09-29
 
 A weekly check of new upstream versions, models Codex does not list, and documentation that matches the facts (SPEC-0043).

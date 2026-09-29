@@ -218,6 +218,26 @@ async function waitFor<T extends { status: string }>(
   }
 }
 
+/** SPEC-0044 T01: where settling a task stopped, with what the caller needs to act. */
+export interface SettledTask {
+  task: TaskSnapshot;
+  reason: 'terminal' | 'waiting_approval' | 'paused' | 'blocked';
+  /** The pending approval, when the task waits for one that no handler decided. */
+  approval?: ApprovalRequest;
+  /** The task's session, when the task is blocked: its status may be `outcome_unknown`. */
+  session?: SessionSnapshot;
+}
+export interface SettleOptions extends WaitOptions {
+  /**
+   * Called once for each pending approval and revision. `'approve'` or `'deny'` is submitted with
+   * that revision and settling goes on; nothing ends settling with `'waiting_approval'`.
+   */
+  onApproval?: (
+    approval: ApprovalRequest,
+    task: TaskSnapshot,
+  ) => 'approve' | 'deny' | undefined | void | Promise<'approve' | 'deny' | undefined | void>;
+}
+
 export class TaskHandle {
   readonly id: string;
   readonly initial: TaskSnapshot;
@@ -243,6 +263,53 @@ export class TaskHandle {
   }
   resume(options: MutationOptions = {}) {
     return this.client.tasks.resume(this.id, options);
+  }
+  /**
+   * SPEC-0044 T: reads the task until it ends, is paused or blocked, or waits for an approval that
+   * no handler decides. It never decides an approval by itself, and never retries, resends or
+   * reconciles anything; a timeout leaves the task as it is.
+   */
+  async settle(options: SettleOptions = {}): Promise<SettledTask> {
+    const handled = new Set<string>();
+    let outcome: SettledTask | undefined;
+    await waitFor(
+      async (request) => {
+        const task = await this.get(request);
+        if (taskTerminal.has(task.status)) outcome = { task, reason: 'terminal' };
+        else if (task.status === 'paused') outcome = { task, reason: 'paused' };
+        else if (task.status === 'blocked')
+          outcome = {
+            task,
+            reason: 'blocked',
+            session: await this.client.sessions.get(task.sessionId, request),
+          };
+        else if (task.status === 'waiting_approval' && task.approvalId) {
+          const approval = await this.client.approvals.get(task.approvalId, request);
+          const identity = `${approval.approvalId}:${approval.revision}`;
+          // Decided meanwhile: read the task again.
+          if (approval.status !== 'pending') return task;
+          if (!options.onApproval || handled.has(identity))
+            outcome = { task, reason: 'waiting_approval', approval };
+          else {
+            handled.add(identity);
+            const choice = await options.onApproval(approval, task);
+            if (choice === 'approve' || choice === 'deny') {
+              await this.client.approvals.decide(approval.approvalId, {
+                choice,
+                expectedRevision: approval.revision,
+              });
+              return task;
+            }
+            outcome = { task, reason: 'waiting_approval', approval };
+          }
+        }
+        return outcome ? { ...task, status: 'settled' } : task;
+      },
+      new Set(['settled']),
+      options,
+      this.client.pollIntervalMs,
+    );
+    return outcome!;
   }
 }
 export class OperationHandle {

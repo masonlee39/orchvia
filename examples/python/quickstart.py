@@ -24,15 +24,8 @@ ACCEPTANCE = AcceptanceSpec(mode="human", criteria=["A reviewer read the result"
 async def run(orch: Orchestrator, spec: TaskSpec):
     """Runs one task to completion. A real host shows the result to a person; this demo approves it."""
     task = await orch.tasks.create(spec)
-    async with asyncio.timeout(10):
-        async for event in orch.events(task_id=task.id):
-            if event.type != "approval.requested":
-                continue
-            approval = await orch.approvals.get(event.data.approval_id)
-            await orch.approvals.decide(approval.approval_id,
-                                        {"choice": "approve", "expected_revision": approval.revision})
-            break
-    return await task.wait(timeout=10)
+    settled = await task.settle(on_approval=lambda approval, current: "approve", timeout=10)
+    return settled.task
 
 
 async def main(node: str, emergency_bytes: int | None) -> None:

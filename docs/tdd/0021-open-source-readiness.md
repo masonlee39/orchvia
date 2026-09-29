@@ -500,6 +500,10 @@ Pull request #67 carried SPEC-0041 and the version 0.1.18. One native job failed
 
 Pull request #69 carried SPEC-0042 and the version 0.1.19. Pull request #68, which changed only the README, was merged before it. A local Claude Code session merged #69 and pushed the tag `v0.1.19` on the merge commit `5d111bc`, on the owner's authorization ([36510795986](https://github.com/masonlee39/orchvia/actions/runs/36510795986)). The owner approved the deployments, and every job passed at the first attempt. npm lists 0.1.19 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.19 with its wheel and sdist. Pull request #70 then changed the native smokes' Codex model and added Codex 0.158.0 to CI, without a release.
 
+## The nineteenth release, 0.1.20
+
+Pull request #71 carried SPEC-0043 and the version 0.1.20. A local Claude Code session merged it and pushed the tag `v0.1.20` on the merge commit `56957e4`, on the owner's authorization ([36529669671](https://github.com/masonlee39/orchvia/actions/runs/36529669671)). The owner approved the deployments, and every job passed at the first attempt. npm lists 0.1.20 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.20 with its wheel and sdist.
+
 ## P10: no document names the latest release (D-rel-3)
 
 On 2026-09-27 the owner chose D-rel-3: a release is recorded by the next release pull request, and no document names the latest release.

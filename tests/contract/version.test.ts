@@ -211,3 +211,38 @@ test('0021-P09 a release tag must equal the source version, have a changelog sec
   const dryRun = release('refs/pull/5/merge', offMain);
   assert.equal(dryRun.stdout, '0.0.0-rc.42\n', dryRun.stderr);
 });
+
+/** SPEC-0044 S02: releases from `from` on whose changelog section breaks a stable surface. */
+function breakingPatches(changelog: string, from: string): string[] {
+  const numbers = (version: string) => version.split('.').map(Number);
+  const later = (a: string, b: string) => {
+    const [x, y] = [numbers(a), numbers(b)];
+    for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i]! > y[i]!;
+    return true;
+  };
+  const sections = [
+    ...changelog.matchAll(/^## \[(\d+\.\d+\.\d+)\][^\n]*\n([\s\S]*?)(?=^## \[|(?![\s\S]))/gm),
+  ].map((match) => ({ version: match[1]!, body: match[2]! }));
+  const found: string[] = [];
+  sections.forEach(({ version, body }, index) => {
+    const previous = sections[index + 1]?.version;
+    if (!previous || !later(version, from) || !/^### Breaking\b/m.test(body)) return;
+    const [major, minor] = numbers(version);
+    const [lastMajor, lastMinor] = numbers(previous);
+    if (major === lastMajor && minor === lastMinor) found.push(version);
+  });
+  return found;
+}
+
+test('0044-S02 a release from 0.1.21 on breaks a stable surface only with a new minor version', () => {
+  const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
+  assert.deepEqual(breakingPatches(changelog, '0.1.21'), []);
+  // The rule's own cases: a breaking patch fails, a breaking minor passes, history before counts not.
+  const sample = (heading: string, breaking: boolean) =>
+    `## [${heading}] - 2026-10-01\n\n${breaking ? '### Breaking\n\n- x\n\n' : '### Added\n\n- y\n\n'}`;
+  assert.deepEqual(breakingPatches(sample('0.1.22', true) + sample('0.1.21', false), '0.1.21'), [
+    '0.1.22',
+  ]);
+  assert.deepEqual(breakingPatches(sample('0.2.0', true) + sample('0.1.21', false), '0.1.21'), []);
+  assert.deepEqual(breakingPatches(sample('0.1.10', true) + sample('0.1.9', false), '0.1.21'), []);
+});
