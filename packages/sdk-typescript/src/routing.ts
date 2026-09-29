@@ -265,6 +265,120 @@ export function createJevJudge(options: JevJudgeOptions): Judge {
   };
 }
 
+export interface RuleJudgeOptions {
+  /** Answers a question instead of the rules; `undefined` leaves it to them. Not capped. */
+  answer?: (id: string, question: JudgeQuestion, state: Json) => JudgeAnswer | undefined;
+}
+/** The highest confidence the rule judge claims, below every threshold of the default policy. */
+const RULE_CONFIDENCE = 0.6;
+const WRITE_VERBS = new Set(
+  'add bump change create delete edit fix implement migrate modify move patch refactor remove rename replace rewrite update upgrade write'.split(
+    ' ',
+  ),
+);
+const COMMON_WORDS = new Set(
+  'about after all and any are can for from how into its not now our that the their them then this was what when where which with you your'.split(
+    ' ',
+  ),
+);
+const tokens = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+/** The words of a text that can relate it to another: no verbs of change, no common words. */
+const ruleWords = (text: string) =>
+  new Set(
+    tokens(text).filter(
+      (word) => word.length >= 3 && !WRITE_VERBS.has(word) && !COMMON_WORDS.has(word),
+    ),
+  );
+const sharedWords = (a: Set<string>, b: Set<string>) => [...a].filter((word) => b.has(word)).length;
+/** Level 0, the middle level or the last, for none, one, or two and more. */
+const byCount = (count: number, length: number) =>
+  count === 0 ? 0 : count === 1 ? Math.floor((length - 1) / 2) : length - 1;
+/** `peak` on level `at` and the rest spread evenly; the confidence is the peak. */
+function scoreAnswer(length: number, at: number, peak: number): JudgeAnswer {
+  const rest = length > 1 ? (1 - peak) / (length - 1) : 0;
+  return {
+    type: 'score',
+    probabilities: Array.from({ length }, (_, i) => (i === at ? peak : rest)),
+    confidence: Math.min(peak, RULE_CONFIDENCE),
+  };
+}
+
+/**
+ * A judge without a model (SPEC-0044 E04): relevance from the words a goal shares with an agent,
+ * `writes` from verbs of change, and `size` from the goal's length. It is a baseline for trying
+ * the routing layer, not a judge of quality: its confidence never exceeds 0.6, so the default
+ * policy asks for confirmation whenever there is an agent to choose.
+ */
+export function createRuleJudge(options: RuleJudgeOptions = {}): Judge {
+  return {
+    async evaluate(request) {
+      if (request.signal?.aborted) throw request.signal.reason;
+      const state = request.state as {
+        request?: { goal?: unknown };
+        finding?: { text?: unknown };
+        agents?: Record<string, { description?: unknown } | string>;
+      } | null;
+      const text = String(state?.request?.goal ?? state?.finding?.text ?? '');
+      const words = ruleWords(text);
+      const shared = (alias: string) => {
+        const agent = state?.agents?.[alias];
+        const about = typeof agent === 'string' ? agent : agent?.description;
+        return sharedWords(words, ruleWords(String(about ?? '')));
+      };
+      const answers: Record<string, JudgeAnswer> = {};
+      for (const [id, question] of Object.entries(request.questions)) {
+        const custom = options.answer?.(id, question, request.state);
+        if (custom !== undefined) {
+          answers[id] = custom;
+          continue;
+        }
+        const alias = id.slice(id.indexOf('.') + 1);
+        if (question.type === 'choice') {
+          const names = Object.keys(question.options);
+          const counts = names.map((name) => (name === 'fresh' ? 0 : shared(name)));
+          // Fresh wins when no agent shares a word, and otherwise counts as half a shared word.
+          const fresh = Math.max(0, ...counts) === 0 ? 1 : 0.5;
+          const weights = names.map((name, i) => (name === 'fresh' ? fresh : counts[i]!));
+          const total = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+          const probabilities = Object.fromEntries(
+            names.map((name, i) => [name, weights[i]! / total]),
+          );
+          const choice = names.reduce((a, b) => (probabilities[b]! > probabilities[a]! ? b : a));
+          answers[id] = {
+            type: 'choice',
+            choice,
+            probabilities,
+            confidence: Math.min(RULE_CONFIDENCE, probabilities[choice]!),
+          };
+        } else if (question.type === 'yesno') {
+          let probability = 0.5;
+          if (id === 'writes')
+            probability = tokens(text).some((word) => WRITE_VERBS.has(word)) ? 0.8 : 0.2;
+          else if (/^(relevant|clash|affects)\./.test(id)) {
+            const count = shared(alias);
+            probability = count === 0 ? 0.2 : count === 1 ? 0.55 : 0.8;
+          }
+          answers[id] = { type: 'yesno', probability };
+        } else {
+          const length = question.levels.length;
+          if (id === 'size') {
+            const count = text.split(/\s+/).filter(Boolean).length;
+            answers[id] = scoreAnswer(
+              length,
+              byCount(count <= 8 ? 0 : count <= 30 ? 1 : 2, length),
+              RULE_CONFIDENCE,
+            );
+          } else if (id.startsWith('depends.'))
+            answers[id] = scoreAnswer(length, byCount(shared(alias), length), RULE_CONFIDENCE);
+          // A question the rules do not know: every level equally likely.
+          else answers[id] = scoreAnswer(length, 0, 1 / length);
+        }
+      }
+      return { answers, model: 'rules' };
+    },
+  };
+}
+
 /** Provider and models for fresh work of one permission profile. */
 export interface RouteRuntime {
   provider: string;

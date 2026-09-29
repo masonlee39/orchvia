@@ -99,6 +99,25 @@ preserves a body exception as the cause if cleanup also fails. Applications shou
 their business result/error separately when they continue cleanup outside the context.
 The executable example demonstrates that pattern. The SDK installs no global signal handlers.
 
+### Writable members: start your own Node host
+
+The JSON configuration of `orchvia host` cannot pass a stop observer, so there a writable
+Claude member or a Codex member needs `"executionStop": "owner-reconcile"`, and each of its
+dispatches waits blocked until you reconcile it. To let these members prove their dispatches
+stopped, start a small Node host of your own instead: `startStdioHost(engine)` from
+`@orchvia/cli` serves any engine over stdin and stdout, with Python as its owner. The
+repository's [writable-host.ts](https://github.com/masonlee39/orchvia/blob/main/examples/typescript/writable-host.ts)
+builds one with writable Claude and Codex members that share a stop-marker directory:
+
+```python
+host = [node, "examples/typescript/writable-host.ts", workspace, state_dir, marker_dir, codex_home]
+async with Orchestrator.local(engine_command=host) as orch:
+    ...
+```
+
+The offline [team_mailbox.py](https://github.com/masonlee39/orchvia/blob/main/examples/python/team_mailbox.py)
+starts such a host with a scripted runtime and needs no model.
+
 ## Connect to an existing local host
 
 ```python
@@ -136,6 +155,20 @@ and call `approvals.decide(approval_id, {"choice": ..., "expected_revision": ...
 an authorized decision. The task does not become completed just because a model returns.
 `tasks.get` returns a fresh snapshot; `task.wait` returns a completed/failed/cancelled snapshot.
 Paused or blocked tasks require explicit caller handling and are not successful results.
+
+`await task.settle(on_approval=None, timeout=None)` returns as soon as a task needs no more
+waiting, as a `SettledTask(task, reason, approval, session)`: `reason` is `terminal`,
+`waiting_approval` (with the undecided pending approval), `paused` or `blocked` (with the
+task's session, whose status may be `outcome_unknown`). `on_approval(approval, task)`, plain or
+async, sees each pending approval once per revision and returns `"approve"`, `"deny"`, or
+`None` to stop at the approval. `settle` never decides, resends or reconciles anything by
+itself. For a task that a model created, use `TaskHandle(orch, await orch.tasks.get(task_id))`.
+
+```python
+settled = await task.settle(on_approval=ask_reviewer, timeout=600)
+if settled.reason == "blocked":
+    ...  # check what ran, then reconcile (below)
+```
 
 Task/session mutations and approval decisions return operation handles where specified:
 `await operation.wait(timeout=...)` returns completed/noop/rejected/failed/outcome_unknown.

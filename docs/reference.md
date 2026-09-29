@@ -107,6 +107,18 @@ node examples/typescript/checks-and-dependencies.ts
 PYTHONPATH=python/src python3 examples/python/checks_and_dependencies.py
 ```
 
+Two more show what sets Orchvia apart, in both languages and without a model:
+
+```sh
+node examples/typescript/crash-recovery.ts
+PYTHONPATH=python/src python3 examples/python/crash_recovery.py
+node examples/typescript/team-mailbox.ts
+PYTHONPATH=python/src python3 examples/python/team_mailbox.py
+```
+
+- **Crash recovery** kills a host while its runtime works on a task and starts another on the same state directory. The task is blocked and its session's outcome unknown; the example reconciles it as interrupted, and nothing is sent again.
+- **Team mailbox** runs a scripted runtime whose lead agent delegates to a helper, which the host approves; sends the helper a message, which reaches the helper's prompt; and asks to hand a review to an agent outside its team, which the host accepts. The Python version runs the runtime in a custom Node host, [team-host.ts](../examples/typescript/team-host.ts).
+
 ```sh
 PYTHONPATH=python/src python3 examples/python/fake_roundtrip.py
 ```
@@ -142,7 +154,7 @@ const orch = await createOrchestrator({
 
 `createOrchestrator` also takes `onFatal(failure)`, which is called once when an internal failure stops the engine ([guide §11.6](guide.md#116-when-an-internal-failure-stops-the-engine)); `openOrchestratorReadOnly({ stateDir })` reads a store while no engine runs ([guide §11.7](guide.md#117-reading-a-store-while-its-engine-is-stopped)).
 
-This snippet only creates the orchestrator with an explicit offline fake adapter. The complete repository example uses source imports and handles task creation, approval and shutdown. A timeout or cancellation of `task.wait({timeoutMs, signal})` stops only the local wait; remote cancellation requires an explicit `tasks.cancel`. Inspect and resolve paused/blocked states rather than waiting indefinitely for completion.
+This snippet only creates the orchestrator with an explicit offline fake adapter. The complete repository example uses source imports and handles task creation, approval and shutdown. A timeout or cancellation of `task.wait({timeoutMs, signal})` stops only the local wait; remote cancellation requires an explicit `tasks.cancel`. `wait()` returns only when a task ends, so a paused or blocked task keeps it waiting; `task.settle({ onApproval?, timeoutMs? })` returns as soon as the task ends, waits for an undecided approval, or is paused or blocked, and says which ([guide §5](guide.md#5-embedded-typescript-wiring)).
 
 ## Standalone host and cross-language integration
 
@@ -282,6 +294,16 @@ It routes only inside one group of agents. With `scope: 'root'`, the default, a 
 ### Your own judge, or your own router
 
 A judge is any object with `evaluate({ state, questions })` that answers with probabilities. It can wrap another model or plain rules. The answers are `{ type: 'choice', choice, probabilities, confidence }`, `{ type: 'yesno', probability }` or `{ type: 'score', probabilities, confidence }`. The question ids and the state shape are listed in the [wiring guide](guide.md#83-optional-routing-layer). You can also skip the layer and declare `contextPlan` yourself.
+
+### A rule judge, to try the layer
+
+`createRuleJudge()`, or `RuleJudge()` in Python, answers without a model or a key: relevance from the words a request shares with each agent, whether files change from verbs such as fix or add, and size from the request's length. Its confidence stays at or below 0.6, so every proposal among existing agents asks for confirmation. It is a baseline, not a judge of quality; `answer(id, question, state)` may answer any question instead ([guide §8.3](guide.md#83-optional-routing-layer)).
+
+```ts
+import { createRouter, createRuleJudge } from '@orchvia/sdk/routing';
+
+const router = createRouter({ orchestrator: orch, judge: createRuleJudge(), runtimes, scope: 'engine' });
+```
 
 ### TypeSafe Jev, a hosted judge (optional)
 

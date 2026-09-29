@@ -15,11 +15,10 @@ You need Node.js 22.18 or later, on macOS or Linux. Orchvia uses Node's built-in
 ```sh
 git clone https://github.com/masonlee39/orchvia.git
 cd orchvia
-npm ci --ignore-scripts
 node examples/typescript/quickstart.ts
 ```
 
-The example uses a fake runtime, so it needs no account and calls no model. It runs two tasks, accepts each result, and the second task reuses the first agent's session:
+The example uses a fake runtime, so it needs no account, no installed dependencies, and calls no model. It runs two tasks, accepts each result, and the second task reuses the first agent's session:
 
 ```text
 1. "Draft the release notes": completed, session <id>
@@ -33,9 +32,10 @@ From Python 3.11 or later, the same quickstart runs through a Node host that Pyt
 PYTHONPATH=python/src python3 examples/python/quickstart.py
 ```
 
-With real Claude, the same two tasks run on one Claude Code session. You need Claude Code signed in (`claude auth login`); the example makes two small model calls:
+With real Claude, the same two tasks run on one Claude Code session. You need Claude Code signed in (`claude auth login`); the example makes two small model calls. It needs the repository's dependencies, which include the Claude Agent SDK:
 
 ```sh
+npm ci --ignore-scripts
 node examples/typescript/quickstart-claude.ts
 ```
 
@@ -89,6 +89,7 @@ Orchvia is alpha software.
 - [Concepts](docs/concepts.md): the terms these documents use, in plain words.
 - [Design](docs/design.md): why the engine works the way it does.
 - [Status](docs/status.md): what is verified, specifications and evidence.
+- [Stability](docs/stability.md): what an upgrade may change.
 - [Python SDK](python/README.md) and [contributing](CONTRIBUTING.md).
 
 ## License

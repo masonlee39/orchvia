@@ -12,7 +12,7 @@ from orchvia import AcceptanceSpec, Orchestrator, RuntimeSpec, ShutdownIncomplet
 ROOT = Path(__file__).resolve().parents[2]
 
 
-async def run(node: str) -> dict:
+async def run(node: str, emergency_bytes: int | None = None) -> dict:
     with tempfile.TemporaryDirectory(prefix="orch-python-example-") as directory:
         base = Path(directory).resolve()
         workspace = base / "workspace"
@@ -21,11 +21,14 @@ async def run(node: str) -> dict:
         state.mkdir()
         config = base / "orchestrator.json"
         expected = "deterministic Python example result"
-        config.write_text(json.dumps({
+        settings = {
             "configVersion": 1, "workspace": str(workspace), "stateDir": str(state),
             "providers": {"fake": {"model": "fake-model", "result": expected,
                                     "permissionProfile": "read-only"}},
-        }), encoding="utf-8")
+        }
+        if emergency_bytes is not None:
+            settings["storage"] = {"emergencyBytes": emergency_bytes}
+        config.write_text(json.dumps(settings), encoding="utf-8")
         orch = await Orchestrator.local(engine_command=[node, str(ROOT / "packages/cli/src/main.ts"),
             "host", "--stdio", "--config", str(config)], close_timeout=3)
         result = None
@@ -74,7 +77,9 @@ async def run(node: str) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--node", default=shutil.which("node"), help="Node.js 22.18+ executable")
+    parser.add_argument("--emergency-bytes", type=int,
+                        help="disk space the host keeps in reserve, in bytes (default 256 MiB)")
     args = parser.parse_args()
     if not args.node:
         parser.error("Node.js 22.18+ is required")
-    print(json.dumps(asyncio.run(run(args.node)), ensure_ascii=False, indent=2))
+    print(json.dumps(asyncio.run(run(args.node, args.emergency_bytes)), ensure_ascii=False, indent=2))

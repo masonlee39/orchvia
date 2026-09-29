@@ -189,8 +189,10 @@ try {
     acceptance: { mode: "human", criteria: ["Reproduction no longer fails", "Relevant tests pass"] },
   }, { idempotencyKey: "issue-123-attempt-1" });
 
-  const result = await task.wait();
-  console.log(result.status, result.artifactRefs);
+  // Stops when the task ends, is paused or blocked, or waits for a person's acceptance.
+  const settled = await task.settle();
+  if (settled.reason === "waiting_approval") showToReviewer(settled.approval);
+  console.log(settled.task.status, settled.task.artifactRefs);
 } finally {
   await orch.close({ mode: "drain", timeoutMs: 30_000 });
 }
@@ -220,8 +222,10 @@ async with Orchestrator.local(
         ),
         idempotency_key="issue-123-attempt-1",
     )
-    result = await task.wait()
-    print(result.status, result.artifact_refs)
+    settled = await task.settle()
+    if settled.reason == "waiting_approval":
+        show_to_reviewer(settled.approval)
+    print(settled.task.status, settled.task.artifact_refs)
 ```
 
 This project's Python client talks to the shared engine rather than reimplementing provider adapters/scheduling. This is a project architecture choice, not a claim that upstream runtimes only support TS. See [Claude SDK](https://code.claude.com/docs/en/agent-sdk/overview) and [Codex SDK](https://developers.openai.com/codex/sdk).
@@ -230,7 +234,7 @@ This project's Python client talks to the shared engine rather than reimplementi
 
 Use versioned JSON-RPC 2.0 application messages in UTF-8 single-line JSON frames. stdio stdout is protocol-only and stderr is logging; Unix sockets share framing. Both ends bound frames/pending requests and use references for large artifacts. Upstream runtimes need not use identical encoding details.
 
-- Handshake initialize exchanges protocolVersion, sdkVersion, engineVersion, schemaVersion, instanceId, and capabilities. Reject incompatible major versions; negotiate minor capabilities rather than ignore unknown control fields.
+- Handshake initialize exchanges protocolVersion, sdkVersion, engineVersion, schemaVersion, instanceId, and capabilities. The engine accepts protocol 2.0 exactly and announces optional features as `capabilities.workflow.*` flags, which a client checks before using a feature ([stability](./stability.md)); unknown control fields are rejected, not ignored.
 - Target methods include tasks.create/get/resume/cancel, sessions.open/get/fork/control, messages.send, operations.get/lookup, approvals.get/decide, events.subscribe/unsubscribe, usage.get, capabilities.get, plus authorized host.shutdown/continue. Python never reads SQLite or connects directly to App Server. Current events use bounded reads; target subscriptions remain future work.
 - Every mutation carries stable idempotencyKey. Persist operation/normalized digest first. Same identity/scope/method/key recovers the original; changed payload returns IDEMPOTENCY_CONFLICT. Transport request IDs are not business keys.
 - SDK-generated single-operation keys are reused within transport retry and returned in success/errors for lookup. Cross-process recovery requires caller-persisted keys. Open/fork/control/approval follow task-creation idempotency.

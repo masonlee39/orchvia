@@ -1,10 +1,11 @@
 """Standard-library asyncio SDK for the single local orchestration engine."""
 import asyncio
 from collections import deque
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+import inspect
 import math
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 from uuid import uuid4
 
 from .identity import request_digest
@@ -42,6 +43,15 @@ else:
     _TaskBase = _OperationBase = Snapshot
 
 
+class SettledTask(NamedTuple):
+    """Where settling a task stopped (SPEC-0044 T01): `reason` is terminal, waiting_approval, paused
+    or blocked; `approval` is the undecided pending approval, `session` a blocked task's session."""
+    task: TaskSnapshotView
+    reason: str
+    approval: ApprovalRequestView | None = None
+    session: SessionSnapshotView | None = None
+
+
 class TaskHandle(_TaskBase):
     __slots__ = ("_client",)
     def __init__(self, client: "Orchestrator", value: Snapshot):
@@ -59,6 +69,46 @@ class TaskHandle(_TaskBase):
 
     async def wait(self, *, timeout: float | None = None) -> TaskSnapshotView:
         return cast(TaskSnapshotView, await self._client._wait(lambda: self._client.tasks.get(self.id), _TASK_TERMINAL, timeout))
+
+    async def settle(self, *, on_approval: Callable[..., Any] | None = None,
+                     timeout: float | None = None) -> SettledTask:
+        """Reads the task until it ends, is paused or blocked, or waits for an approval that no handler
+        decides (SPEC-0044 T). `on_approval(approval, task)` is called once per pending approval and
+        revision; returning "approve" or "deny" submits it and settling goes on, anything else ends
+        settling. It never decides by itself, and never retries, resends or reconciles anything."""
+        client = self._client
+        handled: set[str] = set()
+        if timeout is not None:
+            _duration(timeout, "timeout", zero=True)
+        try:
+            async with asyncio.timeout(timeout):
+                while True:
+                    task = await client.tasks.get(self.id)
+                    if task.status in _TASK_TERMINAL:
+                        return SettledTask(task, "terminal")
+                    if task.status == "paused":
+                        return SettledTask(task, "paused")
+                    if task.status == "blocked":
+                        return SettledTask(task, "blocked", session=await client.sessions.get(task.session_id))
+                    approval_id = getattr(task, "approval_id", None)
+                    if task.status == "waiting_approval" and approval_id:
+                        approval = await client.approvals.get(approval_id)
+                        identity = f"{approval.approval_id}:{approval.revision}"
+                        if approval.status == "pending":
+                            if on_approval is None or identity in handled:
+                                return SettledTask(task, "waiting_approval", approval=approval)
+                            handled.add(identity)
+                            choice = on_approval(approval, task)
+                            if inspect.isawaitable(choice):
+                                choice = await choice
+                            if choice not in ("approve", "deny"):
+                                return SettledTask(task, "waiting_approval", approval=approval)
+                            await client.approvals.decide(approval.approval_id,
+                                                          {"choice": choice, "expected_revision": approval.revision})
+                            continue
+                    await asyncio.sleep(client._poll_interval)
+        except TimeoutError:
+            raise OrchestrationError("TIMEOUT", "Local settle timed out; remote task was not cancelled") from None
 
 
 class OperationHandle(_OperationBase):
