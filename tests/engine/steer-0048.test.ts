@@ -328,3 +328,78 @@ test('AC-0048-S05 a restart leaves an unanswered steer unknown', async (t) => {
   assert.equal(after.error?.code, 'STEER_OUTCOME_UNKNOWN');
   assert.equal((await f.message(messageId)).status, 'outcome_unknown');
 });
+
+test('AC-0048-S02 a turn that waits for a runtime approval can be steered, and the approval still waits', async (t) => {
+  // Reported with 0.1.23: the runtime's permission request put the task in waiting_approval, and
+  // the steer was refused as if the turn had ended.
+  const dir = await mkdtemp(join(tmpdir(), 'orch-steer-approval-'));
+  await mkdir(join(dir, 'workspace'));
+  const fake = createFakeAdapter();
+  const steered: string[] = [];
+  const adapter: RuntimeAdapter = {
+    ...fake,
+    capabilities: () => ({ ...fake.capabilities(), steer: true }),
+    async *execute(input: RuntimeInput) {
+      const native = `fake-${input.sessionId}`;
+      yield { type: 'accepted', providerSessionId: native };
+      await input.requestPermission!({
+        requestId: 'command-1',
+        toolName: 'Bash',
+        permission: { command: 'make' },
+        providerSessionId: native,
+      });
+      for await (const event of fake.execute(input)) if (event.type !== 'accepted') yield event;
+    },
+    steer: async (_target: unknown, text: string) => {
+      steered.push(text);
+      return { status: 'accepted' };
+    },
+  } as RuntimeAdapter;
+  const engine = await createEngine({
+    workspace: join(dir, 'workspace'),
+    stateDir: join(dir, 'state'),
+    adapters: [adapter],
+    runtimeApprovals: { enabled: true },
+  });
+  t.after(async () => {
+    await engine.close({ mode: 'interrupt', timeoutMs: 1000 }).catch(() => {});
+    await rm(dir, { recursive: true, force: true });
+  });
+  const created = (await engine.call('tasks.create', {
+    spec: spec('ask first'),
+    idempotencyKey: 'ask',
+  })) as TaskSnapshot;
+  let task = created;
+  for (let i = 0; i < 2000 && task.status !== 'waiting_approval'; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    task = (await engine.call('tasks.get', { taskId: created.id })) as TaskSnapshot;
+  }
+  assert.equal(task.status, 'waiting_approval');
+  const session = (await engine.call('sessions.get', {
+    sessionId: task.sessionId,
+  })) as SessionSnapshot;
+  const op = (await engine.call(
+    'sessions.steer',
+    {
+      target: {
+        sessionId: session.id,
+        expectedGeneration: session.generation,
+        expectedDispatchId: session.activeDispatchId,
+      },
+      text: 'use the staging config',
+      idempotencyKey: 'while-asking',
+    },
+    {},
+  )) as OperationSnapshot;
+  let done = op;
+  for (let i = 0; i < 2000 && done.status === 'persisted'; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    done = (await engine.call('operations.get', { operationId: op.id })) as OperationSnapshot;
+  }
+  assert.equal(done.status, 'completed', JSON.stringify(done.error));
+  assert.deepEqual(steered, ['use the staging config']);
+  const approval = (await engine.call('approvals.get', { approvalId: task.approvalId })) as {
+    status: string;
+  };
+  assert.equal(approval.status, 'pending', "the approval is still the person's to give");
+});

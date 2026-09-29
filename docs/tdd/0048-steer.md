@@ -29,3 +29,11 @@ A JSON-RPC probe of Codex's app-server, with the loopback scripted gateway and a
 - `npm test` 938 of 939 and `npm run test:python` 115 of 116; the one failure of each is 0021-N01, from an ignored `python/src/agent_orch/__pycache__` left in the maintainer's checkout before the rename (TDD-0045).
 - The type check, Prettier and the generated-code check passed.
 - `node scripts/stress.mjs --copies 6` over the new tests of SPEC-0046 to SPEC-0048, under 18 busy loops: every copy passed.
+
+## Correction in 0.1.24
+
+An integrating host reported with 0.1.23 that a steer while its Codex member waited for a command approval was refused with `STEER_TURN_ENDED` (`taskStatus: waiting_approval`), without reaching the adapter: the engine's runtime approval puts the task in `waiting_approval`, and the engine counted only `running` as a running turn. The native smoke had steered through the adapter directly, so it never passed the engine's check.
+
+- RED: a new test in `tests/engine/steer-0048.test.ts`, whose runtime asks the engine for a permission and is steered while the approval is pending, failed with `STEER_TURN_ENDED`.
+- The engine now counts a turn as running while its task waits for a pending `runtime_permission` approval of the same dispatch. A task that waits for acceptance of its result is still refused.
+- GREEN: 8 of 8; the approval stays pending after the steer.

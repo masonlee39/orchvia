@@ -2,6 +2,14 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.24] - 2026-09-30
+
+A correction to steering (SPEC-0048).
+
+### Fixed
+
+- `sessions.steer` reaches a turn that waits for its runtime's permission. With 0.1.23 the engine refused it with `STEER_TURN_ENDED`, because the permission request puts the task in `waiting_approval`; the approval still waits for the person.
+
 ## [0.1.23] - 2026-09-29
 
 Steering a running turn, a benchmark that counts every arm alike, and tests run under load every week (SPEC-0046 to SPEC-0049).
