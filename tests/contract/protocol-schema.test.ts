@@ -95,7 +95,9 @@ test('AC-W04 schema helper rejects unsupported assertions and exercises nested/c
   };
   validate('ReconcileEvidence', proof);
   const { result: _result, ...withoutResult } = proof;
-  assert.throws(() => validate('ReconcileEvidence', withoutResult));
+  // SPEC-0045 R02: a completed attestation may leave its result to the recorded one.
+  validate('ReconcileEvidence', withoutResult);
+  assert.throws(() => validate('ReconcileEvidence', { ...proof, outcome: 'recorded' }));
   assert.throws(() => validate('ReconcileEvidence', { ...proof, outcome: 'unknown' }));
   validate('ReconcileEvidence', { ...withoutResult, outcome: 'unknown' });
   const local = schemaValidator({

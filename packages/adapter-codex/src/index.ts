@@ -892,6 +892,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
       let hookBypassed = false;
       let answer = '';
       let sawUsage = false;
+      // SPEC-0045 U01: whether every count so far is exact, so the result can say usage is complete.
+      let usageExact = true;
       const seenUsage = new Set<string>();
       let previousUsageTotal: Message | null = null;
       // SPEC-0035 J01: each observation goes out when the next one arrives or the turn ends, so the
@@ -1251,6 +1253,21 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
                 ? null
                 : current - previous;
             };
+            const counted = ['inputTokens', 'cachedInputTokens', 'outputTokens'];
+            // Without a starting total the first count is the last request alone, which is the
+            // whole of it only on a thread this dispatch started, and only if the total says so.
+            const exact =
+              !!total &&
+              counted.every((key) => tokenDelta(key) !== null) &&
+              (previousUsageTotal !== null ||
+                (!input.providerSessionId &&
+                  !input.forkSource &&
+                  counted.every(
+                    (key) =>
+                      nonnegativeInt(total[key]) !== null &&
+                      nonnegativeInt(total[key]) === nonnegativeInt(last[key]),
+                  )));
+            if (!exact) usageExact = false;
             const observation: RuntimeUsageEvent = {
               type: 'usage',
               usageId: `${turnId}:total:${totalCount ?? 'unknown'}:${seenUsage.size}`,
@@ -1399,7 +1416,10 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
                 input.reportUsage?.(observation);
                 yield observation;
               }
-              yield observedTerminal;
+              // SPEC-0045 U01, invariant 3: decided after the turn's last usage observation.
+              const usageComplete =
+                sawUsage && usageExact && !compactBoundary && input.nativeAction !== 'compact';
+              yield usageComplete ? { ...observedTerminal, usageComplete: true } : observedTerminal;
             } else if (observedTerminal) {
               yield observedTerminal;
             } else {

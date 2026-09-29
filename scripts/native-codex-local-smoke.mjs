@@ -60,6 +60,8 @@ const bodies = [];
 // The reasoning effort of each request, for the effort case.
 const reasonings = [];
 let requests = 0;
+// SPEC-0045 U02: the counts each request of the current dispatch was served.
+let served = [];
 // What the model saw from its last tool call: the next request carries it.
 let toolOutputs = [];
 const send = (response, type, data) =>
@@ -163,12 +165,14 @@ const gateway = createServer(async (request, response) => {
       role: 'assistant',
       content: [{ type: 'output_text', text: 'ORCH_LOCAL_OK', annotations: [] }],
     };
+  // Distinct counts for every request, so a missing or doubled one shows in the sums (U02).
   const usage = step?.usage ?? {
-    input_tokens: 10,
-    output_tokens: 5,
-    total_tokens: 15,
-    input_tokens_details: { cached_tokens: 0 },
+    input_tokens: 1000 + n * 7,
+    output_tokens: 20 + n,
+    total_tokens: 1020 + n * 8,
+    input_tokens_details: { cached_tokens: 100 + n },
   };
+  served.push(usage);
   const result = {
     id: `resp_${n}`,
     object: 'response',
@@ -216,6 +220,7 @@ async function dispatch(name, adapter, script, input = {}) {
   steps = script(workspace);
   lastSearch = null;
   toolOutputs = [];
+  served = [];
   const record = (evidence.cases[name] = { asked: [], events: [] });
   try {
     for await (const event of adapter.execute({
@@ -250,13 +255,35 @@ async function dispatch(name, adapter, script, input = {}) {
       if (event.type === 'usage') {
         (record.usage ??= []).push(event.usage.inputTokens);
         (record.efforts ??= []).push(event.usage.raw?._reasoningEffort ?? null);
+        const sums = (record.reported ??= { input: 0, cached: 0, output: 0 });
+        for (const [key, field] of [
+          ['input', 'inputTokens'],
+          ['cached', 'cachedInputTokens'],
+          ['output', 'outputTokens'],
+        ])
+          sums[key] =
+            sums[key] === null || event.usage[field] === null
+              ? null
+              : sums[key] + event.usage[field];
+        if (event.sessionTotals) record.sessionTotals = event.sessionTotals;
       }
-      if (event.type === 'result') record.thread = event.providerSessionId;
+      if (event.type === 'result') {
+        record.thread = event.providerSessionId;
+        record.usageComplete = event.usageComplete ?? false;
+      }
     }
   } finally {
     await adapter.close?.();
   }
   record.toolOutputs = [...new Set(toolOutputs)].map((output) => output.slice(0, 600));
+  record.served = served.reduce(
+    (sums, usage) => ({
+      input: sums.input + usage.input_tokens,
+      cached: sums.cached + (usage.input_tokens_details?.cached_tokens ?? 0),
+      output: sums.output + usage.output_tokens,
+    }),
+    { input: 0, cached: 0, output: 0 },
+  );
   return { record, workspace, stateDir, seen: record.toolOutputs.join(' ') };
 }
 
@@ -342,6 +369,41 @@ try {
       () => assert.equal(record.commandRan && record.edited, true),
       `${mode}: the approved command and edit ran`,
     );
+  }
+
+  // AC-0045-U02: the counts the adapter reports add up to what the gateway served, and the result
+  // says usage is complete, in every mode and on a resumed thread from its last dispatch's totals.
+  const accounted = (record, label) => {
+    check(
+      () => assert.deepEqual(record.reported, record.served),
+      `${label}: reported ${JSON.stringify(record.reported)}, served ${JSON.stringify(record.served)}`,
+    );
+    check(() => assert.equal(record.usageComplete, true), `${label}: usage complete`);
+  };
+  for (const mode of ['plan', 'default', 'acceptEdits', 'auto']) {
+    const adapter = member(home, { config: { policy: () => ({ mode }) } });
+    const { record } = await dispatch(
+      `usage-${mode}`,
+      adapter,
+      (workspace) =>
+        mode === 'plan'
+          ? [{ cmd: 'echo counted' }]
+          : [{ cmd: 'echo counted' }, { patch: patch(workspace, 'usage.txt') }],
+      mode === 'plan' ? { permissionProfile: 'read-only' } : {},
+    );
+    accounted(record, `usage ${mode}`);
+  }
+  {
+    const adapter = member(home, { config: { policy: () => ({ mode: 'auto' }) } });
+    const first = await dispatch('usage-first', adapter, () => [{ cmd: 'echo first' }]);
+    // A new app-server, as a later dispatch of the session would start.
+    const again = member(home, { config: { policy: () => ({ mode: 'auto' }) } });
+    const second = await dispatch('usage-resumed', again, () => [{ cmd: 'echo second' }], {
+      providerSessionId: first.record.thread,
+      usageBaseline: { dispatchId: 'usage-first', totals: first.record.sessionTotals },
+    });
+    accounted(first.record, 'usage first');
+    accounted(second.record, 'usage resumed');
   }
 
   // AC-0035-N02, N03, N04: direct network through the proxy.

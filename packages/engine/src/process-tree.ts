@@ -13,26 +13,34 @@ export interface ProcessRow {
   ppid: number;
   pgid: number;
   started: string;
+  /** The executable, as `ps` names it: a path on macOS, a short name on Linux. */
+  command: string;
 }
 
 /** The process table now; throws when it cannot be read within `timeoutMs`. */
 export function processTable(timeoutMs = 5000): ProcessRow[] {
-  const out = execFileSync('ps', ['-axo', 'pid=,ppid=,pgid=,lstart='], {
+  const out = execFileSync('ps', ['-axo', 'pid=,ppid=,pgid=,lstart=,comm='], {
     encoding: 'utf8',
     timeout: Math.max(1, Math.ceil(timeoutMs)),
     maxBuffer: 16 * 1024 * 1024,
     env: { ...process.env, LC_ALL: 'C' },
   });
-  return out
-    .split('\n')
-    .map((line) => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line))
-    .filter((match): match is RegExpExecArray => match !== null)
-    .map((match) => ({
-      pid: Number(match[1]),
-      ppid: Number(match[2]),
-      pgid: Number(match[3]),
-      started: match[4],
-    }));
+  return (
+    out
+      .split('\n')
+      // lstart is five fields in the C locale, such as `Mon Sep 29 10:00:00 2026`.
+      .map((line) =>
+        /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s*(.*?)\s*$/.exec(line),
+      )
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map((match) => ({
+        pid: Number(match[1]),
+        ppid: Number(match[2]),
+        pgid: Number(match[3]),
+        started: match[4],
+        command: match[5],
+      }))
+  );
 }
 
 /**

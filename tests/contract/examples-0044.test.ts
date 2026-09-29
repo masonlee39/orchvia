@@ -60,9 +60,10 @@ const COVERAGE: Record<string, string> = {
 
 test('AC-0044-E03 every example is run by a test or says why not', async () => {
   const files: string[] = [];
+  // Python leaves its bytecode cache beside the examples it ran.
   for (const language of ['typescript', 'python'])
     for (const file of await readdir(join(root, 'examples', language)))
-      if (!file.startsWith('.')) files.push(`${language}/${file}`);
+      if (!file.startsWith('.') && file !== '__pycache__') files.push(`${language}/${file}`);
   assert.deepEqual(files.sort(), Object.keys(COVERAGE).sort());
 });
 

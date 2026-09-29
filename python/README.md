@@ -284,7 +284,11 @@ Only one stopped resource field is insufficient. A live execution or observed ch
 process rejects a stop claim. R04 permits a narrow exception for a sealed adapter record
 whose observation ended without ever observing a process, with an exact matching target;
 it does not turn an owner declaration into observed exit evidence. A complete business
-attestation must also agree with recorded terminal evidence.
+attestation must also agree with recorded terminal evidence. Where the host lists
+`workflow.reconcile_recorded_result`, `"outcome": "completed"` may leave out `result` to take
+the recorded text, and `"outcome": "recorded"` takes the recorded terminal's outcome
+(SPEC-0045 R). A completed reconciliation pauses the task; `tasks.resume` then asks for
+acceptance.
 
 The completed reconciliation operation reports resource and business decisions separately.
 Its result is raw JSON, so read the camelCase key exactly:

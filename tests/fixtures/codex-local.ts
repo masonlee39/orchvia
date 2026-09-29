@@ -20,7 +20,9 @@ import { createInterface } from 'node:readline';
 // - FIXTURE_MODELS: JSON pages of model/list entries ({ id, hidden?, supportedReasoningEfforts,
 //   defaultReasoningEffort }), paged by `nextCursor`; hidden ones only with includeHidden;
 // - FIXTURE_MODELS_ERROR: model/list fails with this message;
-// - FIXTURE_USAGE: the turn reports one token usage observation before it completes;
+// - FIXTURE_USAGE: the turn reports one token usage observation before it completes, or, as JSON
+//   [{ last?, total? }], each observation given;
+// - FIXTURE_COMPACTION: the turn completes a contextCompaction item before it completes;
 // - FIXTURE_BACKGROUND: a bash command run with the app-server's environment when the turn starts,
 //   whose output (a background process's PID) is logged; the turn then waits for an interrupt.
 const send = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
@@ -93,12 +95,22 @@ let finished = false;
 const finish = (status = 'completed') => {
   if (finished) return;
   finished = true;
+  if (process.env.FIXTURE_COMPACTION)
+    send({
+      method: 'item/completed',
+      params: { threadId: 'thread', turnId: 'turn', item: { type: 'contextCompaction', id: 'c' } },
+    });
   if (process.env.FIXTURE_USAGE) {
     const counts = { inputTokens: 20, cachedInputTokens: 0, outputTokens: 4, totalTokens: 24 };
-    send({
-      method: 'thread/tokenUsage/updated',
-      params: { threadId: 'thread', turnId: 'turn', tokenUsage: { last: counts, total: counts } },
-    });
+    const observations =
+      process.env.FIXTURE_USAGE === '1'
+        ? [{ last: counts, total: counts }]
+        : (JSON.parse(process.env.FIXTURE_USAGE) as object[]);
+    for (const tokenUsage of observations)
+      send({
+        method: 'thread/tokenUsage/updated',
+        params: { threadId: 'thread', turnId: 'turn', tokenUsage },
+      });
   }
   const text = process.env.FIXTURE_HOOK_EVENTS
     ? JSON.stringify(hookOutputs())

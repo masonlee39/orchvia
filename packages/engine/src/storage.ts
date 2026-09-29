@@ -270,11 +270,17 @@ export class StorageGovernance {
   unpin(ref: string): void {
     this.store.remove('storage_pins', ref);
   }
+  /**
+   * Whether `id`, or a record that references it through any chain, is active or recent. A
+   * session's references to its tasks are not followed (SPEC-0045 G01): a later task on the
+   * session would otherwise keep every earlier task, and so the event prefix, from collection.
+   */
   private isProtected(id: string): boolean {
     const row = this.store.db
       .prepare(
         `WITH RECURSIVE ancestors(id) AS (
       SELECT ? UNION SELECT refs.source_id FROM record_refs refs JOIN ancestors a ON refs.target_id=a.id
+      WHERE NOT (refs.source_table='sessions' AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=a.id))
     ) SELECT 1 AS protected FROM retention_records r JOIN ancestors a ON r.id=a.id
       WHERE r.active=1 OR (r.table_name IN ('tasks','messages') AND (r.terminal_at IS NULL OR r.terminal_at>?)) LIMIT 1`,
       )

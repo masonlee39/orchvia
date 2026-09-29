@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 262acd90efe563a83835bca808095caf88670933c0bcf167baf5f6133a2ec1f5. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 db1f741f3de141a8ec6b6e71d652499c85b328b8de875652a095d32ad9c42b02. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -1558,6 +1558,9 @@ export const protocolSchema = {
                 remoteExecution: {
                   const: 'stopped',
                 },
+                outcome: {
+                  enum: ['not_executed', 'completed', 'failed', 'interrupted', 'unknown'],
+                },
               },
             },
           ],
@@ -1707,7 +1710,7 @@ export const protocolSchema = {
       type: 'object',
       additionalProperties: false,
       description:
-        'Named owner attestation, not independently observed adapter evidence. Unknown values retain business quarantine. Execution resources may be released independently when both localResources and remoteExecution are stopped and the engine confirms no active handles or evidence conflict.',
+        'Named owner attestation, not independently observed adapter evidence. A completed attestation may leave out result when the dispatch recorded a runtime result, which the engine then uses (SPEC-0045 R01). Unknown values retain business quarantine. Execution resources may be released independently when both localResources and remoteExecution are stopped and the engine confirms no active handles or evidence conflict.',
       required: [
         'source',
         'summary',
@@ -1735,7 +1738,7 @@ export const protocolSchema = {
           enum: ['resolved', 'unknown'],
         },
         outcome: {
-          enum: ['not_executed', 'completed', 'failed', 'interrupted', 'unknown'],
+          enum: ['not_executed', 'completed', 'failed', 'interrupted', 'unknown', 'recorded'],
         },
         result: {
           type: 'string',
@@ -1752,9 +1755,7 @@ export const protocolSchema = {
             },
             required: ['outcome'],
           },
-          then: {
-            required: ['result'],
-          },
+          then: {},
           else: {
             not: {
               required: ['result'],
@@ -3693,6 +3694,9 @@ export const protocolSchema = {
           const: true,
         },
         reasoningEfforts: {
+          const: true,
+        },
+        reconcileRecordedResult: {
           const: true,
         },
       },
