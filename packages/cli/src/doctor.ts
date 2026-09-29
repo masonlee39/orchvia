@@ -8,8 +8,14 @@ import type { HostConfig } from './config.ts';
 
 const execute = promisify(execFile);
 export async function doctor(config: HostConfig) {
-  const checks: { name: string; ok: boolean; version?: string; code?: string; message?: string }[] =
-    [];
+  const checks: {
+    name: string;
+    ok: boolean;
+    version?: string;
+    tested?: boolean;
+    code?: string;
+    message?: string;
+  }[] = [];
   async function check(name: string, action: () => Promise<string | void>) {
     try {
       const version = await action();
@@ -61,6 +67,15 @@ export async function doctor(config: HostConfig) {
           throw new Error('Configured command did not identify itself as codex-cli');
         return version;
       });
+    // SPEC-0043 A03: whether CI runs this version; reported, never failing the check.
+    const codexRow = checks.find((row) => row.name === 'codex-cli' && row.ok && row.version);
+    if (provider === 'codex' && codexRow) {
+      const modulePath = '../../adapter-codex/src/index.ts';
+      const { TESTED_CODEX_VERSIONS } = (await import(modulePath)) as {
+        TESTED_CODEX_VERSIONS: readonly string[];
+      };
+      codexRow.tested = TESTED_CODEX_VERSIONS.includes(/\d+\.\d+\.\d+/.exec(codexRow.version!)![0]);
+    }
     if (provider === 'claude')
       await check('claude-sdk', async () => {
         const require = createRequire(

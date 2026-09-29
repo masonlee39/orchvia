@@ -8,6 +8,7 @@ import {
   supportedVersion,
   withStartLock,
   HOST_HOOK_KEY,
+  TESTED_CODEX_VERSIONS,
   checkHostHookCommand,
   hostHookChannel,
   hostHookCommand,
@@ -54,6 +55,8 @@ export interface CodexConnection {
   probe(): Promise<{
     version: string | null;
     supported: boolean;
+    /** SPEC-0043 A03: whether CI runs this version; an untested one is reported, not refused. */
+    tested: boolean;
     userAgent: string | null;
     codexHome: string | null;
     platform: { family: string | null; os: string | null };
@@ -185,6 +188,7 @@ export function codexConnection(config: CodexConnectionConfig): CodexConnection 
       return {
         version,
         supported: supportedVersion(version),
+        tested: version !== null && TESTED_CODEX_VERSIONS.includes(version),
         userAgent: typeof initialized.userAgent === 'string' ? initialized.userAgent : null,
         codexHome: typeof initialized.codexHome === 'string' ? initialized.codexHome : null,
         platform: {

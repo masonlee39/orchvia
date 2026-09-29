@@ -1,0 +1,144 @@
+# SPEC-0043 A01: the latest Codex CLI and Claude Agent SDK against the native smokes, every week.
+# Loopback scripted gateway, synthetic credentials, no paid models. It opens no issue and changes
+# no file: its summary lists the versions and each smoke's result, and a failed smoke fails the run.
+name: Upstream drift
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      codexVersion:
+        description: 'Codex CLI version to check (empty: the latest on npm)'
+        required: false
+        default: ''
+      claudeSdkVersion:
+        description: 'Claude Agent SDK version to check (empty: the latest on npm)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.14.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.11.9
+      - run: npm ci --ignore-scripts
+      - name: Resolve the versions to check
+        id: versions
+        env:
+          CODEX_INPUT: ${{ inputs.codexVersion }}
+          CLAUDE_INPUT: ${{ inputs.claudeSdkVersion }}
+        run: |
+          codex="${CODEX_INPUT:-$(npm view @openai/codex version)}"
+          claude="${CLAUDE_INPUT:-$(npm view @anthropic-ai/claude-agent-sdk version)}"
+          for version in "$codex" "$claude"; do
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "Not a version: $version"; exit 1; }
+          done
+          echo "codex=$codex" >> "$GITHUB_OUTPUT"
+          echo "claude=$claude" >> "$GITHUB_OUTPUT"
+      - name: Install them without saving
+        env:
+          CODEX_VERSION: ${{ steps.versions.outputs.codex }}
+          CLAUDE_VERSION: ${{ steps.versions.outputs.claude }}
+        run: npm install --ignore-scripts --no-save --package-lock=false "@anthropic-ai/claude-agent-sdk@$CLAUDE_VERSION" "@openai/codex@$CODEX_VERSION"
+      - name: Install the Linux sandbox dependencies of the writable Claude profile
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap socat lsof
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Protocol shape
+        id: protocol
+        continue-on-error: true
+        env:
+          ORCH_EXPECT_CLAUDE_SDK: ${{ steps.versions.outputs.claude }}
+          ORCH_EXPECT_CODEX: ${{ steps.versions.outputs.codex }}
+        run: node scripts/check-native-protocol.mjs
+      - name: Claude gateway
+        id: claude_gateway
+        continue-on-error: true
+        run: node scripts/native-gateway-smoke.mjs claude dist/verification/drift-claude.json
+      - name: Claude usage outside the main loop
+        id: claude_usage
+        continue-on-error: true
+        run: node scripts/native-usage-smoke.mjs dist/verification/drift-usage.json
+      - name: Claude stop proof
+        id: claude_stop
+        continue-on-error: true
+        run: node scripts/native-stop-smoke.mjs claude dist/verification/drift-stop-claude.json
+      - name: Claude read fence
+        id: claude_read_fence
+        continue-on-error: true
+        run: node scripts/native-read-fence-smoke.mjs dist/verification/drift-read-fence.json
+      - name: Stop markers across a host restart
+        id: stop_restart
+        continue-on-error: true
+        run: node scripts/native-stop-restart-smoke.mjs dist/verification/drift-stop-restart.json
+      - name: Codex gateway
+        id: codex_gateway
+        continue-on-error: true
+        run: node scripts/native-gateway-smoke.mjs codex dist/verification/drift-codex.json ./node_modules/.bin/codex
+      - name: Codex stop proof
+        id: codex_stop
+        continue-on-error: true
+        run: node scripts/native-stop-smoke.mjs codex dist/verification/drift-stop-codex.json ./node_modules/.bin/codex
+      - name: Codex file change paths and command environment
+        id: codex_security
+        continue-on-error: true
+        run: node scripts/native-codex-security-smoke.mjs dist/verification/drift-codex-security.json ./node_modules/.bin/codex
+      - name: Codex local member
+        id: codex_local
+        continue-on-error: true
+        run: node scripts/native-codex-local-smoke.mjs dist/verification/drift-codex-local.json ./node_modules/.bin/codex
+      - name: Summary
+        if: ${{ always() }}
+        env:
+          CODEX_VERSION: ${{ steps.versions.outputs.codex }}
+          CLAUDE_VERSION: ${{ steps.versions.outputs.claude }}
+          RESULTS: >-
+            Protocol shape=${{ steps.protocol.outcome }};
+            Claude gateway=${{ steps.claude_gateway.outcome }};
+            Claude usage outside the main loop=${{ steps.claude_usage.outcome }};
+            Claude stop proof=${{ steps.claude_stop.outcome }};
+            Claude read fence=${{ steps.claude_read_fence.outcome }};
+            Stop markers across a host restart=${{ steps.stop_restart.outcome }};
+            Codex gateway=${{ steps.codex_gateway.outcome }};
+            Codex stop proof=${{ steps.codex_stop.outcome }};
+            Codex file change paths and command environment=${{ steps.codex_security.outcome }};
+            Codex local member=${{ steps.codex_local.outcome }}
+        run: |
+          {
+            echo "## Upstream drift on ${{ matrix.os }}"
+            echo
+            echo "Codex CLI \`$CODEX_VERSION\`, Claude Agent SDK \`$CLAUDE_VERSION\`"
+            echo
+            echo "| Smoke | Result |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          IFS=';'
+          for entry in $RESULTS; do
+            name="$(echo "${entry%%=*}" | xargs)"
+            outcome="$(echo "${entry#*=}" | xargs)"
+            echo "| $name | $outcome |" >> "$GITHUB_STEP_SUMMARY"
+            [ "$outcome" = success ] || failed=1
+          done
+          exit "$failed"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ always() }}
+        with:
+          name: drift-${{ matrix.os }}
+          path: dist/verification/

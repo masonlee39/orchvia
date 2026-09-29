@@ -2,6 +2,25 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.20] - 2026-09-29
+
+A weekly check of new upstream versions, models Codex does not list, and documentation that matches the facts (SPEC-0043).
+
+### Added
+
+- A workflow that runs every Monday, and on demand, with the newest Claude Agent SDK and Codex CLI against the native smokes on Linux, Apple silicon and Intel macOS. It reports each smoke's result and opens nothing.
+- `TESTED_CODEX_VERSIONS` from `@orchvia/adapter-codex`: the Codex versions CI runs (0.153.4, 0.157.1 and 0.158.0). `codexConnection().probe()` and `orchvia doctor` report `tested`; an untested version is reported, not refused.
+- `allowUnlistedModel` on `createCodexAdapter`, for a host whose models Codex does not list.
+
+### Changed
+
+- A local Codex dispatch whose model Codex's model list does not name ends before its thread with `CODEX_MODEL_UNLISTED`. Codex gives such a model a reduced tool set without `apply_patch`, so the member could not edit files. A list that cannot be read, or that names no model, lets the dispatch proceed as before.
+
+### Fixed
+
+- `docs/status.md` and the readiness ledger match the facts, and documentation tests keep them so.
+- The delegation and tool-call limits have tests that name their codes.
+
 ## [0.1.19] - 2026-09-29
 
 Reasoning effort for each local Codex dispatch (SPEC-0042).
