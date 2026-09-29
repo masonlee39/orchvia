@@ -63,3 +63,13 @@ With Codex CLI 0.153.4 and 0.157.1, a scratch home, a synthetic key and the loop
 - A second 0.157.1 build, shipped inside a desktop application, lacked `codex-code-mode-host`. Its code-mode case failed because code mode could not start (`failed to spawn code-mode host`), not because a check was bypassed.
 
   0.153.4 is no longer installed on this Mac; CI runs it on macOS.
+
+## Codex 0.158.0, after the release
+
+The failures with 0.158.0 recorded above were the smokes', not the adapter's.
+
+- 0.158.0 no longer lists `gpt-5.4`, the model the smokes asked for. Codex gives a model it does not list another tool set: without `apply_patch` and tool search, with the MCP tools offered directly, and only a `Model metadata for gpt-5.4 not found` warning. 0.157.1 lists `gpt-5.4` as hidden.
+- With `gpt-5.5`, which both versions list, 0.158.0 offered the same tools as 0.157.1. The local-member, security, gateway (with its Python client) and stop smokes all passed on this Mac.
+- The four smokes now ask for `gpt-5.5`. CI runs the local-member and security smokes with 0.158.0 as well, and the native job's limit goes from 35 to 45 minutes.
+
+A host that names a model Codex does not list gets the reduced tools without an error. How the adapter should tell the host is left for a later change.

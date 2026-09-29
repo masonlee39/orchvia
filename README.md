@@ -77,7 +77,7 @@ Orchvia runs coding agents. It is not a framework for building agents out of mod
 Orchvia is alpha software.
 
 - Tested offline on macOS and Linux, with Node 22 and 24 and Python 3.11 and 3.14.
-- The real Claude Code and Codex programs are tested in CI against a scripted local gateway, with no model calls. The Codex CLI as a local member is tested with versions 0.153.4 and 0.157.1.
+- The real Claude Code and Codex programs are tested in CI against a scripted local gateway, with no model calls. The Codex CLI as a local member is tested with versions 0.153.4, 0.157.1 and 0.158.0.
 - Not verified yet: runs with real models, operating-system sandbox enforcement, Windows, and speed or cost compared with other approaches. Measurements will be published with their raw data.
 
 [Status](docs/status.md) lists what each check covered, the specifications and their evidence.
