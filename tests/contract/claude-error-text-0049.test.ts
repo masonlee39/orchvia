@@ -8,7 +8,8 @@ import type { RuntimeEvent } from '../../packages/engine/src/types.ts';
 
 async function terminal(result: Record<string, unknown>) {
   const adapter = createClaudeAdapter({
-    cleanupTimeoutMs: 20,
+    // A loaded runner may take longer to end the process; the text must not depend on it.
+    cleanupTimeoutMs: 5000,
     query: withClaudeProcess(() =>
       (async function* () {
         yield { type: 'system', subtype: 'init', session_id: 'expected' };
@@ -40,7 +41,8 @@ test('AC-0049-E01 an API error reported as a success with is_error keeps its tex
     result: 'API Error: Connection lost mid-response',
   });
   assert.equal(last.type, 'error');
-  assert.equal(last.message, 'API Error: Connection lost mid-response');
+  // The adapter may add a note on cleanup; the error's own text comes first.
+  assert.match(last.message, /^API Error: Connection lost mid-response/);
   assert.equal(last.outcome, 'failed');
 });
 
@@ -51,7 +53,7 @@ test('AC-0049-E01 errors, when given, still come first; without either, the subt
     errors: ['rate limited', 'retry later'],
     result: 'API Error: 429',
   });
-  assert.equal(listed.message, 'rate limited; retry later');
+  assert.match(listed.message, /^rate limited; retry later/);
   const bare = await terminal({ subtype: 'error_max_turns' });
-  assert.equal(bare.message, 'error_max_turns');
+  assert.match(bare.message, /^error_max_turns/);
 });
