@@ -226,14 +226,16 @@ function nativeTerminal(message: RecordValue, sessionId: string): RuntimeTermina
     message.terminal_reason === 'aborted_tools'
   )
     return { type: 'interrupted' };
-  if (message.subtype !== 'success' || message.is_error === true)
+  if (message.subtype !== 'success' || message.is_error === true) {
+    // SPEC-0049 E01: an API error comes as a success with is_error and its text in `result`.
+    const listed = Array.isArray(message.errors) ? message.errors.map(String).join('; ') : '';
+    const text = typeof message.result === 'string' ? message.result.trim() : '';
     return {
       type: 'error',
-      message: Array.isArray(message.errors)
-        ? message.errors.map(String).join('; ') || String(message.subtype ?? 'Claude failed')
-        : String(message.subtype ?? 'Claude failed'),
+      message: listed || text || String(message.subtype ?? 'Claude failed'),
       outcome: 'failed',
     };
+  }
   return typeof message.result === 'string'
     ? {
         type: 'result',

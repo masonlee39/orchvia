@@ -4,7 +4,7 @@ All notable changes to Orchvia are recorded here. Versions follow [Semantic Vers
 
 ## [0.1.23] - 2026-09-29
 
-Steering a running turn, a benchmark that counts every arm alike, and tests run under load every week (SPEC-0046 to SPEC-0048).
+Steering a running turn, a benchmark that counts every arm alike, and tests run under load every week (SPEC-0046 to SPEC-0049).
 
 ### Added
 
@@ -13,6 +13,7 @@ Steering a running turn, a benchmark that counts every arm alike, and tests run 
 
 ### Fixed
 
+- A Claude dispatch that ends with a model API error, which the Agent SDK reports as a success with `is_error`, now fails with the error's own text, such as `API Error: Connection lost mid-response`, instead of `success` (SPEC-0049).
 - The benchmark counts the calls outside the main loop in every arm, subtracts a resumed session's totals only where Claude Code continues them, prices each model at its own rate and each cache write at its own duration's, and reports an unknown count as unknown instead of 0.
 
 ## [0.1.22] - 2026-09-29

@@ -93,6 +93,7 @@ Each specification has a matching TDD record of observed failures before the cha
 | [SPEC-0046](specs/0046-ci-flakes.md)                                 | Tests that depend on time run under load every week; rules for such tests and a ledger of CI flakes                                                                                                                                         |
 | [SPEC-0047](specs/0047-bench-metering.md)                            | The benchmark counts every arm the same way, main loop and outside it, and prices each model at its own rate                                                                                                                                |
 | [SPEC-0048](specs/0048-steer.md)                                     | Steering a running turn of a Codex member with a line from the user                                                                                                                                                                         |
+| [SPEC-0049](specs/0049-claude-error-text.md)                         | A Claude API error that the SDK reports as a success keeps its own text as the error message                                                                                                                                                |
 
 ## Claude and Codex baselines
 
