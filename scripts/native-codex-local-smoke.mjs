@@ -225,7 +225,9 @@ async function dispatch(name, adapter, script, input = {}) {
       providerSessionId: null,
       workspace,
       stateDir,
-      model: 'gpt-5.4',
+      // A model of Codex's catalog: 0.158.0 gives a model it does not list no apply_patch tool
+      // and no tool search.
+      model: 'gpt-5.5',
       prompt: 'Run the scripted steps.',
       permissionProfile: 'workspace-write',
       signal: new AbortController().signal,

@@ -336,7 +336,7 @@ try {
     // held, and the dispatch ends the command with its app-server, whose descendant it still is
     // (A03).
     command = { cmd: 'sleep 114', yield_time_ms: 1000 };
-    const yielded = await runCase('codex-yielded-command', codex(), 'gpt-5.4', async (record) => {
+    const yielded = await runCase('codex-yielded-command', codex(), 'gpt-5.5', async (record) => {
       // A killed command can take a moment to be reaped.
       await until(() => !pids('sleep 114').length, 2000);
       record.commandAlive = pids('sleep 114').length > 0;
@@ -351,7 +351,7 @@ try {
     const detached = await runCase(
       'codex-detached-command',
       codex(),
-      'gpt-5.4',
+      'gpt-5.5',
       async (record) => {
         record.commandAlive = pids('sleep 113').length > 0;
       },

@@ -376,7 +376,8 @@ try {
     encoding: 'utf8',
     timeout: 5000,
   }).trim();
-  const runtimeModel = provider === 'claude' ? 'claude-sonnet-4-6' : 'gpt-5.4';
+  // Codex's model is one of its catalog: 0.158.0 gives an unlisted model other tools.
+  const runtimeModel = provider === 'claude' ? 'claude-sonnet-4-6' : 'gpt-5.5';
   // SPEC-0013 M05: Claude also allows a second model so a fork can change model.
   const forkModel = provider === 'claude' ? 'claude-haiku-4-5' : undefined;
   engine = await createEngine({
