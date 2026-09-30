@@ -21,7 +21,7 @@ With Codex 0.157.1 and 0.158.0, the loopback scripted gateway and synthetic cred
   - `UNSUPPORTED_CAPABILITY` when the session's runtime does not declare `steer: true`;
   - `STALE_TARGET` when the generation, or a given `expectedRevision`, is not the session's;
   - `SESSION_CLOSED` for a stopped session;
-  - `STEER_TURN_ENDED` when `expectedDispatchId` is not the session's running dispatch; its data carries `dispatchId`, `turnOutcome` (`completed`, `interrupted`, `failed` or `unknown`, from that dispatch's recorded terminal, or `running` for none yet) and `taskStatus`.
+  - `STEER_TURN_ENDED` when `expectedDispatchId` is not the session's running dispatch; a dispatch whose task waits for that dispatch's runtime permission (`waiting_approval` with a pending `runtime_permission` approval) is still running (invariant 3; corrected in 0.1.24); its data carries `dispatchId`, `turnOutcome` (`completed`, `interrupted`, `failed` or `unknown`, from that dispatch's recorded terminal, or `running` for none yet) and `taskStatus`.
 - **S03** Otherwise, in one transaction, the operation is persisted and a message is recorded: kind `steer`, from `client:local`, to the session, its `summary` the text, its `dispatchId` the target, status `dispatching`. Only then is the runtime asked. A message of kind `steer` is never delivered in a prompt and never expires.
 - **S04** The runtime's answer ends the operation:
   - accepted: the message becomes `completed`, the operation `completed` with `{ messageId, dispatchId }`, and the event `session.steered` carries `dispatchId`, `taskId`, `messageId` and the text;

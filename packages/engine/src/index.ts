@@ -3659,7 +3659,17 @@ class LocalEngine implements Engine {
     const flight = this.flights.get(sessionId);
     if (flight?.dispatchId !== dispatchId) return false;
     const dispatch = this.store.get<Dispatch>('dispatches', dispatchId);
-    return !dispatch?.terminalEvidence && this.task(flight.taskId).status === 'running';
+    if (dispatch?.terminalEvidence) return false;
+    const task = this.task(flight.taskId);
+    if (task.status === 'running') return true;
+    // SPEC-0048 invariant 3: a turn that waits for its runtime's permission is still running.
+    if (task.status !== 'waiting_approval' || !task.approvalId) return false;
+    const approval = this.store.get<ApprovalRequest>('approvals', task.approvalId);
+    return (
+      approval?.purpose === 'runtime_permission' &&
+      approval.status === 'pending' &&
+      approval.target.dispatchId === dispatchId
+    );
   }
   private steer(p: Record<string, unknown>, context: CallContext): OperationSnapshot {
     if (context.runtimeActor) fail('UNAUTHORIZED', 'Only a client may steer a turn');
