@@ -26,7 +26,9 @@ import { createInterface } from 'node:readline';
 // - FIXTURE_STEER_ERROR / FIXTURE_STEER_DATA: turn/steer is answered with this error message and
 //   data (JSON); FIXTURE_STEER_SILENT: it is not answered; otherwise it is accepted;
 // - FIXTURE_BACKGROUND: a bash command run with the app-server's environment when the turn starts,
-//   whose output (a background process's PID) is logged; the turn then waits for an interrupt.
+//   whose output (a background process's PID) is logged; the turn then waits for an interrupt;
+// - FIXTURE_NOTIFICATIONS: JSON [{ method, params }] sent when the turn starts, each with the thread
+//   and turn added to its params.
 const send = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
 const log = (entry: Record<string, unknown>) => {
   if (process.env.FIXTURE_LOG)
@@ -163,6 +165,11 @@ for await (const line of createInterface({ input: process.stdin })) {
       });
   } else if (value.method === 'turn/start') {
     send({ id: value.id, result: { turn: { id: 'turn' } } });
+    for (const notification of JSON.parse(process.env.FIXTURE_NOTIFICATIONS ?? '[]'))
+      send({
+        method: notification.method,
+        params: { threadId: 'thread', turnId: 'turn', ...notification.params },
+      });
     if (process.env.FIXTURE_BACKGROUND) {
       const run = spawnSync('/bin/bash', ['-c', process.env.FIXTURE_BACKGROUND], {
         encoding: 'utf8',

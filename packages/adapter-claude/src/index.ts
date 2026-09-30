@@ -5,6 +5,7 @@ import type {
   RuntimeEvent,
   RuntimeInput,
   RuntimeTerminalEvent,
+  RuntimeProgress,
   RuntimeUsageEvent,
 } from '../../engine/src/types.ts';
 import { performance } from 'node:perf_hooks';
@@ -438,6 +439,88 @@ function markCommands(
     ];
 }
 
+/**
+ * SPEC-0053 E03: reads the progress in each message of Claude's main loop. It remembers each tool
+ * call from its start, to report its end with its outcome and time.
+ */
+function claudeProgress(): (message: Record<string, unknown>) => RuntimeProgress[] {
+  const calls = new Map<string, { tool: string; at: number }>();
+  return (message) => {
+    const found: RuntimeProgress[] = [];
+    const count = (value: unknown) => (typeof value === 'number' ? value : null);
+    if (message.type === 'system' && message.subtype === 'api_retry') {
+      const error = message.error;
+      found.push({
+        kind: 'api_retry',
+        attempt: count(message.attempt),
+        maxRetries: count(message.max_retries),
+        delayMs: count(message.retry_delay_ms),
+        status: count(message.error_status),
+        message:
+          typeof error === 'string'
+            ? error
+            : error === undefined || error === null
+              ? null
+              : JSON.stringify(error),
+      });
+    }
+    // A thinking block starts long before its message is whole (SPEC-0053 E06).
+    const event = message.event as
+      | { type?: unknown; content_block?: { type?: unknown } }
+      | undefined;
+    if (
+      message.type === 'stream_event' &&
+      event?.type === 'content_block_start' &&
+      (event.content_block?.type === 'thinking' ||
+        event.content_block?.type === 'redacted_thinking')
+    )
+      found.push({ kind: 'thinking' });
+    const content = (message.message as { content?: unknown } | undefined)?.content;
+    if ((message.type !== 'assistant' && message.type !== 'user') || !Array.isArray(content))
+      return found;
+    for (const block of content) {
+      if (!block || typeof block !== 'object') continue;
+      const { type, text, name, input, id } = block as Record<string, unknown>;
+      if (type === 'thinking' || type === 'redacted_thinking') found.push({ kind: 'thinking' });
+      if (type === 'text' && typeof text === 'string' && text)
+        found.push({ kind: 'assistant_text', text });
+      if (type === 'tool_result') {
+        const { tool_use_id: callId, is_error: failed } = block as Record<string, unknown>;
+        const call = typeof callId === 'string' ? calls.get(callId) : undefined;
+        if (!call) continue;
+        calls.delete(callId as string);
+        found.push({
+          kind: 'tool_finished',
+          tool: call.tool,
+          ok: failed !== true,
+          durationMs: Math.max(0, Math.round(performance.now() - call.at)),
+          exitCode: null,
+        });
+      }
+      if (type !== 'tool_use' || typeof name !== 'string') continue;
+      // An MCP tool is named mcp__<server>__<tool>; its arguments are left out (SPEC-0053 E01).
+      const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
+      if (typeof id === 'string')
+        calls.set(id, { tool: mcp ? mcp[2] : name, at: performance.now() });
+      if (mcp) {
+        found.push({ kind: 'tool_started', tool: mcp[2], server: mcp[1] });
+        continue;
+      }
+      const args = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+      const paths = ['file_path', 'notebook_path', 'path']
+        .map((key) => args[key])
+        .filter((value): value is string => typeof value === 'string' && value.length > 0);
+      found.push({
+        kind: 'tool_started',
+        tool: name,
+        ...(typeof args.command === 'string' ? { command: args.command } : {}),
+        ...(paths.length ? { paths } : {}),
+      });
+    }
+    return found;
+  };
+}
+
 export function createClaudeAdapter<Extra extends object = object>(
   config: ClaudeAdapterConfig<Extra> = {},
 ): ClaudeRuntimeAdapter {
@@ -753,6 +836,7 @@ export function createClaudeAdapter<Extra extends object = object>(
       let submitted = false;
       let toolsRevoked = false;
       let turnStarted = false;
+      const observeProgress = claudeProgress();
       let interruptSent = false;
       let interruptRequestedAt: number | undefined;
       let handle: ActiveQuery | null = null;
@@ -1177,6 +1261,9 @@ export function createClaudeAdapter<Extra extends object = object>(
                 nativeCheckpoint = message.uuid;
               requestInterrupt();
             }
+            // SPEC-0053 E03: what the main loop does, for the host to show.
+            if (input.reportProgress && observedId === sessionId && !message.parent_tool_use_id)
+              for (const progress of observeProgress(message)) input.reportProgress(progress);
             // SPEC-0032 A01: the Claude Code version decides whether this session's totals continue.
             if (
               message.type === 'system' &&

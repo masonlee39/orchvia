@@ -78,6 +78,9 @@ export interface EventOptions extends RequestOptions {
   storeId?: string;
   taskId?: string;
   limit?: number;
+  /** Only these event types, or all but `excludeTypes`; without either, no `dispatch.progress` (SPEC-0053 F01). */
+  types?: string[];
+  excludeTypes?: string[];
 }
 export interface InitializeResult {
   protocolVersion: string;
@@ -907,6 +910,8 @@ export class Orchestrator {
       if (storeId !== undefined) params.storeId = storeId;
       if (options.taskId !== undefined) params.taskId = options.taskId;
       if (options.limit !== undefined) params.limit = options.limit;
+      if (options.types !== undefined) params.types = options.types;
+      if (options.excludeTypes !== undefined) params.excludeTypes = options.excludeTypes;
       const page = await this.call<EventPage>('events.read', params, {
         signal: options.signal,
         timeoutMs: options.timeoutMs,

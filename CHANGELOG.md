@@ -2,6 +2,16 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.28] - 2026-09-30
+
+Progress of a running turn (SPEC-0053).
+
+### Added
+
+- The event `dispatch.progress`, with `DispatchProgressData`: a turn's tool starts (the tool, a command's first 200 characters, file paths, an MCP tool's server) and ends (success, duration, exit code), the text the model writes (the last 280 characters, at most every 5 seconds, never its thinking), a signal while it thinks (at most every 30 seconds), and the model requests it retries (attempt, maximum, delay, status and message, each when the runtime says it), at most 1,000 for each dispatch. Secrets in commands and text are masked as a best effort. Progress may be dropped, and changes nothing else.
+- `types` and `excludeTypes` on `events.read` and `events()` (`exclude_types` in Python). Without either, `dispatch.progress` is left out, so a host that does not ask for progress reads what it read before.
+- `RuntimeInput.reportProgress`, through which the Claude and Codex adapters report progress, and a host's own adapter can.
+
 ## [0.1.27] - 2026-09-30
 
 The storage check no longer walks the state directory or reads every task on each call (SPEC-0052).

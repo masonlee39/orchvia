@@ -29,6 +29,12 @@ import type {
 // Reads that a running engine and a read-only view answer through the same code (SPEC-0027 R03).
 
 /** The inline limit of one context reference, for admission, the prompt and `context.checkRefs`. */
+/** SPEC-0053 F01: a list of 0 or 1 to 50 event types. */
+function eventTypes(value: unknown, name: string, min: number): string[] {
+  if (!Array.isArray(value) || value.length < min || value.length > 50)
+    fail('VALIDATION_ERROR', `${name} must be a list of ${min} to 50 event types`);
+  return value.map((type, index) => string(type, `${name}[${index}]`, 128));
+}
 export const CONTEXT_REF_MAX_BYTES = 32768;
 
 /**
@@ -315,12 +321,20 @@ export function readCall(
       fields(p, ['taskIds']);
       return usageByTask(store, distinct(p.taskIds, 'taskIds', 100));
     case 'events.read':
-      fields(p, ['afterCursor', 'storeId', 'taskId', 'limit']);
+      fields(p, ['afterCursor', 'storeId', 'taskId', 'limit', 'types', 'excludeTypes']);
+      if (p.types !== undefined && p.excludeTypes !== undefined)
+        fail('VALIDATION_ERROR', 'Give types or excludeTypes, not both');
       return store.events(
         p.afterCursor === undefined ? '0' : string(p.afterCursor, 'afterCursor', 30),
         p.storeId === undefined ? undefined : string(p.storeId, 'storeId', 128),
         p.taskId === undefined ? undefined : string(p.taskId, 'taskId', 128),
         p.limit === undefined ? 100 : integer(p.limit, 'limit', 1, 1000),
+        {
+          ...(p.types !== undefined ? { types: eventTypes(p.types, 'types', 1) } : {}),
+          ...(p.excludeTypes !== undefined
+            ? { excludeTypes: eventTypes(p.excludeTypes, 'excludeTypes', 0) }
+            : {}),
+        },
       ) satisfies EventPage;
     case 'operations.get':
       fields(p, ['operationId']);

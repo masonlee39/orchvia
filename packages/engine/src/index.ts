@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { MUTATIONS, requestDigest, requestScope, type RetryIdentity } from './identity.ts';
 const requestIdentity = new AsyncLocalStorage<RetryIdentity>();
 import { randomUUID } from 'node:crypto';
+import { isAbsolute, relative } from 'node:path';
 import { Store } from './store.ts';
 import { VERSION } from './version.ts';
 import {
@@ -59,6 +60,7 @@ import type {
   EngineRuntimeInput,
   RuntimeEvent,
   RuntimeSteerAnswer,
+  RuntimeProgress,
   RuntimeUsageEvent,
   UsageRecord,
   Json,
@@ -173,6 +175,107 @@ interface Flight {
   deadlineChecks: (() => void)[];
   cancelAcceptance?: () => void;
   budget: ExecutionBudget;
+  /** SPEC-0053 E02: this flight's progress limits, in memory only (invariant 3). */
+  progress?: {
+    count: number;
+    dropped: number;
+    textAt: number;
+    text: string;
+    thinkingAt: number;
+    limited: boolean;
+  };
+}
+const PROGRESS_LIMIT = 1000;
+const PROGRESS_TEXT_MS = 5000;
+const PROGRESS_THINKING_MS = 30_000;
+
+/**
+ * SPEC-0053 E07: masks what looks like a secret in a command or in text, before it is written: the
+ * value after a name such as TOKEN, SECRET, PASSWORD or API_KEY, a Bearer or Basic credential, and
+ * the shapes of common keys. It is a best effort, not a guarantee.
+ */
+const SECRET_NAME =
+  '[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|credential)[A-Za-z0-9_-]*';
+const SECRET_VALUE = `(?:"[^"]*"|'[^']*'|[A-Za-z0-9_+/=~@](?:[A-Za-z0-9_+/=.~:@-]*[A-Za-z0-9_+/=~@-])?)`;
+const SECRETS: [RegExp, string][] = [
+  [new RegExp(`(\\b${SECRET_NAME}\\s*[=:]\\s*)${SECRET_VALUE}`, 'gi'), '$1***'],
+  [new RegExp(`(--?${SECRET_NAME}\\s+)${SECRET_VALUE}`, 'gi'), '$1***'],
+  [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 ***'],
+  [
+    /\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[abprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16})\b/g,
+    '***',
+  ],
+];
+function redact(value: string): string {
+  return SECRETS.reduce((text, [pattern, mask]) => text.replace(pattern, mask), value);
+}
+/** A progress's bounded data, or null when it is malformed (SPEC-0053 E01). */
+function progressData(value: unknown, workspace: string): Record<string, any> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const p = value as Record<string, unknown>;
+  const text = (v: unknown, max: number) =>
+    typeof v === 'string' && v ? v.slice(0, max) : undefined;
+  const count = (v: unknown) =>
+    v === null || v === undefined
+      ? null
+      : Number.isSafeInteger(v) && (v as number) >= 0
+        ? v
+        : undefined;
+  if (p.kind === 'tool_started') {
+    const tool = text(p.tool, 128);
+    if (!tool) return null;
+    const command = p.command === undefined ? undefined : text(redact(String(p.command)), 200);
+    const paths = Array.isArray(p.paths)
+      ? p.paths
+          .filter((path): path is string => typeof path === 'string' && path.length > 0)
+          .slice(0, 20)
+          .map((path) => {
+            const inside = isAbsolute(path) ? relative(workspace, path) : path;
+            return (
+              inside && !inside.startsWith('..') && !isAbsolute(inside) ? inside : path
+            ).slice(0, 512);
+          })
+      : [];
+    const server = text(p.server, 128);
+    return {
+      kind: 'tool_started',
+      tool,
+      ...(command ? { command } : {}),
+      ...(paths.length ? { paths } : {}),
+      ...(server ? { server } : {}),
+    };
+  }
+  if (p.kind === 'tool_finished') {
+    const tool = text(p.tool, 128);
+    const durationMs = count(p.durationMs);
+    const exitCode =
+      p.exitCode === null || p.exitCode === undefined
+        ? null
+        : Number.isSafeInteger(p.exitCode)
+          ? p.exitCode
+          : undefined;
+    if (!tool || typeof p.ok !== 'boolean' || durationMs === undefined || exitCode === undefined)
+      return null;
+    return { kind: 'tool_finished', tool, ok: p.ok, durationMs, exitCode };
+  }
+  if (p.kind === 'thinking') return { kind: 'thinking' };
+  if (p.kind === 'assistant_text') {
+    if (typeof p.text !== 'string' || !p.text) return null;
+    return { kind: 'assistant_text', text: redact(p.text) };
+  }
+  if (p.kind === 'api_retry') {
+    const fields = {
+      attempt: count(p.attempt),
+      maxRetries: count(p.maxRetries),
+      delayMs: count(p.delayMs),
+      status: count(p.status),
+    };
+    if (Object.values(fields).some((v) => v === undefined)) return null;
+    const message = p.message === null || p.message === undefined ? null : text(p.message, 300);
+    if (message === undefined) return null;
+    return { kind: 'api_retry', ...fields, message };
+  }
+  return null;
 }
 
 class LocalEngine implements Engine {
@@ -1683,6 +1786,62 @@ class LocalEngine implements Engine {
       this.admissionEvent();
     });
     this.kick();
+  }
+  /**
+   * SPEC-0053: writes a running turn's progress as `dispatch.progress`, bounded and throttled, in a
+   * transaction of its own (invariant 1), only while the flight's turn runs (invariant 2). It never
+   * throws to the adapter.
+   */
+  private reportProgress(flight: Flight, progress: RuntimeProgress): void {
+    try {
+      if (this.closed || this.flights.get(flight.sessionId) !== flight || !this.live(flight))
+        return;
+      const dispatch = this.store.get<Dispatch>('dispatches', flight.dispatchId);
+      if (!dispatch || dispatch.terminalEvidence) return;
+      const state = (flight.progress ??= {
+        count: 0,
+        dropped: 0,
+        textAt: -Infinity,
+        text: '',
+        thinkingAt: -Infinity,
+        limited: false,
+      });
+      if (state.limited) return;
+      const data = progressData(progress, this.config.workspace);
+      if (!data) {
+        state.dropped++;
+        return;
+      }
+      if (data.kind === 'assistant_text') {
+        state.text = (state.text + data.text).slice(-280);
+        if (this.clock.monotonicNow() - state.textAt < PROGRESS_TEXT_MS) return;
+        state.textAt = this.clock.monotonicNow();
+        data.text = state.text;
+        state.text = '';
+      }
+      if (data.kind === 'thinking') {
+        if (this.clock.monotonicNow() - state.thinkingAt < PROGRESS_THINKING_MS) return;
+        state.thinkingAt = this.clock.monotonicNow();
+      }
+      const write = (value: Record<string, unknown>) =>
+        this.store.transaction(() =>
+          this.store.event(
+            'dispatch.progress',
+            { dispatchId: flight.dispatchId, ...value },
+            { taskId: flight.taskId, sessionId: flight.sessionId },
+          ),
+        );
+      if (state.count >= PROGRESS_LIMIT) {
+        state.limited = true;
+        write({ kind: 'limit_reached', limit: PROGRESS_LIMIT });
+        return;
+      }
+      write({ ...data, ...(state.dropped ? { dropped: state.dropped } : {}) });
+      state.count++;
+      state.dropped = 0;
+    } catch {
+      // Progress may be lost; it never changes the turn (SPEC-0053 A02).
+    }
   }
   private reportEvidence(flight: Flight, provider: string, evidence: ExecutionEvidence): void {
     if (this.closed) return;
@@ -4871,6 +5030,7 @@ class LocalEngine implements Engine {
           this.reportEvidence(flight, adapter.provider, evidence),
         reportUsage: (event: RuntimeUsageEvent) =>
           this.recordUsage(flight, adapter.provider, event),
+        reportProgress: (progress: RuntimeProgress) => this.reportProgress(flight, progress),
         ...(this.config.runtimeApprovals?.enabled
           ? {
               requestPermission: (request: RuntimePermissionRequest) =>
