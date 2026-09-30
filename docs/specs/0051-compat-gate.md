@@ -44,6 +44,14 @@ The engine refuses a store of another schema version (`SCHEMA_MISMATCH`, `packag
 
 - **C01** The contract workflow runs R01 and P01 in a job of their own on Linux.
 
+## E. Error data
+
+An integrating host reviewed the first baseline and asked for two more things: the data of the errors it reads by value, and one name for that data.
+
+- **E01** The protocol schema defines the data of three errors: `SteerTurnEndedData` (`dispatchId`, `turnOutcome`, `taskStatus`), `CursorExpiredData` (`reason`, `retentionFloorCursor`, `lastCursor`, `currentStoreId`) and `StoreTooNewData` (`features`, each `{name, engineVersion}`, and `unreadable` for a recorded value that is not a list of features). The baseline's `wire` category holds them like any other definition. Tests validate the data of real errors against them, reject a changed value, and check that the definitions list every `turnOutcome` and `reason` the engine sets.
+- **E02** Every error of the SDKs names its data `data`. An engine error, which an embedding host receives when opening a store fails (`createOrchestrator`, `openOrchestratorReadOnly`), had only `details`; it now also has `data`, the same object, and keeps `details`. The Python SDK keeps `CONNECTION_CLOSED` for a host that ends before it answers `initialize` (SPEC-0023 E01), and adds `data["hostError"]`: `{code, message, data}` from the last line of the host's error output that is an error.
+- **E03** `markStoreFeatureForTest(stateDir, {name, engineVersion})` from `@orchvia/engine/testing` marks a closed store as holding a newer engine's data, so that a host can test how it shows `STORE_TOO_NEW`. It refuses with `HOST_ALREADY_RUNNING` while an engine holds the store, with `NOT_FOUND` without a store, and with `VALIDATION_ERROR` for an empty name or version; marking the same feature again changes nothing.
+
 ## B. The installed command
 
 - **B01** npm installs the `orchvia` command as a symbolic link to `@orchvia/cli`'s `dist/main.js`. The CLI ran only when the path it was started by was the module's own path, so through that link it did nothing and exited 0: `npx orchvia host ...`, or `orchvia` on the path, as the guide's Python example starts it. P01 found it on macOS, whose temporary directory is itself under a symbolic link. The CLI compares the real path of the started file with its own, and the package installation check starts the host through `node_modules/.bin/orchvia`.
@@ -55,15 +63,18 @@ The engine refuses a store of another schema version (`SCHEMA_MISMATCH`, `packag
 
 ## Acceptance
 
-| ID       | Criterion                                                                                                                                        | Test                                                               |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| 0051-G01 | The surface has every category, is deterministic, and the committed baseline is of this version with nothing gone                                | `tests/contract/compat-baseline-0051.test.ts`                      |
-| 0051-G02 | A removed token, a narrowed enum and a new required input are breaking; additions pass; a higher minor or an acceptance passes a breaking change | same                                                               |
-| 0051-G03 | Each parsed text is in the surface while its file holds it                                                                                       | same                                                               |
-| 0051-R02 | An unknown feature is refused writable and read-only, with its data, before recovery; `lastEngineVersion` is recorded                            | `tests/engine/store-features-0051.test.ts`                         |
-| 0051-R01 | [Network] Both rollback directions against the previous release                                                                                  | `scripts/compat-rollback.mjs`                                      |
-| 0051-P01 | [Network] Both Python directions against the previous release                                                                                    | `scripts/compat-python.mjs`                                        |
-| 0051-B01 | The CLI runs when started through a symbolic link, and the installed package's `.bin/orchvia` starts a host                                      | `tests/contract/cli-bin-0051.test.ts`, `scripts/package-smoke.mjs` |
+| ID       | Criterion                                                                                                                                                                         | Test                                                               |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| 0051-G01 | The surface has every category, is deterministic, and the committed baseline is of this version with nothing gone                                                                 | `tests/contract/compat-baseline-0051.test.ts`                      |
+| 0051-G02 | A removed token, a narrowed enum and a new required input are breaking; additions pass; a higher minor or an acceptance passes a breaking change                                  | same                                                               |
+| 0051-G03 | Each parsed text is in the surface while its file holds it                                                                                                                        | same                                                               |
+| 0051-R02 | An unknown feature is refused writable and read-only, with its data, before recovery; `lastEngineVersion` is recorded                                                             | `tests/engine/store-features-0051.test.ts`                         |
+| 0051-R01 | [Network] Both rollback directions against the previous release                                                                                                                   | `scripts/compat-rollback.mjs`                                      |
+| 0051-P01 | [Network] Both Python directions against the previous release                                                                                                                     | `scripts/compat-python.mjs`                                        |
+| 0051-E01 | Real STEER_TURN_ENDED and CURSOR_EXPIRED errors and a refused marked store validate against their definitions; a changed value does not; the definitions list the engine's values | `tests/contract/error-data-0051.test.ts`                           |
+| 0051-E02 | An opening error has `data` equal to `details`, in-process; Python's start error has `hostError`, from a real host too, and nothing for output that is no error                   | same, `python/tests/test_host_error_0051.py`                       |
+| 0051-E03 | A marked store is refused writable and read-only; marking a held store is refused; marking twice records once                                                                     | `tests/contract/error-data-0051.test.ts`                           |
+| 0051-B01 | The CLI runs when started through a symbolic link, and the installed package's `.bin/orchvia` starts a host                                                                       | `tests/contract/cli-bin-0051.test.ts`, `scripts/package-smoke.mjs` |
 
 ## Rollback
 

@@ -91,7 +91,8 @@ function checkFeatures(recorded: string | undefined, known: readonly string[]): 
     if (!Array.isArray(features)) throw new Error('not a list');
   } catch {
     return fail('STORE_TOO_NEW', 'The store records features this engine cannot read', {
-      features: recorded,
+      features: [],
+      unreadable: recorded.slice(0, 4096),
     });
   }
   const unknown = features.filter((feature) => !known.includes(String(feature?.name)));

@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 1262e14ba734e533b27cfaad360b82b28687bd26a4d9aaab1c6d28fcbfbce21e. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 fd7f346bcd1c37d6e274797d241eb74bfc10029a56a2096f67156e22f62a6e51. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -830,6 +830,25 @@ class WorkflowCapability(TypedDict):
     reasoningEfforts: NotRequired[Literal[True]]
     reconcileRecordedResult: NotRequired[Literal[True]]
     steer: NotRequired[Literal[True]]
+
+class SteerTurnEndedData(TypedDict):
+    dispatchId: str
+    turnOutcome: Literal["completed", "interrupted", "failed", "unknown"]
+    taskStatus: TaskStatus
+
+class CursorExpiredData(TypedDict):
+    reason: Literal["store_changed", "below_retention_floor", "ahead_of_store"]
+    retentionFloorCursor: str
+    lastCursor: str
+    currentStoreId: str
+
+class StoreTooNewDataFeaturesItem(TypedDict):
+    name: str
+    engineVersion: str
+
+class StoreTooNewData(TypedDict):
+    features: list[StoreTooNewDataFeaturesItem]
+    unreadable: NotRequired[str]
 
 TaskStatus: TypeAlias = Literal["queued", "running", "waiting_approval", "paused", "blocked", "completed", "failed", "cancelled", "waiting_dependency", "verifying"]
 SessionStatus: TypeAlias = Literal["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]

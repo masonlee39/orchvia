@@ -1,10 +1,13 @@
 import { MUTATIONS } from './identity.ts';
 /** Optional Node test entry point. Normal engine/SDK imports never load this module. */
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test, type TestContext } from 'node:test';
+import { fail } from './errors.ts';
 import { createEngine } from './index.ts';
 import { reportedUsage } from './usage.ts';
 import type {
@@ -381,4 +384,49 @@ export function registerRuntimeAdapterContract(
       assert.equal(f.fixture.submissions().length, 1);
     },
   );
+}
+
+/**
+ * SPEC-0051 E03: marks a closed store as holding `feature`, data of the engine `engineVersion`, so
+ * that a test can see an engine refuse it with `STORE_TOO_NEW`. Refuses with HOST_ALREADY_RUNNING
+ * while an engine holds the store. Recording the same feature again changes nothing.
+ */
+export async function markStoreFeatureForTest(
+  stateDir: string,
+  feature: { name: string; engineVersion: string },
+): Promise<void> {
+  const text = (value: unknown) =>
+    typeof value === 'string' && value.length > 0 && value.length <= 128;
+  if (!text(feature?.name) || !text(feature?.engineVersion))
+    fail('VALIDATION_ERROR', 'A feature needs a name and an engineVersion of 1 to 128 characters');
+  if (!existsSync(join(stateDir, 'store.sqlite')))
+    fail('NOT_FOUND', 'No store in stateDir', { stateDir });
+  const lock = new DatabaseSync(join(stateDir, 'owner.sqlite'));
+  try {
+    try {
+      lock.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE;');
+    } catch (error) {
+      if ((error as { errcode?: number }).errcode === 5 || /locked|busy/i.test(String(error)))
+        fail('HOST_ALREADY_RUNNING', 'An engine holds the store', { stateDir });
+      throw error;
+    }
+    const db = new DatabaseSync(join(stateDir, 'store.sqlite'));
+    try {
+      const row = db.prepare("SELECT value FROM metadata WHERE key='storeFeatures'").get() as
+        | { value: string }
+        | undefined;
+      const features = row ? (JSON.parse(row.value) as { name: string }[]) : [];
+      if (features.some((recorded) => recorded.name === feature.name)) return;
+      db.prepare(
+        "INSERT INTO metadata(key,value) VALUES ('storeFeatures',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      ).run(
+        JSON.stringify([...features, { name: feature.name, engineVersion: feature.engineVersion }]),
+      );
+    } finally {
+      db.close();
+    }
+  } finally {
+    if (lock.isTransaction) lock.exec('ROLLBACK');
+    lock.close();
+  }
 }

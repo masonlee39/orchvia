@@ -10,6 +10,9 @@ A compatibility gate: the public surface checked against the previous release, a
 
 - `schemas/compat-baseline.json`, the public surface of the previous release, and a contract test that fails when a patch release removes something from it or makes an input required. `node scripts/set-version.mjs` checks the same before it changes the version.
 - `STORE_TOO_NEW`: an engine refuses a store that records data it cannot read, writable or read-only, before anything changes. Engines record their version in the store as `lastEngineVersion`. No release records such data yet.
+- The data of `STEER_TURN_ENDED`, `CURSOR_EXPIRED` and `STORE_TOO_NEW` as wire definitions (`SteerTurnEndedData`, `CursorExpiredData`, `StoreTooNewData`), part of the baseline.
+- `data` on the engine's errors, the same object as `details`, so that an error when opening a store names its data as every other error does. In Python, a host that ends before it answers gives its own error as `error.data["hostError"]`; the code stays `CONNECTION_CLOSED`.
+- `markStoreFeatureForTest` in `@orchvia/engine/testing`, which marks a closed store as a newer engine's, to test how a host shows `STORE_TOO_NEW`.
 - `scripts/compat-rollback.mjs` and `scripts/compat-python.mjs`, run by CI: the previous release opens a store of this one and reads every record as written, this release reads the previous one's, and each release's Python SDK runs a task with the other's host.
 
 ### Fixed

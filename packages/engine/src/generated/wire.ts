@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 1262e14ba734e533b27cfaad360b82b28687bd26a4d9aaab1c6d28fcbfbce21e. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 fd7f346bcd1c37d6e274797d241eb74bfc10029a56a2096f67156e22f62a6e51. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -806,4 +806,19 @@ export type WorkflowCapability = {
   reconcileRecordedResult?: true;
   steer?: true;
   [key: string]: unknown;
+};
+export type SteerTurnEndedData = {
+  dispatchId: string;
+  turnOutcome: 'completed' | 'interrupted' | 'failed' | 'unknown';
+  taskStatus: TaskStatus;
+};
+export type CursorExpiredData = {
+  reason: 'store_changed' | 'below_retention_floor' | 'ahead_of_store';
+  retentionFloorCursor: string;
+  lastCursor: string;
+  currentStoreId: string;
+};
+export type StoreTooNewData = {
+  features: Array<{ name: string; engineVersion: string }>;
+  unreadable?: string;
 };
