@@ -2676,8 +2676,17 @@ class LocalEngine implements Engine {
     };
     const { expectedStoreId: _expected, requestDigest: _digest, ...params } = raw;
     return requestIdentity.run(identity, async () => {
-      const result = await this.dispatchCall(method, params, context);
-      return result && typeof result === 'object' ? { ...result, retryIdentity: identity } : result;
+      try {
+        const result = await this.dispatchCall(method, params, context);
+        return result && typeof result === 'object'
+          ? { ...result, retryIdentity: identity }
+          : result;
+      } finally {
+        // SPEC-0055 C01: what a mutation committed may free a session, end a dependency or lift
+        // backpressure; the scheduler looks once more, after the commit. A pass with nothing to do
+        // is cheap, and passes asked for together run once.
+        this.kick();
+      }
     });
   }
   private async dispatchCall(

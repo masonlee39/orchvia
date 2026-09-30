@@ -99,6 +99,7 @@ Each specification has a matching TDD record of observed failures before the cha
 | [SPEC-0052](specs/0052-storage-status-cost.md) | The storage check keeps a total instead of walking the state directory on each call, counts active tasks through an index, and the capacity benchmark measures retained results and readers (0.1.27) |
 | [SPEC-0053](specs/0053-dispatch-progress.md) | Progress of a running turn, its tool starts, text and retries, as `dispatch.progress` events that the Claude and Codex adapters report (0.1.28) |
 | [SPEC-0054](specs/0054-path-case.md) | Paths in another case than the one on disk are compared as the volume names them, without rewriting what a store recorded (0.1.29) |
+| [SPEC-0055](specs/0055-mutations-wake-the-scheduler.md) | Every mutation wakes the scheduler, so a cancelled task that did not run frees the task queued behind it and fails its dependants at once (0.1.29) |
 
 ## Claude and Codex baselines
 

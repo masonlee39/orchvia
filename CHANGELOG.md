@@ -4,10 +4,11 @@ All notable changes to Orchvia are recorded here. Versions follow [Semantic Vers
 
 ## [0.1.29] - 2026-10-01
 
-Paths in another case than the one on disk (SPEC-0054).
+Paths in another case than the one on disk (SPEC-0054), and a scheduler that wakes after every mutation (SPEC-0055).
 
 ### Fixed
 
+- Cancelling a task that did not run, one waiting for acceptance or blocked, left the task queued behind it on its session `queued`, and its dependants `waiting_dependency`, until another call woke the scheduler. Every mutation now wakes the scheduler after it commits, so hosts no longer need a `tasks.resume` to wake it.
 - On a volume that ignores case, as macOS's does by default, a workspace registered in another case than the one on disk made the Claude guard refuse a Write or Edit inside the workspace as outside it, the Codex adapter decline such a file change, a write path in the case on disk fail with `INVALID_WORKSPACE_SCOPE`, and a store opened with the workspace in another spelling fail with `WORKSPACE_MISMATCH`. Paths are now compared as the volume names them (`realpathSync.native`). What a store recorded keeps its spelling, so that the release before this one still opens it after a rollback.
 
 ## [0.1.28] - 2026-09-30
