@@ -1,6 +1,6 @@
 {
   "name": "orchvia-workspace",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -15,7 +15,7 @@
     "test:python": "NODE_OPTIONS=\"${NODE_OPTIONS:-} --import \\\"$PWD/tests/fixtures/reserve-guard.mjs\\\"\" PYTHONPATH=python/src python3 -m unittest discover -s python/tests -v",
     "typecheck": "tsc --noEmit",
     "cli": "node packages/cli/src/main.ts",
-    "format:check": "prettier --check \"packages/**/*.ts\" \"tests/**/*.{ts,mjs}\" \"examples/typescript/*.ts\" \"schemas/*.json\" \"scripts/*.{ts,mjs}\" package.json tsconfig.json",
+    "format:check": "prettier --check \"packages/**/*.ts\" \"tests/**/*.{ts,mjs}\" \"examples/typescript/*.ts\" \"examples/reference-host/*.ts\" \"schemas/*.json\" \"scripts/*.{ts,mjs}\" package.json tsconfig.json",
     "generate:protocol": "node scripts/generate-protocol.mjs && python3 scripts/generate-python-views.py",
     "check:generated": "node scripts/generate-protocol.mjs --check && python3 scripts/generate-python-views.py --check",
     "build:packages": "node scripts/build-packages.mjs",

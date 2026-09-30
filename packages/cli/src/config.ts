@@ -124,9 +124,16 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
     if (provider === 'fake') {
       fields(
         settings,
-        ['adapter', 'model', 'models', 'permissionProfile', 'delayMs', 'result'],
+        ['adapter', 'model', 'models', 'permissionProfile', 'delayMs', 'result', 'usage'],
         'fake provider',
       );
+      if (settings.usage !== undefined) {
+        if (!object(settings.usage)) invalid('fake.usage must be an object');
+        fields(settings.usage, ['inputTokens', 'outputTokens'], 'fake.usage');
+        for (const key of ['inputTokens', 'outputTokens'])
+          if (!Number.isSafeInteger(settings.usage[key]) || (settings.usage[key] as number) < 0)
+            invalid(`fake.usage.${key} must be a non-negative integer`);
+      }
       if (
         settings.delayMs !== undefined &&
         (typeof settings.delayMs !== 'number' ||
@@ -418,6 +425,7 @@ export async function engineConfig(config: HostConfig): Promise<EngineConfig> {
         createFakeAdapter({
           delayMs: settings.delayMs as number | undefined,
           result: settings.result as string | undefined,
+          usage: settings.usage as { inputTokens: number; outputTokens: number } | undefined,
         }),
       );
     } else if (provider === 'claude') {

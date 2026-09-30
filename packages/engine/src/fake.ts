@@ -1,9 +1,17 @@
 import { setTimeout } from 'node:timers/promises';
 import type { RuntimeAdapter, RuntimeEvent } from './types.ts';
 
-/** Deterministic offline runtime. Never reads the workspace or calls a model. */
+/**
+ * Deterministic offline runtime. Never reads the workspace or calls a model. With `usage`, each
+ * dispatch that returns a result reports one usage observation with those counts (SPEC-0050 U01).
+ */
 export function createFakeAdapter(
-  options: { provider?: string; delayMs?: number; result?: string } = {},
+  options: {
+    provider?: string;
+    delayMs?: number;
+    result?: string;
+    usage?: { inputTokens: number; outputTokens: number };
+  } = {},
 ): RuntimeAdapter {
   const provider = options.provider ?? 'fake';
   return {
@@ -57,6 +65,18 @@ export function createFakeAdapter(
         }
         throw error;
       }
+      if (options.usage)
+        yield {
+          type: 'usage',
+          usageId: 'fake-usage',
+          usage: {
+            inputTokens: options.usage.inputTokens,
+            cachedInputTokens: null,
+            cacheWriteInputTokens: null,
+            outputTokens: options.usage.outputTokens,
+            raw: { source: 'deterministic-fake' },
+          },
+        };
       yield terminal({
         type: 'result',
         text: options.result ?? `Fake result: ${input.prompt}`,

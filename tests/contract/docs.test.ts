@@ -303,3 +303,18 @@ test('0043-L03 the verified Codex versions, TESTED_CODEX_VERSIONS and CI agree',
   assert.deepEqual(sort(listed), sort(installed));
   assert.deepEqual(sort(TESTED_CODEX_VERSIONS), sort(installed));
 });
+
+test('0050-D02 the design document names no release state', () => {
+  const design = readFileSync(join(root, 'docs/design.md'), 'utf8');
+  assert.doesNotMatch(design, /not on PyPI/i);
+  assert.doesNotMatch(design, /published as 0\.\d+\.\d+/);
+});
+
+test('0050-D01 0050-D03 the reference host has its README, the guide links it, and the ledger names the Python writable gap', () => {
+  const host = readFileSync(join(root, 'examples/reference-host/README.md'), 'utf8');
+  for (const command of ['host.ts start', 'host.py start', 'inspect.ts'])
+    assert.ok(host.includes(command), `the README runs ${command}`);
+  assert.match(readFileSync(join(root, 'docs/guide.md'), 'utf8'), /examples\/reference-host/);
+  const ledger = readFileSync(join(root, 'docs/acceptance/readiness.md'), 'utf8');
+  assert.match(ledger, /Python host[^\n]*writable/i);
+});

@@ -1,6 +1,6 @@
 # Multi-agent orchestration SDK design: TypeScript and Python
 
-Updated: 2026-09-23. Status: full product design with SPEC-0001–0009 implemented and offline-verified. [SPEC-0009](specs/0009-complete-design.md#completion-matrix) records the exact completion/evidence matrix. The npm packages are published as 0.1.0; the Python package is not on PyPI yet. The six-job macOS/Linux CI matrix and scripted-gateway native history/fork/compact checks passed for source cf574c4. Real-model quality, actual sandbox, external-application and economic-benefit acceptance remain separate gates. See [README](../README.md) for runnable entry points.
+Updated: 2026-09-23. Status: full product design with SPEC-0001–0009 implemented and offline-verified. [SPEC-0009](specs/0009-complete-design.md#completion-matrix) records the exact completion/evidence matrix. The packages are published on npm and PyPI, and [the status page](status.md) records each release. The six-job macOS/Linux CI matrix and scripted-gateway native history/fork/compact checks passed for source cf574c4. Real-model quality, actual sandbox, external-application and economic-benefit acceptance remain separate gates. See [README](../README.md) for runnable entry points.
 
 Product: **one orchestration engine, TypeScript and Python SDKs, optional Claude and Codex runtime adapters, and a lightweight CLI using the same engine.** Both language SDKs ship in the first public version. There are not two separate orchestration products maintained by provider.
 

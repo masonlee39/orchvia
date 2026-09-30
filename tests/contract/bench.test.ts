@@ -49,7 +49,7 @@ test('0021-E04 every arm completes the four requests offline and passes the hidd
   assert.equal(report.fake, true);
   assert.deepEqual(
     report.runs.map((run) => run.arm),
-    ['single', 'fresh', 'orchvia'],
+    ['single', 'fresh', 'parallel', 'orchvia'],
   );
   for (const run of report.runs) {
     assert.equal(run.requests.length, 4, run.arm);
