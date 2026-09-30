@@ -159,6 +159,11 @@ function openForReading(stateDir: string) {
     throw error;
   }
 }
+/** SPEC-0053 F01: the event types an events.read leaves out when it names no filter. */
+export const DEFAULT_EXCLUDED_EVENTS: readonly string[] = Object.freeze(['dispatch.progress']);
+/** SPEC-0053 F02: the most events one filtered read scans. */
+const EVENT_SCAN_LIMIT = 5000;
+
 export class Store {
   readonly db: DatabaseSync;
   /** Held for the whole life of a writable store; a read-only store takes no lock (SPEC-0027 R01). */
@@ -924,6 +929,7 @@ export class Store {
     storeId: string | undefined,
     taskId: string | undefined,
     limit: number,
+    filter: { types?: readonly string[]; excludeTypes?: readonly string[] } = {},
   ): EventPage {
     // A caller's mistake is a validation error; CURSOR_EXPIRED means that the reader must
     // resynchronize, and says why (SPEC-0027 C01, C02).
@@ -948,42 +954,64 @@ export class Store {
       expired('below_retention_floor', 'Events after this cursor were collected; resynchronize');
     if (BigInt(after) > BigInt(Math.max(last.cursor, Number(floor))))
       expired('ahead_of_store', 'This store has fewer events than the cursor; resynchronize');
+    // SPEC-0053 F01: without a filter, progress is left out, so a reader that does not ask for it
+    // pages as it did before.
+    const only = filter.types ? new Set(filter.types) : undefined;
+    const left = new Set(filter.excludeTypes ?? (only ? [] : DEFAULT_EXCLUDED_EVENTS));
+    const filtered = only !== undefined || left.size > 0;
     // A task's events come from the (taskId, cursor) index, so other tasks' events cost nothing
     // (SPEC-0024 E01).
-    const rows = (
+    const query =
       taskId === undefined
-        ? this.db
-            .prepare('SELECT cursor,data FROM events WHERE cursor>? ORDER BY cursor LIMIT ?')
-            .all(after, limit)
-        : this.db
-            .prepare(
-              'SELECT cursor,data FROM events WHERE taskId=? AND cursor>? ORDER BY cursor LIMIT ?',
-            )
-            .all(taskId, after, limit)
-    ) as { cursor: number; data: string }[];
+        ? this.db.prepare('SELECT cursor,data FROM events WHERE cursor>? ORDER BY cursor LIMIT ?')
+        : this.db.prepare(
+            'SELECT cursor,data FROM events WHERE taskId=? AND cursor>? ORDER BY cursor LIMIT ?',
+          );
     const events: EventEnvelope[] = [];
     let cursor = after;
     let bytes = 0;
-    let full = rows.length === limit;
-    for (const row of rows) {
-      const event = JSON.parse(row.data) as EventEnvelope;
-      if (!taskId || event.taskId === taskId) {
-        const size = Buffer.byteLength(row.data, 'utf8') + 1;
-        if (size > 768 * 1024)
-          fail('FRAME_TOO_LARGE', 'Stored event exceeds the replay page limit');
-        if (bytes + size > 768 * 1024) {
+    let full = false;
+    let exhausted = false;
+    let scanned = 0;
+    // SPEC-0053 F02: a filtered read scans at most EVENT_SCAN_LIMIT events, then returns what it
+    // found with its cursor past them.
+    while (!full && !exhausted && scanned < EVENT_SCAN_LIMIT) {
+      const batch = filtered ? Math.min(1000, EVENT_SCAN_LIMIT - scanned) : limit - events.length;
+      const rows = (
+        taskId === undefined ? query.all(cursor, batch) : query.all(taskId, cursor, batch)
+      ) as { cursor: number; data: string }[];
+      exhausted = rows.length < batch;
+      for (const row of rows) {
+        scanned++;
+        const event = JSON.parse(row.data) as EventEnvelope;
+        if (
+          (!taskId || event.taskId === taskId) &&
+          (!only || only.has(event.type)) &&
+          !left.has(event.type)
+        ) {
+          const size = Buffer.byteLength(row.data, 'utf8') + 1;
+          if (size > 768 * 1024)
+            fail('FRAME_TOO_LARGE', 'Stored event exceeds the replay page limit');
+          if (bytes + size > 768 * 1024) {
+            full = true;
+            break;
+          }
+          bytes += size;
+          events.push(event);
+        }
+        // Advance only past scanned records, never past an event deferred to the next page.
+        cursor = String(row.cursor);
+        if (events.length === limit) {
           full = true;
           break;
         }
-        bytes += size;
-        events.push(event);
       }
-      // Advance only past scanned records, never past an event deferred to the next page.
-      cursor = String(row.cursor);
+      if (!filtered) break;
     }
+    if (!filtered && !full && events.length === limit) full = true;
     // A task-filtered page that is not full returned every event of the task up to the last event;
     // the other tasks' events after its own are not the reader's (SPEC-0024 E02).
-    if (taskId !== undefined && !full && BigInt(last.cursor) > BigInt(cursor))
+    if (taskId !== undefined && !full && exhausted && BigInt(last.cursor) > BigInt(cursor))
       cursor = String(last.cursor);
     return { events, cursor, storeId: this.storeId };
   }

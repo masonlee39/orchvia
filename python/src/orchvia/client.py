@@ -796,7 +796,10 @@ class Orchestrator:
         return await self._call("capabilities.get", {"provider": provider} if provider is not None else {})
 
     async def events(self, *, task_id: str | None = None, after_cursor: str | None = None,
-                     store_id: str | None = None, limit: int = 128) -> AsyncIterator[Snapshot]:
+                     store_id: str | None = None, limit: int = 128, types: Sequence[str] | None = None,
+                     exclude_types: Sequence[str] | None = None) -> AsyncIterator[Snapshot]:
+        """Events after `after_cursor`. Only `types`, or all but `exclude_types`; without either,
+        no `dispatch.progress` (SPEC-0053 F01)."""
         cursor = "0" if after_cursor is None else after_cursor
         if (not isinstance(cursor, str) or not cursor.isascii() or not cursor.isdecimal() or
             (cursor != "0" and store_id is None)):
@@ -812,6 +815,10 @@ class Orchestrator:
             params: dict[str, Any] = {"afterCursor": cursor, "storeId": expected_store, "limit": limit}
             if task_id is not None:
                 params["taskId"] = task_id
+            if types is not None:
+                params["types"] = list(types)
+            if exclude_types is not None:
+                params["excludeTypes"] = list(exclude_types)
             page = await self._call("events.read", params)
             if page.store_id != expected_store:
                 raise OrchestrationError("PROTOCOL_ERROR", "Event page changed store identity")

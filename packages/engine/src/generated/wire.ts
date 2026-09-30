@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 fd7f346bcd1c37d6e274797d241eb74bfc10029a56a2096f67156e22f62a6e51. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 3927cd8a8d08c0d01e6461998d3766ad3fd0170caa50b0e58a1deb58507d7e89. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -822,3 +822,32 @@ export type StoreTooNewData = {
   features: Array<{ name: string; engineVersion: string }>;
   unreadable?: string;
 };
+export type DispatchProgressData = unknown &
+  unknown &
+  unknown &
+  unknown &
+  unknown & {
+    dispatchId: string;
+    kind:
+      | 'tool_started'
+      | 'tool_finished'
+      | 'assistant_text'
+      | 'thinking'
+      | 'api_retry'
+      | 'limit_reached';
+    tool?: string;
+    command?: string;
+    paths?: Array<string>;
+    server?: string;
+    text?: string;
+    attempt?: number | null;
+    maxRetries?: number | null;
+    delayMs?: number | null;
+    status?: number | null;
+    message?: string | null;
+    limit?: number;
+    dropped?: number;
+    ok?: boolean;
+    durationMs?: number | null;
+    exitCode?: number | null;
+  };

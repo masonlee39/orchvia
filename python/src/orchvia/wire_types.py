@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 fd7f346bcd1c37d6e274797d241eb74bfc10029a56a2096f67156e22f62a6e51. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 3927cd8a8d08c0d01e6461998d3766ad3fd0170caa50b0e58a1deb58507d7e89. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -849,6 +849,25 @@ class StoreTooNewDataFeaturesItem(TypedDict):
 class StoreTooNewData(TypedDict):
     features: list[StoreTooNewDataFeaturesItem]
     unreadable: NotRequired[str]
+
+class DispatchProgressData(TypedDict):
+    dispatchId: str
+    kind: Literal["tool_started", "tool_finished", "assistant_text", "thinking", "api_retry", "limit_reached"]
+    tool: NotRequired[str]
+    command: NotRequired[str]
+    paths: NotRequired[list[str]]
+    server: NotRequired[str]
+    text: NotRequired[str]
+    attempt: NotRequired[int | None]
+    maxRetries: NotRequired[int | None]
+    delayMs: NotRequired[int | None]
+    status: NotRequired[int | None]
+    message: NotRequired[str | None]
+    limit: NotRequired[int]
+    dropped: NotRequired[int]
+    ok: NotRequired[bool]
+    durationMs: NotRequired[int | None]
+    exitCode: NotRequired[int | None]
 
 TaskStatus: TypeAlias = Literal["queued", "running", "waiting_approval", "paused", "blocked", "completed", "failed", "cancelled", "waiting_dependency", "verifying"]
 SessionStatus: TypeAlias = Literal["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]

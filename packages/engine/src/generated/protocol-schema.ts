@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 fd7f346bcd1c37d6e274797d241eb74bfc10029a56a2096f67156e22f62a6e51. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 3927cd8a8d08c0d01e6461998d3766ad3fd0170caa50b0e58a1deb58507d7e89. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -3846,6 +3846,160 @@ export const protocolSchema = {
           maxLength: 4096,
         },
       },
+    },
+    DispatchProgressData: {
+      type: 'object',
+      description:
+        'The data of dispatch.progress: what a running turn does, for a host to show; it may be dropped and changes nothing (SPEC-0053 E01).',
+      additionalProperties: false,
+      required: ['dispatchId', 'kind'],
+      properties: {
+        dispatchId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        kind: {
+          enum: [
+            'tool_started',
+            'tool_finished',
+            'assistant_text',
+            'thinking',
+            'api_retry',
+            'limit_reached',
+          ],
+        },
+        tool: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        command: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 200,
+        },
+        paths: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 20,
+          items: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 512,
+          },
+        },
+        server: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        text: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 280,
+        },
+        attempt: {
+          type: ['integer', 'null'],
+          minimum: 0,
+        },
+        maxRetries: {
+          type: ['integer', 'null'],
+          minimum: 0,
+        },
+        delayMs: {
+          type: ['integer', 'null'],
+          minimum: 0,
+        },
+        status: {
+          type: ['integer', 'null'],
+          minimum: 0,
+        },
+        message: {
+          type: ['string', 'null'],
+          maxLength: 300,
+        },
+        limit: {
+          type: 'integer',
+          minimum: 1,
+        },
+        dropped: {
+          type: 'integer',
+          minimum: 1,
+        },
+        ok: {
+          type: 'boolean',
+        },
+        durationMs: {
+          type: ['integer', 'null'],
+          minimum: 0,
+        },
+        exitCode: {
+          type: ['integer', 'null'],
+        },
+      },
+      allOf: [
+        {
+          if: {
+            properties: {
+              kind: {
+                const: 'tool_started',
+              },
+            },
+          },
+          then: {
+            required: ['tool'],
+          },
+        },
+        {
+          if: {
+            properties: {
+              kind: {
+                const: 'tool_finished',
+              },
+            },
+          },
+          then: {
+            required: ['tool', 'ok', 'durationMs', 'exitCode'],
+          },
+        },
+        {
+          if: {
+            properties: {
+              kind: {
+                const: 'assistant_text',
+              },
+            },
+          },
+          then: {
+            required: ['text'],
+          },
+        },
+        {
+          if: {
+            properties: {
+              kind: {
+                const: 'api_retry',
+              },
+            },
+          },
+          then: {
+            required: ['attempt', 'maxRetries', 'delayMs', 'status', 'message'],
+          },
+        },
+        {
+          if: {
+            properties: {
+              kind: {
+                const: 'limit_reached',
+              },
+            },
+          },
+          then: {
+            required: ['limit'],
+          },
+        },
+      ],
     },
   },
 };

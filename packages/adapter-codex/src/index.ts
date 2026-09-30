@@ -18,6 +18,7 @@ import type {
   RuntimeInput,
   RuntimeTerminalEvent,
   RuntimeStopObserver,
+  RuntimeProgress,
   RuntimeUsageEvent,
 } from '../../engine/src/types.ts';
 import { observeRuntimeStop, requireStopProof } from '../../engine/src/stop-observation.ts';
@@ -400,6 +401,99 @@ function codexStopMarkers(config: CodexAdapterConfig): StopMarkers | undefined {
   } catch (error) {
     invalidConfig(errorMessage(error));
   }
+}
+
+/** Items that are no tool call: their start is not progress (SPEC-0053 E04). */
+const NOT_TOOLS = new Set([
+  'agentMessage',
+  'reasoning',
+  'userMessage',
+  'plan',
+  'contextCompaction',
+]);
+/**
+ * SPEC-0053 E04: reads the progress in each notification of the turn. It remembers each item from
+ * its start, to report its end with its time when Codex gives none.
+ */
+function codexProgress(): (method: string, params: Record<string, unknown>) => RuntimeProgress[] {
+  const items = new Map<string, { tool: string; at: number }>();
+  const toolOf = (item: Record<string, unknown>) =>
+    item.type === 'mcpToolCall' && typeof item.tool === 'string' ? item.tool : String(item.type);
+  return (method, params) => {
+    const item = params.item as Record<string, unknown> | undefined;
+    if (method === 'item/started' && item?.type === 'reasoning') return [{ kind: 'thinking' }];
+    if (method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta')
+      return [{ kind: 'thinking' }];
+    if (method === 'item/started') {
+      if (!item || typeof item.type !== 'string' || NOT_TOOLS.has(item.type)) return [];
+      if (typeof item.id === 'string')
+        items.set(item.id, { tool: toolOf(item), at: performance.now() });
+      if (item.type === 'mcpToolCall' && typeof item.tool === 'string')
+        return [
+          {
+            kind: 'tool_started',
+            tool: item.tool,
+            ...(typeof item.server === 'string' ? { server: item.server } : {}),
+          },
+        ];
+      const paths = Array.isArray(item.changes)
+        ? item.changes
+            .map((change) => (change as { path?: unknown } | null)?.path)
+            .filter((path): path is string => typeof path === 'string' && path.length > 0)
+        : [];
+      return [
+        {
+          kind: 'tool_started',
+          tool: item.type,
+          ...(typeof item.command === 'string' ? { command: item.command } : {}),
+          ...(paths.length ? { paths } : {}),
+        },
+      ];
+    }
+    if (method === 'item/completed' && item && typeof item.id === 'string') {
+      const started = items.get(item.id);
+      if (!started) return [];
+      items.delete(item.id);
+      return [
+        {
+          kind: 'tool_finished',
+          tool: started.tool,
+          ok: item.status === 'completed',
+          durationMs:
+            typeof item.durationMs === 'number'
+              ? item.durationMs
+              : Math.max(0, Math.round(performance.now() - started.at)),
+          exitCode: typeof item.exitCode === 'number' ? item.exitCode : null,
+        },
+      ];
+    }
+    if (method === 'item/agentMessage/delta' && typeof params.delta === 'string' && params.delta)
+      return [{ kind: 'assistant_text', text: params.delta }];
+    if (method === 'error' && params.willRetry === true) {
+      const error = (params.error ?? {}) as Record<string, unknown>;
+      const message = typeof error.message === 'string' ? error.message : null;
+      // Codex says how many times only in its message, "Reconnecting... 2/5", and never how long.
+      const counted = message ? /(\d+)\/(\d+)/.exec(message) : null;
+      const info = error.codexErrorInfo;
+      const detail =
+        info && typeof info === 'object'
+          ? (Object.values(info)[0] as Record<string, unknown>)
+          : null;
+      const status =
+        detail && typeof detail.httpStatusCode === 'number' ? detail.httpStatusCode : null;
+      return [
+        {
+          kind: 'api_retry',
+          attempt: counted ? Number(counted[1]) : null,
+          maxRetries: counted ? Number(counted[2]) : null,
+          delayMs: null,
+          status,
+          message,
+        },
+      ];
+    }
+    return [];
+  };
 }
 
 export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntimeAdapter {
@@ -968,6 +1062,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
       const permissionRequests = new Set<string>();
       // SPEC-0038 P01: a file change approval names only its item, which arrives first.
       const fileChanges = new Map<string, unknown>();
+      const observeProgress = codexProgress();
       const requestInterrupt = (): void => {
         if (!input.signal.aborted || !threadId || !turnId || interruptSent) return;
         interruptSent = true;
@@ -1262,6 +1357,10 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
           }
           if (!turnId) continue;
           if (params.turnId && params.turnId !== turnId) continue;
+          // SPEC-0053 E04: what the turn does, for the host to show.
+          if (input.reportProgress && typeof message.method === 'string')
+            for (const progress of observeProgress(message.method, params))
+              input.reportProgress(progress);
           if (message.method === 'item/started') {
             const item = record(params.item);
             // SPEC-0035 I04: a command under another shell holds no marker; the turn stops here.

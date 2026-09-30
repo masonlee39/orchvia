@@ -754,6 +754,33 @@ export interface RuntimeCapabilities {
 export type RuntimeSteerAnswer =
   | { status: 'accepted' }
   | { status: 'rejected'; turnEnded: boolean; notSteerable?: boolean; message: string };
+/** What a running turn does, for the host to show (SPEC-0053 A01). Every field is optional data. */
+export type RuntimeProgress =
+  | {
+      kind: 'tool_started';
+      tool: string;
+      command?: string;
+      paths?: string[];
+      server?: string;
+    }
+  | {
+      kind: 'tool_finished';
+      tool: string;
+      ok: boolean;
+      durationMs: number | null;
+      exitCode: number | null;
+    }
+  | { kind: 'assistant_text'; text: string }
+  /** The model thinks; no content is kept (SPEC-0053 E06). */
+  | { kind: 'thinking' }
+  | {
+      kind: 'api_retry';
+      attempt: number | null;
+      maxRetries: number | null;
+      delayMs: number | null;
+      status: number | null;
+      message: string | null;
+    };
 export interface RuntimeInput {
   taskId: string;
   sessionId: string;
@@ -770,6 +797,8 @@ export interface RuntimeInput {
   reportExecutionEvidence?: (evidence: ExecutionEvidence) => void;
   /** Persists received usage even after the main iterator/deadline; never changes execution state. */
   reportUsage?: (event: RuntimeUsageEvent) => void;
+  /** Progress for the host to show; never throws, and changes nothing else (SPEC-0053 A02). */
+  reportProgress?: (progress: RuntimeProgress) => void;
   /** Canonical owner-registered write scope; adapters must narrow their sandbox to it. */
   writePaths?: string[];
   forkSource?: SessionSnapshot['forkSource'];

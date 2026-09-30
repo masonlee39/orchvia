@@ -3818,6 +3818,159 @@
           "maxLength": 4096
         }
       }
+    },
+    "DispatchProgressData": {
+      "type": "object",
+      "description": "The data of dispatch.progress: what a running turn does, for a host to show; it may be dropped and changes nothing (SPEC-0053 E01).",
+      "additionalProperties": false,
+      "required": ["dispatchId", "kind"],
+      "properties": {
+        "dispatchId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "kind": {
+          "enum": [
+            "tool_started",
+            "tool_finished",
+            "assistant_text",
+            "thinking",
+            "api_retry",
+            "limit_reached"
+          ]
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 280
+        },
+        "attempt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "maxRetries": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "delayMs": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "status": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "message": {
+          "type": ["string", "null"],
+          "maxLength": 300
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "dropped": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "durationMs": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "exitCode": {
+          "type": ["integer", "null"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "tool_started"
+              }
+            }
+          },
+          "then": {
+            "required": ["tool"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "tool_finished"
+              }
+            }
+          },
+          "then": {
+            "required": ["tool", "ok", "durationMs", "exitCode"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "assistant_text"
+              }
+            }
+          },
+          "then": {
+            "required": ["text"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "api_retry"
+              }
+            }
+          },
+          "then": {
+            "required": ["attempt", "maxRetries", "delayMs", "status", "message"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "limit_reached"
+              }
+            }
+          },
+          "then": {
+            "required": ["limit"]
+          }
+        }
+      ]
     }
   }
 }
