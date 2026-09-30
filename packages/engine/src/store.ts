@@ -16,6 +16,7 @@ import {
 import { isAbsolute, relative, join, sep, dirname, basename, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { fail } from './errors.ts';
+import { VERSION } from './version.ts';
 import type {
   EventEnvelope,
   EventPage,
@@ -70,6 +71,38 @@ export interface StoreOptions {
   fault?: (point: string) => void;
   fence?: () => void;
   allowStandby?: boolean;
+  /** Test seam: the features this store may record and open (SPEC-0051 R02). */
+  knownFeatures?: readonly string[];
+}
+
+/**
+ * SPEC-0051 R02: the data features this engine can read. A store records a feature when it first
+ * holds data an engine without it would read wrongly; an engine refuses a store with a feature it
+ * does not know. The list is empty until a release adds data an older engine would misread.
+ */
+export const STORE_FEATURES: readonly string[] = Object.freeze([]);
+
+/** Refuses a store that recorded a feature this engine does not know (SPEC-0051 R02). */
+function checkFeatures(recorded: string | undefined, known: readonly string[]): void {
+  if (!recorded) return;
+  let features: { name?: unknown; engineVersion?: unknown }[];
+  try {
+    features = JSON.parse(recorded);
+    if (!Array.isArray(features)) throw new Error('not a list');
+  } catch {
+    return fail('STORE_TOO_NEW', 'The store records features this engine cannot read', {
+      features: recorded,
+    });
+  }
+  const unknown = features.filter((feature) => !known.includes(String(feature?.name)));
+  if (unknown.length)
+    fail(
+      'STORE_TOO_NEW',
+      `The store holds data of a newer engine: ${unknown
+        .map((feature) => `${feature.name} (written by ${feature.engineVersion})`)
+        .join(', ')}`,
+      { features: unknown },
+    );
 }
 
 /**
@@ -115,6 +148,7 @@ function openForReading(stateDir: string) {
           ? `Store schema ${version} is older than 3; opening it once with a full engine migrates it`
           : `Unsupported store schema ${version ?? '(none)'}`,
       );
+    checkFeatures(meta('storeFeatures'), STORE_FEATURES);
     const storeId = meta('storeId');
     const workspace = meta('workspace');
     if (!storeId || !workspace) fail('SCHEMA_MISMATCH', 'Store metadata is incomplete');
@@ -191,6 +225,8 @@ export class Store {
             role = meta('role');
           if (version && !['1', '2', '3'].includes(version))
             fail('SCHEMA_MISMATCH', `Unsupported store schema ${version}`);
+          // Invariant 2: a newer store is refused before recovery or any write.
+          checkFeatures(meta('storeFeatures'), options.knownFeatures ?? STORE_FEATURES);
           if (
             role === 'retired' ||
             role === 'archive' ||
@@ -347,6 +383,11 @@ export class Store {
         set.run('storeId', this.storeId);
         set.run('retentionFloorCursor', '0');
         set.run('role', 'active');
+        this.db
+          .prepare(
+            'INSERT INTO metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+          )
+          .run('lastEngineVersion', VERSION);
         if (meta('referenceIndexVersion') !== '1') {
           for (const table of TABLES)
             for (const row of this.db.prepare(`SELECT id,data FROM ${table}`).all() as {
@@ -382,6 +423,22 @@ export class Store {
       this.lock.close();
       throw error;
     }
+  }
+  /**
+   * SPEC-0051 R02, invariant 1: records that the store holds data of `name`, in the transaction
+   * that writes that data, so no store holds such data without its marker.
+   */
+  recordFeature(name: string): void {
+    if (!this.db.isTransaction) throw new Error('A feature is recorded in a transaction');
+    if (!(this.options.knownFeatures ?? STORE_FEATURES).includes(name))
+      throw new Error(`${name} is not a known store feature`);
+    const recorded = this.metadata('storeFeatures');
+    const features = recorded ? (JSON.parse(recorded) as { name: string }[]) : [];
+    if (features.some((feature) => feature.name === name)) return;
+    this.setMetadata(
+      'storeFeatures',
+      JSON.stringify([...features, { name, engineVersion: VERSION }]),
+    );
   }
   transaction<T>(fn: () => T): T {
     this.assertWritable();

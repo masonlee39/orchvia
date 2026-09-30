@@ -2,6 +2,20 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.26] - 2026-09-30
+
+A compatibility gate: the public surface checked against the previous release, a rollback to it tested in both directions, and the Python SDK and the host tested across releases (SPEC-0051).
+
+### Added
+
+- `schemas/compat-baseline.json`, the public surface of the previous release, and a contract test that fails when a patch release removes something from it or makes an input required. `node scripts/set-version.mjs` checks the same before it changes the version.
+- `STORE_TOO_NEW`: an engine refuses a store that records data it cannot read, writable or read-only, before anything changes. Engines record their version in the store as `lastEngineVersion`. No release records such data yet.
+- `scripts/compat-rollback.mjs` and `scripts/compat-python.mjs`, run by CI: the previous release opens a store of this one and reads every record as written, this release reads the previous one's, and each release's Python SDK runs a task with the other's host.
+
+### Fixed
+
+- The `orchvia` command that npm installs, a symbolic link to the CLI, did nothing and exited 0, so `npx orchvia host` started no host. The CLI now runs through a link.
+
 ## [0.1.25] - 2026-09-30
 
 A reference host that recovers from a crash at every step, and a benchmark that keeps what it measured (SPEC-0050).

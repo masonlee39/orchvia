@@ -29,6 +29,8 @@ Complete each increment in this order:
 5. Run relevant tests and `npm run typecheck`. Shared wire or lifecycle changes require both `npm test` and `npm run test:python`.
 6. Update the specification, runnable README examples, and verification evidence. Distinguish future interfaces from implemented behavior.
 
+The public surface is compared with `schemas/compat-baseline.json` by `tests/contract/compat-baseline-0051.test.ts`. An addition passes. A removal, or an input that became required, fails the test until the version is a new minor, or, when it breaks nothing (a widened input reported as removed, say), until `schemas/compat-accepted.json` lists it with its category and a reason. `node scripts/set-version.mjs` checks the same and then writes the new version's baseline. `node scripts/compat-rollback.mjs` and `node scripts/compat-python.mjs` check a rollback and the Python SDK against the previous release; they need npm and PyPI, and CI runs them (SPEC-0051).
+
 ## Tests that depend on time
 
 CI runners are several times slower than a developer's machine, and slower still when busy. Every CI flake so far came from a test that assumed otherwise ([docs/ci-flakes.md](docs/ci-flakes.md)). A test that depends on time:
