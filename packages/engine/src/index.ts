@@ -5,6 +5,7 @@ import { MUTATIONS, requestDigest, requestScope, type RetryIdentity } from './id
 const requestIdentity = new AsyncLocalStorage<RetryIdentity>();
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, relative } from 'node:path';
+import { canonicalPath } from './paths.ts';
 import { Store } from './store.ts';
 import { VERSION } from './version.ts';
 import {
@@ -718,10 +719,32 @@ class LocalEngine implements Engine {
   ): string[] {
     const paths = task.verificationRules?.length ? [this.store.workspace] : (task.writePaths ?? []);
     if (!paths.length) return [];
+    // SPEC-0054: paths recorded in another spelling of the same directory are compared as the
+    // volume names them.
+    const seen = new Map<string, string>();
+    const named = (path: string) => {
+      let found = seen.get(path);
+      if (found === undefined) {
+        try {
+          found = canonicalPath(path);
+        } catch {
+          found = path;
+        }
+        seen.set(path, found);
+      }
+      return found;
+    };
     const holders = active.filter((d) => {
       if (d.executionLease?.status !== 'held' && !d.verificationPending) return false;
       const occupied = d.writePaths as string[] | undefined;
-      return occupied?.some((a) => paths.some((b) => contains(a, b) || contains(b, a))) ?? false;
+      return (
+        occupied?.some((a) =>
+          paths.some((b) => {
+            const [x, y] = [named(a), named(b)];
+            return contains(x, y) || contains(y, x);
+          }),
+        ) ?? false
+      );
     });
     return [...new Set(holders.map((d) => d.taskId))];
   }

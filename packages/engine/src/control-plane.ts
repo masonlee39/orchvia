@@ -1,3 +1,4 @@
+import { insidePath, samePath } from './paths.ts';
 import { DatabaseSync } from 'node:sqlite';
 import {
   mkdirSync,
@@ -94,7 +95,10 @@ function privateDirectory(path: string, workspace: string): void {
     !isAbsolute(path) ||
     realpathSync(path) !== path ||
     !outside(workspace, path) ||
-    !outside(path, workspace)
+    !outside(path, workspace) ||
+    // SPEC-0054: the same directory in another spelling overlaps too.
+    insidePath(workspace, path) ||
+    insidePath(path, workspace)
   )
     fail(
       'INVALID_CONFIG',
@@ -277,7 +281,7 @@ export class ControlPlane {
   }
   private checkStatePath(path: string): void {
     if (
-      path !== this.initialStateDir &&
+      !samePath(path, this.initialStateDir) &&
       (!path.startsWith(this.directories.storesRoot + sep) ||
         relative(this.directories.storesRoot, path).includes(sep))
     )

@@ -17,6 +17,7 @@ import { isAbsolute, relative, join, sep, dirname, basename, resolve } from 'nod
 import { randomUUID, createHash } from 'node:crypto';
 import { fail } from './errors.ts';
 import { VERSION } from './version.ts';
+import { samePath } from './paths.ts';
 import type {
   EventEnvelope,
   EventPage,
@@ -286,7 +287,9 @@ export class Store {
         fail('STORE_FENCED', 'Registered stores require their control owner');
       options.fence?.();
       const previousWorkspace = meta('workspace');
-      if (previousWorkspace && previousWorkspace !== this.workspace)
+      // SPEC-0054: another spelling of the same directory is the same workspace; the record keeps
+      // its spelling, so that an older engine still opens the store.
+      if (previousWorkspace && !samePath(previousWorkspace, this.workspace))
         fail('WORKSPACE_MISMATCH', 'State belongs to a different workspace');
       this.storeId = meta('storeId') ?? randomUUID();
       if (version && version !== '3') {
@@ -304,7 +307,7 @@ export class Store {
             check.integrity_check !== 'ok' ||
             (saved.get('schemaVersion') as { value: string }).value !== version ||
             (saved.get('storeId') as { value: string }).value !== this.storeId ||
-            (saved.get('workspace') as { value: string }).value !== this.workspace
+            !samePath((saved.get('workspace') as { value: string }).value, this.workspace)
           )
             fail('SCHEMA_MIGRATION_FAILED', 'Recovery backup validation failed');
         } finally {
