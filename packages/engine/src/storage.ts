@@ -8,7 +8,7 @@ import {
   statSync,
   readdirSync,
 } from 'node:fs';
-import { open, rename, rm } from 'node:fs/promises';
+import { lstat, open, readdir, rename, rm } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -79,7 +79,39 @@ function policy(value: Partial<StoragePolicy>): StoragePolicy {
     fail('VALIDATION_ERROR', 'Settlement reserve must fit within record capacity');
   return result;
 }
+/** SPEC-0052 P02: the task statuses that end a task, and the others, which are active. */
+export const TERMINAL_TASK_STATUSES = Object.freeze(['completed', 'failed', 'cancelled'] as const);
+export const ACTIVE_TASK_STATUSES = Object.freeze([
+  'queued',
+  'waiting_dependency',
+  'running',
+  'verifying',
+  'waiting_approval',
+  'paused',
+  'blocked',
+] as const);
+/** A walk older than this starts again at the next status() (SPEC-0052 P01). */
+const WALK_INTERVAL_MS = 60_000;
+/** SQLite's files, measured at each status() and left out of the walk. */
+const sqliteFile = (name: string) =>
+  name.startsWith('store.sqlite') || name.startsWith('owner.sqlite');
+/** Counted through the index `tasks_status`, which a NOT IN cannot use. */
+export const ACTIVE_TASKS_SQL = `SELECT COUNT(*) AS count FROM tasks WHERE json_extract(data, '$.status') IN (${ACTIVE_TASK_STATUSES.map((status) => `'${status}'`).join(',')})`;
+
 export class StorageGovernance {
+  /** Test seam: awaited after the walk lists each directory, with its path (SPEC-0052). */
+  walkPause?: (directory: string) => Promise<void>;
+  /**
+   * SPEC-0052 P01: the bytes of every file under the state directory but SQLite's, as the last walk
+   * found them plus what the engine wrote since. A walk runs in the background; only the first, when
+   * the store opens, is synchronous.
+   */
+  private fileBytes = 0;
+  private walkedAt = -Infinity;
+  private walking?: Promise<void>;
+  private walkAgain = false;
+  private writtenDuringWalk = 0;
+  private untrusted = false;
   readonly store: Store;
   policy: StoragePolicy;
   private snapshotDeadlines = new Map<string, number>();
@@ -105,6 +137,114 @@ export class StorageGovernance {
     // Only recovery of already-recorded file actions happens at startup. Old data is not collected.
     // The owner of this object writes the emergency reserve with reserve() (SPEC-0028 W01).
     this.recoverGarbage();
+    // Invariant 1: the store reports each file it writes before the record that refers to it.
+    store.onFileWritten = (bytes) => this.noteWrite(bytes);
+    this.walkedAt = this.monotonicNow();
+    const found = this.walkSync();
+    this.fileBytes = found.bytes;
+    this.untrusted = found.untrusted;
+  }
+  private noteWrite(bytes: number): void {
+    this.fileBytes += bytes;
+    if (this.walking) this.writtenDuringWalk += bytes;
+  }
+  /** Starts a background walk, or another one after the walk that runs now. */
+  private refresh(): void {
+    if (this.walking) {
+      this.walkAgain = true;
+      return;
+    }
+    this.walkedAt = this.monotonicNow();
+    this.writtenDuringWalk = 0;
+    this.walking = this.walk()
+      .then(
+        (found) => {
+          // Invariant 2: what the engine wrote while the walk ran counts, even if the walk saw it.
+          this.fileBytes = found.bytes + this.writtenDuringWalk;
+          this.untrusted = found.untrusted;
+        },
+        // The last total stays; the next status() after the interval walks again.
+        () => {},
+      )
+      .finally(() => {
+        this.walking = undefined;
+        if (this.walkAgain) {
+          this.walkAgain = false;
+          this.refresh();
+        }
+      });
+  }
+  /** Resolves once no walk of the state directory is running. */
+  async walked(): Promise<void> {
+    while (this.walking) await this.walking;
+  }
+  private accept(
+    relativePath: string,
+    size: number,
+    link: boolean,
+    found: { bytes: number; untrusted: boolean },
+  ): void {
+    if (!link) found.bytes += size;
+    else if (isCodexHelperLink(relativePath)) found.bytes += size;
+    else found.untrusted = true;
+  }
+  private walkSync() {
+    const found = { bytes: 0, untrusted: false };
+    const visit = (relativePath: string) => {
+      for (const name of readdirSync(join(this.store.stateDir, relativePath))) {
+        if (!relativePath && sqliteFile(name)) continue;
+        const child = relativePath ? join(relativePath, name) : name;
+        const stat = lstatSync(join(this.store.stateDir, child));
+        if (stat.isDirectory()) visit(child);
+        else if (stat.isFile() || stat.isSymbolicLink())
+          this.accept(child, stat.size, stat.isSymbolicLink(), found);
+      }
+    };
+    visit('');
+    return found;
+  }
+  private async walk() {
+    const found = { bytes: 0, untrusted: false };
+    const missing = (error: unknown) => (error as { code?: string }).code === 'ENOENT';
+    const visit = async (relativePath: string): Promise<void> => {
+      let names: string[];
+      try {
+        names = await readdir(join(this.store.stateDir, relativePath));
+      } catch (error) {
+        if (missing(error)) return;
+        throw error;
+      }
+      await this.walkPause?.(relativePath);
+      for (const name of names) {
+        if (!relativePath && sqliteFile(name)) continue;
+        const child = relativePath ? join(relativePath, name) : name;
+        let stat;
+        try {
+          stat = await lstat(join(this.store.stateDir, child));
+        } catch (error) {
+          if (missing(error)) continue;
+          throw error;
+        }
+        if (stat.isDirectory()) await visit(child);
+        else if (stat.isFile() || stat.isSymbolicLink())
+          this.accept(child, stat.size, stat.isSymbolicLink(), found);
+      }
+    };
+    await visit('');
+    return found;
+  }
+  /** SQLite's own files, which change with every write. */
+  private sqliteBytes(): number {
+    let bytes = 0;
+    for (const name of readdirSync(this.store.stateDir))
+      if (sqliteFile(name)) {
+        try {
+          bytes += lstatSync(join(this.store.stateDir, name)).size;
+        } catch (error) {
+          if ((error as { code?: string }).code !== 'ENOENT') throw error;
+        }
+      }
+    return bytes;
   }
   /**
    * Writes a missing emergency reserve without blocking the event loop (SPEC-0028 W01, W02). Calls
@@ -142,6 +282,7 @@ export class StorageGovernance {
         await handle.close();
       }
       await rename(partial, path);
+      this.noteWrite(bytes);
     } catch (error) {
       await rm(partial, { force: true }).catch(() => {});
       throw error;
@@ -153,28 +294,21 @@ export class StorageGovernance {
       await directory.close();
     }
   }
+  /** Tasks that have not ended, through the index `tasks_status` (SPEC-0052 P02). */
+  activeTasks(): number {
+    return (this.store.db.prepare(ACTIVE_TASKS_SQL).get() as { count: number }).count;
+  }
   status(): StorageStatus {
-    const directoryBytes = (path: string): number =>
-      readdirSync(path).reduce((sum, name) => {
-        const child = join(path, name),
-          stat = lstatSync(child);
-        if (stat.isSymbolicLink()) {
-          if (isCodexHelperLink(relative(this.store.stateDir, child))) return sum + stat.size;
-          fail('UNTRUSTED_PATH', 'Managed storage contains a symlink');
-        }
-        return sum + (stat.isDirectory() ? directoryBytes(child) : stat.isFile() ? stat.size : 0);
-      }, 0);
-    const bytes = directoryBytes(this.store.stateDir);
+    // SPEC-0052 P01, invariant 3: what the engine did not write counts after the next walk.
+    if (this.monotonicNow() - this.walkedAt > WALK_INTERVAL_MS) this.refresh();
+    if (this.untrusted) fail('UNTRUSTED_PATH', 'Managed storage contains a symlink');
+    const bytes = this.sqliteBytes() + this.fileBytes;
     const count = this.store.db
       .prepare(
         'SELECT (SELECT COUNT(*) FROM tasks)+(SELECT COUNT(*) FROM sessions)+(SELECT COUNT(*) FROM messages)+(SELECT COUNT(*) FROM operations) AS count',
       )
       .get() as { count: number };
-    const active = this.store.db
-      .prepare(
-        "SELECT COUNT(*) AS count FROM tasks WHERE json_extract(data,'$.status') NOT IN ('completed','failed','cancelled')",
-      )
-      .get() as { count: number };
+    const active = { count: this.activeTasks() };
     const free = statfsSync(this.store.stateDir),
       availableBytes = free.bavail * free.bsize;
     const reservedRecords = Math.max(this.policy.settlementReserveRecords, active.count * 64);
@@ -632,6 +766,8 @@ export class StorageGovernance {
         this.store.db.prepare('DELETE FROM events WHERE cursor<=?').run(last!);
         this.store.setMetadata('retentionFloorCursor', String(last));
       });
+    // Collection removed files: measure again (SPEC-0052 P01).
+    this.refresh();
     return {
       records,
       bytes,

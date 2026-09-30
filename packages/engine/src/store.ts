@@ -166,6 +166,8 @@ export class Store {
   readonly storeId: string;
   readonly workspace: string;
   readonly stateDir: string;
+  /** Told the size of each file the store writes under stateDir, before its record (SPEC-0052). */
+  onFileWritten?: (bytes: number) => void;
   readonly readOnly: boolean;
   private closed = false;
   readonly now: () => number;
@@ -996,9 +998,14 @@ export class Store {
       if (realpathSync(directory) !== directory)
         fail('UNTRUSTED_PATH', 'Artifact directory changed');
     try {
-      atomicFile(journal, JSON.stringify({ ref, ...record }));
+      const journalText = JSON.stringify({ ref, ...record });
+      atomicFile(journal, journalText);
+      this.onFileWritten?.(Buffer.byteLength(journalText));
       this.options.fault?.('artifact.prepared');
-      if (!existsSync(path)) atomicFile(path, text);
+      if (!existsSync(path)) {
+        atomicFile(path, text);
+        this.onFileWritten?.(record.sizeBytes);
+      }
       if (
         !lstatSync(path).isFile() ||
         realpathSync(path) !== path ||
