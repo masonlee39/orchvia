@@ -1,6 +1,8 @@
 // Sets the one Orchvia version in every copy (SPEC-0021 P08). The root package.json holds it, and
 // this script is the only way to change it; tests/contract/version.test.ts checks every copy.
 // node scripts/set-version.mjs X.Y.Z[-alpha.N|-beta.N|-rc.N] [--root DIR]
+// It also replaces the compatibility baseline after checking it (SPEC-0051 G02).
+import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,5 +52,24 @@ await json('package-lock.json', (lock) => {
 await line('packages/engine/src/version.ts', 'export const VERSION = ', version);
 await line('python/pyproject.toml', 'version = ', python);
 await line('python/src/orchvia/_version.py', 'VERSION = ', python);
+
+// SPEC-0051 G02: a breaking change against the baseline stops the version change before anything
+// is written; the new version's baseline is written after the version.
+const baseline = existsSync(join(root, 'schemas/compat-baseline.json'));
+const compat = baseline && (await import('./compat-baseline.mjs'));
+if (compat) {
+  const result = await compat.checkBaseline(root, { version });
+  if (!result.ok) {
+    for (const line of result.unaccepted) console.error(`BREAKING ${line}`);
+    console.error(
+      'A breaking change needs a higher minor version, or an entry with a reason in ' +
+        'schemas/compat-accepted.json when the change breaks nothing.',
+    );
+    process.exit(1);
+  }
+}
 for (const [path, text] of edits) await writeFile(join(root, path), text);
-console.log(`${version} (Python ${python}) in ${edits.length} files`);
+if (compat) await compat.checkBaseline(root, { version, write: true });
+console.log(
+  `${version} (Python ${python}) in ${edits.length} files${compat ? ', and its compatibility baseline' : ''}`,
+);

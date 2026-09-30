@@ -520,6 +520,10 @@ Pull request #74 carried SPEC-0046 to SPEC-0049 and the version 0.1.23. A local 
 
 Pull request #76 carried a correction to SPEC-0048, which an integrating host reported, and the version 0.1.24. A local Claude Code session merged it and pushed the tag `v0.1.24` on the merge commit `76c5ca3`, on the owner's authorization ([36657966444](https://github.com/masonlee39/orchvia/actions/runs/36657966444)). The owner approved the deployments, and every job passed at the first attempt. npm lists 0.1.24 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.24 with its wheel and sdist.
 
+## The twenty-fourth release, 0.1.25
+
+Pull request #77 carried SPEC-0050 and the version 0.1.25. A local Claude Code session merged it and pushed the tag `v0.1.25` on the merge commit `a9cf546`, on the owner's authorization ([36663838379](https://github.com/masonlee39/orchvia/actions/runs/36663838379)). The owner approved the deployments, and every job passed at the first attempt. npm lists 0.1.25 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.25 with its wheel and sdist.
+
 ## P10: no document names the latest release (D-rel-3)
 
 On 2026-09-27 the owner chose D-rel-3: a release is recorded by the next release pull request, and no document names the latest release.

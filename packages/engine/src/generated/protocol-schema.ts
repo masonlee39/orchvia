@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 1262e14ba734e533b27cfaad360b82b28687bd26a4d9aaab1c6d28fcbfbce21e. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 fd7f346bcd1c37d6e274797d241eb74bfc10029a56a2096f67156e22f62a6e51. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -2887,17 +2887,43 @@ export const protocolSchema = {
         target: {
           type: 'object',
           properties: {
-            sessionId: { type: 'string', minLength: 1, maxLength: 128 },
-            expectedGeneration: { type: 'integer', minimum: 1 },
-            expectedDispatchId: { type: 'string', minLength: 1, maxLength: 128 },
-            expectedRevision: { type: 'integer', minimum: 1 },
+            sessionId: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 128,
+            },
+            expectedGeneration: {
+              type: 'integer',
+              minimum: 1,
+            },
+            expectedDispatchId: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 128,
+            },
+            expectedRevision: {
+              type: 'integer',
+              minimum: 1,
+            },
           },
           required: ['sessionId', 'expectedGeneration', 'expectedDispatchId'],
           additionalProperties: false,
         },
-        text: { type: 'string', minLength: 1, maxLength: 16384 },
-        expectedStoreId: { type: 'string', minLength: 1, maxLength: 128 },
-        idempotencyKey: { type: 'string', minLength: 1, maxLength: 256 },
+        text: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 16384,
+        },
+        expectedStoreId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        idempotencyKey: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 256,
+        },
       },
       required: ['target', 'text', 'idempotencyKey'],
       additionalProperties: false,
@@ -3739,6 +3765,87 @@ export const protocolSchema = {
         },
       },
       required: ['version'],
+    },
+    SteerTurnEndedData: {
+      type: 'object',
+      description:
+        "The data of STEER_TURN_ENDED: the turn a steer targeted, how it ended, and its task's status (SPEC-0048, SPEC-0051 E01).",
+      additionalProperties: false,
+      required: ['dispatchId', 'turnOutcome', 'taskStatus'],
+      properties: {
+        dispatchId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        turnOutcome: {
+          enum: ['completed', 'interrupted', 'failed', 'unknown'],
+        },
+        taskStatus: {
+          $ref: '#/$defs/TaskStatus',
+        },
+      },
+    },
+    CursorExpiredData: {
+      type: 'object',
+      description:
+        'The data of CURSOR_EXPIRED: why the cursor can no longer be read, and where to resynchronize (SPEC-0027, SPEC-0051 E01).',
+      additionalProperties: false,
+      required: ['reason', 'retentionFloorCursor', 'lastCursor', 'currentStoreId'],
+      properties: {
+        reason: {
+          enum: ['store_changed', 'below_retention_floor', 'ahead_of_store'],
+        },
+        retentionFloorCursor: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 32,
+        },
+        lastCursor: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 32,
+        },
+        currentStoreId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+      },
+    },
+    StoreTooNewData: {
+      type: 'object',
+      description:
+        'The data of STORE_TOO_NEW: the features of the store this engine does not know, and the engine versions that wrote them; `unreadable` holds a recorded value that is not a list of features (SPEC-0051 R02, E01).',
+      additionalProperties: false,
+      required: ['features'],
+      properties: {
+        features: {
+          type: 'array',
+          maxItems: 100,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['name', 'engineVersion'],
+            properties: {
+              name: {
+                type: 'string',
+                minLength: 1,
+                maxLength: 128,
+              },
+              engineVersion: {
+                type: 'string',
+                minLength: 1,
+                maxLength: 128,
+              },
+            },
+          },
+        },
+        unreadable: {
+          type: 'string',
+          maxLength: 4096,
+        },
+      },
     },
   },
 };

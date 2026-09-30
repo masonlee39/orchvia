@@ -1,0 +1,19 @@
+# TDD-0051: A compatibility gate
+
+Specification: [SPEC-0051](../specs/0051-compat-gate.md).
+
+- R02 RED: `tests/engine/store-features-0051.test.ts` failed 3 of 3: no `lastEngineVersion` after an engine opened a store, a store that recorded the feature `from-the-future` opened writable and read-only, and `Store` had no `recordFeature`. GREEN: 3 of 3. The refusal test also checks that the newer engine's `lastEngineVersion` is unchanged, so the check runs before recovery and before this engine records its own version.
+- G RED: `tests/contract/compat-baseline-0051.test.ts` failed to load: `scripts/compat-baseline.mjs` did not exist. GREEN: 7 of 7.
+  - The first baseline was built from the source of the tag `v0.1.25`, in a detached worktree, so the gate starts from what 0.1.25 published. Against it the working tree adds one token, the error `STORE_TOO_NEW`, and removes none.
+  - While writing the script, a change to the Python namespaces' tokens removed 15 of them (`orchvia.Orchestrator.tasks(client)` and the like), and the gate reported each as breaking. No baseline had been published, so it was built again.
+  - Mutations, each restored from a copy: `paused` removed from `TaskStatus` and `label` made required in `TaskListParams` are reported as `wire: TaskStatus = "paused" (removed)`, `events: task.paused (removed)` and `wire: TaskListParams.label! (newly required)`, and the check exits 1. G03 changes each parsed text in a copy of its file and finds it reported as removed.
+  - `0044-S02` already fails a patch release whose changelog section has a "Breaking" part, so the design's changelog exception was left out (SPEC-0051 G02).
+- R01: `node scripts/compat-rollback.mjs --previous 0.1.25` read 3 tasks, 1 steer operation, 1 steer message, 1 rule and 37 events back through 0.1.25 as the working tree wrote them, and the working tree read the store of 0.1.25 (2 tasks, 24 events). Mutation: the working tree's `tasks.get` without `spec.metadata` fails both directions with `.tasks[0].spec.metadata: {"team":"compat","n":1} ≠ undefined`.
+- P01: `node scripts/compat-python.mjs --previous 0.1.25` completed the round trip in both directions.
+- B01 RED: P01's first run failed: the Python SDK's host, 0.1.25's `dist/main.js` under macOS's temporary directory, exited at once without output. Started through `node_modules/.bin/orchvia`, the published CLI exits 0 and does nothing. `tests/contract/cli-bin-0051.test.ts` starts the working tree's CLI through a symbolic link: exit 0, expected 1.
+  - GREEN: 1 of 1. The CLI compares the real path of the started file with its own, as `packages/engine/src/tool-bridge.ts` already did.
+  - `scripts/package-smoke.mjs` now starts the installed `node_modules/.bin/orchvia --version`. Mutation: with the old comparison built into the packages, the smoke fails with `'' !== '0.1.26\n'`.
+- E RED, after the integrating host's review: `tests/contract/error-data-0051.test.ts` failed to load, since `@orchvia/engine/testing` had no `markStoreFeatureForTest`; with it, the three E tests failed on missing `data` (undefined for STEER_TURN_ENDED, CURSOR_EXPIRED and STORE_TOO_NEW from `createEngine` and `openOrchestratorReadOnly`). `python/tests/test_host_error_0051.py` failed 2 of 3 with `KeyError: 'hostError'`; the case of output that is no error passed before: regression coverage. GREEN: 4 of 4 and 3 of 3.
+  - A first run of the cursor case gave `VALIDATION_ERROR`: the test read `afterCursor` without `storeId`. The test was wrong, not the engine.
+  - Mutation: `ahead_of_store` renamed in `store.ts` fails the cursor case and the check that the definitions list the engine's values.
+  - The baseline of 0.1.26 was written again, unreleased, with the three definitions (44 wire tokens), `OrchestrationError.data` and `markStoreFeatureForTest`.

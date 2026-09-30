@@ -3,6 +3,7 @@ import asyncio
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 import inspect
+import json
 import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -496,6 +497,20 @@ class State:
         return await self._client._call("state.releaseSnapshot", {"snapshotId": snapshot_id})
 
 
+def _host_error(tail: str) -> dict[str, Any] | None:
+    """The last line of a host's error output that is an error: `{"code", "message", "details"}`."""
+    for line in reversed(tail.strip().splitlines()):
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict) and isinstance(value.get("code"), str):
+            details = value.get("details", value.get("data"))
+            return {"code": value["code"], "message": str(value.get("message", "")),
+                    "data": dict(details) if isinstance(details, dict) else {}}
+    return None
+
+
 class Orchestrator:
     def __init__(self, *, engine_command: Sequence[str] | None = None, socket_path: str | None = None,
                  close_timeout: float = 30.0, request_timeout: float = 30.0,
@@ -631,8 +646,13 @@ class Orchestrator:
         if (not isinstance(error, OrchestrationError) or error.code not in {"CONNECTION_CLOSED", "PROTOCOL_ERROR"}
                 or not tail.strip()):
             return error
+        data = {**error.data, "stderrTail": tail}
+        # SPEC-0051 E02: the host's own error, its last output line that is one, as data.
+        host_error = _host_error(tail)
+        if host_error is not None:
+            data["hostError"] = host_error
         return OrchestrationError(error.code, f"{error}. The host's error output ends with:\n{tail.strip()[-2000:]}",
-                                  data={**error.data, "stderrTail": tail})
+                                  data=data)
 
     async def _cleanup_failed_start(self, opening: asyncio.Task[RpcTransport]) -> None:
         if self._transport is None:

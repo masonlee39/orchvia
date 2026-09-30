@@ -70,6 +70,27 @@ jobs:
           name: offline-${{ matrix.os }}-node-${{ matrix.node }}-python-${{ matrix.python }}
           path: dist/
           if-no-files-found: ignore
+  # SPEC-0051 C01: a rollback to the previous release opens this release's store, this release
+  # opens the previous one's, and the Python SDK and the host work across the two releases. It
+  # installs the previous release from npm and PyPI.
+  compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.14.6
+      - run: npm ci --ignore-scripts
+      - name: Rollback to the previous release and back
+        run: node scripts/compat-rollback.mjs
+      - name: Python SDK and host across the previous release
+        if: ${{ !cancelled() }}
+        run: node scripts/compat-python.mjs
   pinned-native-protocol:
     strategy:
       fail-fast: false

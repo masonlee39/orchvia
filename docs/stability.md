@@ -18,6 +18,7 @@ Before 1.0:
 - **A minor release**, such as 0.2.0 after 0.1.x, may break a stable surface: remove or rename it, change its type, change a default, or refuse something that was accepted. Its changelog section has a "Breaking" part that says what changed and how to move.
 - **Deprecation.** A surface marked deprecated stays at least until the next minor release, and the code warns where it can.
 - A test fails when a release from 0.1.21 on has a "Breaking" part without a new minor version (SPEC-0044 S02).
+- A test compares the public surface with `schemas/compat-baseline.json`, the surface of the release before: package exports and their types, the Python package, the wire schema, methods, events, error codes, task reasons and the texts hosts parse. A removed token, or an input that became required, fails it unless the version is a new minor (SPEC-0051 G). Every pull request also opens a store of this release with the previous release, and the reverse, and runs the Python SDK of each release with the host of the other (SPEC-0051 R01, P01).
 
 An application that depends on `~0.1.20` receives patch releases only.
 

@@ -141,6 +141,12 @@ try {
   run(process.execPath, [cli, '--help']);
   // SPEC-0021 P07: the installed CLI reports the version of the package it was built as.
   assert.equal(run(process.execPath, [cli, '--version']), `${releaseVersion}\n`);
+  // SPEC-0051 B01: the command npm installs is a symbolic link to the CLI, and runs through it.
+  if (process.platform !== 'win32')
+    assert.equal(
+      run(join(base, 'node_modules/.bin/orchvia'), ['--version']),
+      `${releaseVersion}\n`,
+    );
   for (const selected of ['codex', 'claude']) {
     const isolated = join(base, selected);
     await mkdir(isolated);

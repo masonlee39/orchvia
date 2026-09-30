@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { createEngine, openReadOnlyEngine } from '../../engine/src/index.ts';
 import type { CloseOptions } from '../../engine/src/types.ts';
 import { connectOrchestrator } from '../../sdk-typescript/src/index.ts';
@@ -301,7 +302,11 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// npm installs the command as a symbolic link to this file (SPEC-0051 B01).
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   main().catch((error) => {
     process.stderr.write(
       JSON.stringify({
