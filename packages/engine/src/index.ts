@@ -312,7 +312,9 @@ class LocalEngine implements Engine {
       throw error;
     }
     try {
-      this.storage = new StorageGovernance(this.store, config.storage);
+      this.storage = new StorageGovernance(this.store, config.storage, () =>
+        this.clock.monotonicNow(),
+      );
       this.accounting = new CostLedger(this.store, config);
       this.loadRules();
       for (const paths of Object.values(config.writeScopes ?? {})) {
@@ -2456,7 +2458,7 @@ class LocalEngine implements Engine {
           fence: this.controlPlane.fence(stateDir),
         });
         this.controlPlane.bind(this.store);
-        this.storage = new StorageGovernance(this.store, policy);
+        this.storage = new StorageGovernance(this.store, policy, () => this.clock.monotonicNow());
         this.accounting = new CostLedger(this.store, this.config);
         this.loadRules();
         await this.storage.reserve();

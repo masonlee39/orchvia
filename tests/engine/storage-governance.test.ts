@@ -18,7 +18,7 @@ import { createArchive, verifyArchive } from '../../packages/engine/src/archive.
 
 const DAY = 86400000;
 
-test('0011-R08 native helper symlinks are counted without traversal and omitted from archives', () => {
+test('0011-R08 native helper symlinks are counted without traversal and omitted from archives', async () => {
   const f = fixture();
   try {
     const helpers = join(f.store.stateDir, 'runtime/codex/tmp/arg0/codex-arg0Ab12CD');
@@ -27,6 +27,8 @@ test('0011-R08 native helper symlinks are counted without traversal and omitted 
     writeFileSync(target, Buffer.alloc(1024 * 1024));
     const before = f.policy.status().bytes;
     symlinkSync(target, join(helpers, 'apply_patch'));
+    // The Codex CLI, not the engine, writes these links: they count after the next walk (SPEC-0052).
+    await f.walk();
     const after = f.policy.status().bytes;
     assert.equal(after - before, Buffer.byteLength(target));
     const history = join(f.store.stateDir, 'runtime/codex/session.jsonl');
@@ -38,6 +40,7 @@ test('0011-R08 native helper symlinks are counted without traversal and omitted 
     verifyArchive(archive, { storeId: f.store.storeId }, true);
     assert.equal(readFileSync(target).length, 1024 * 1024);
     symlinkSync(f.root, join(helpers, 'unexpected'));
+    await f.walk();
     assert.throws(() => f.policy.status(), { code: 'UNTRUSTED_PATH' });
     assert.throws(() => createArchive(f.store, join(realpathSync(f.root), 'bad-archive'), 'bad'), {
       code: 'UNTRUSTED_PATH',
@@ -52,11 +55,26 @@ function fixture() {
   mkdirSync(workspace);
   let now = Date.parse('2026-01-01T00:00:00Z');
   const store = new Store(workspace, join(root, 'state'), { now: () => now });
-  const policy = new StorageGovernance(store, { emergencyBytes: 4096, minFreeBytes: 0 });
+  let monotonic = 0;
+  const policy = new StorageGovernance(
+    store,
+    { emergencyBytes: 4096, minFreeBytes: 0 },
+    () => performance.now() + monotonic,
+  );
   return {
     root,
     store,
     policy,
+    /** Lets a minute pass and waits for the walk that the next status() starts (SPEC-0052). */
+    async walk() {
+      monotonic += 60_001;
+      try {
+        policy.status();
+      } catch {
+        // A refusal still starts the walk.
+      }
+      await policy.walked();
+    },
     advance: (days: number) => {
       now += days * DAY;
     },

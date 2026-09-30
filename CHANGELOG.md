@@ -2,6 +2,18 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.27] - 2026-09-30
+
+The storage check no longer walks the state directory or reads every task on each call (SPEC-0052).
+
+### Fixed
+
+- Each task ran the storage check four times, and each check walked the whole state directory synchronously and parsed every task. With 50,000 retained result files, a task blocked the event loop for about half a second and dispatch fell to 1.3 per second; it now stays at about 18 per second, with admission's 95th percentile at 3 ms. The check keeps a total of the files the engine writes and measures the directory again in the background, at most a minute apart and after each collection; active tasks are counted through an index. Files that something else puts under the state directory, such as the Codex CLI's helper links, and an untrusted symbolic link, now count after the next measurement instead of at the next check.
+
+### Added
+
+- `scripts/capacity-benchmark.ts --artifacts N,... --readers N`: retained result files, a different result for each dispatch, readers while tasks run, each read method's 95th percentile and the event loop's longest delay.
+
 ## [0.1.26] - 2026-09-30
 
 A compatibility gate: the public surface checked against the previous release, a rollback to it tested in both directions, and the Python SDK and the host tested across releases (SPEC-0051).
