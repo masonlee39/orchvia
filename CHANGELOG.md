@@ -2,6 +2,20 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.30] - 2026-10-01
+
+Steering a Claude member (SPEC-0056), and a turn's end that no longer blocks the event loop (SPEC-0057).
+
+### Added
+
+- `sessions.steer` reaches a Claude member. The adapter gives the line to Claude Code while a tool call of the turn runs, so that it joins the turn with that call's result, and holds it for the next tool call otherwise. A steer the turn did not take, because the model wrote its answer without another tool call, is reported: its message becomes `expired`, with the event `session.steer_undelivered`.
+- `RuntimeInput.reportSteerOutcome`, for a runtime that accepts a steer before it knows whether its turn takes it.
+- `bench/PREREGISTRATION.md`: the first paid benchmark run's hypotheses, thresholds and limits, fixed before it runs.
+
+### Changed
+
+- A turn's three artifact files, its terminal evidence, its result and its lease's release evidence, are written with asynchronous file calls before the transaction that registers them, instead of synchronously inside it. With the fake runtime the event loop's 95th percentile delay fell from 62.5 ms to 5.7 ms. What is written, in which order and with which syncs is unchanged. A turn settles once its files are on disk, some milliseconds after its runtime's last event; the time it waits for them counts against no deadline, and a close waits for it.
+
 ## [0.1.29] - 2026-10-01
 
 Paths in another case than the one on disk (SPEC-0054), and a scheduler that wakes after every mutation (SPEC-0055).

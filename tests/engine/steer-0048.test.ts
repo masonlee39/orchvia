@@ -33,6 +33,7 @@ async function setup(t: any, answer?: Steer) {
   await mkdir(join(dir, 'workspace'));
   const fake = createFakeAdapter();
   const prompts: string[] = [];
+  const inputs: RuntimeInput[] = [];
   const steered: { text: string; id: string; dispatchId: string }[] = [];
   let release!: () => void;
   const hold = () => new Promise<void>((resolve) => (release = resolve));
@@ -42,6 +43,7 @@ async function setup(t: any, answer?: Steer) {
     capabilities: () => ({ ...fake.capabilities(), ...(answer ? { steer: true } : {}) }),
     async *execute(input: RuntimeInput) {
       prompts.push(input.prompt);
+      inputs.push(input);
       yield { type: 'accepted', providerSessionId: `fake-${input.sessionId}` };
       await held;
       held = hold();
@@ -86,6 +88,7 @@ async function setup(t: any, answer?: Steer) {
       return engine;
     },
     prompts,
+    inputs,
     steered,
     release: () => release(),
     async restart() {
@@ -402,4 +405,50 @@ test('AC-0048-S02 a turn that waits for a runtime approval can be steered, and t
     status: string;
   };
   assert.equal(approval.status, 'pending', "the approval is still the person's to give");
+});
+
+// SPEC-0056 S04: a runtime that accepts a steer before it knows whether the turn takes it, as
+// Claude does, reports the outcome later.
+test('AC-0056-S04 a steer that did not reach its turn expires, with one event', async (t) => {
+  const f = await setup(t, async () => ({ status: 'accepted' }));
+  const { task, session } = await f.running();
+  const report = (steerId: string, delivered: boolean) =>
+    f.inputs.at(-1)!.reportSteerOutcome!({ steerId, delivered });
+  assert.equal(typeof f.inputs.at(-1)!.reportSteerOutcome, 'function');
+  const first = await f.settled((await f.steer(f.target(session), 'kept', 'kept')).id);
+  assert.equal(first.status, 'completed');
+  const kept = f.steered[0]!.id;
+  report(kept, true);
+  assert.equal((await f.message(kept)).status, 'completed');
+  assert.deepEqual(await f.events('session.steer_undelivered'), []);
+
+  await f.settled((await f.steer(f.target(session), 'lost', 'lost')).id);
+  const lost = f.steered[1]!.id;
+  report(lost, false);
+  report(lost, false);
+  assert.doesNotThrow(() => report('no-such-steer', false));
+  assert.equal((await f.message(lost)).status, 'expired');
+  const events = await f.events('session.steer_undelivered');
+  assert.equal(events.length, 1);
+  assert.equal(events[0]!.taskId, task.id);
+  assert.equal(events[0]!.sessionId, session.id);
+  assert.deepEqual(events[0]!.data, {
+    dispatchId: session.activeDispatchId,
+    taskId: task.id,
+    messageId: lost,
+  });
+});
+
+test('AC-0056-S04 an outcome that arrives before the steer is recorded applies once it is', async (t) => {
+  let report!: (steerId: string) => void;
+  const f = await setup(t, async (_text, id) => {
+    report(id);
+    return { status: 'accepted' };
+  });
+  const { session } = await f.running();
+  report = (steerId) => f.inputs.at(-1)!.reportSteerOutcome!({ steerId, delivered: false });
+  const op = await f.settled((await f.steer(f.target(session), 'early', 'early')).id);
+  assert.equal(op.status, 'completed', 'the steer itself was accepted');
+  assert.equal((await f.message(f.steered[0]!.id)).status, 'expired');
+  assert.equal((await f.events('session.steer_undelivered')).length, 1);
 });

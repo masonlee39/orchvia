@@ -39,7 +39,10 @@ class StoreNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(rejected.exception.retry_identity, identity)
                 self.assertEqual((await first.retry(identity, {'spec': spec})).id, receipt.id)
                 await receipt.cancel(idempotency_key='cancel')
-                await asyncio.sleep(0.02)
+                # The cancelled turn ends once its files are written (SPEC-0057); wait for its lease.
+                async with asyncio.timeout(5):
+                    while (await first.scheduler.get()).execution_occupied:
+                        await asyncio.sleep(0.005)
                 original_store = first.info.store_id
                 switched = await first.stores.rollover(idempotency_key='roll')
                 self.assertNotEqual(first.info.store_id, original_store)

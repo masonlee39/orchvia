@@ -176,6 +176,14 @@ interface Flight {
   deadlineChecks: (() => void)[];
   cancelAcceptance?: () => void;
   budget: ExecutionBudget;
+  /** SPEC-0057 W03: the evidence reported so far, applied in order. */
+  evidence?: Promise<void>;
+  /** Set once the terminal handling has waited for `evidence`: later evidence applies at once. */
+  evidenceSettled?: true;
+  /** True while the terminal handling only waits for its files; a close does not time it out. */
+  writingFiles?: boolean;
+  /** The time spent so, which no deadline of the flight counts (SPEC-0057 invariant 6). */
+  fileWaitMs?: number;
   /** SPEC-0053 E02: this flight's progress limits, in memory only (invariant 3). */
   progress?: {
     count: number;
@@ -531,10 +539,13 @@ class LocalEngine implements Engine {
     const end = this.clock.monotonicNow() + duration;
     let stopped = false;
     let cancel: () => void = () => {};
+    // SPEC-0057 invariant 6: the time a turn's end spends writing its files does not count, and no
+    // deadline expires during it. Those writes used to block the event loop, where no timer fires.
+    const left = () => end + (flight.fileWaitMs ?? 0) - this.clock.monotonicNow();
     const check = () => {
-      if (stopped || this.closed || !this.live(flight)) return;
+      if (stopped || this.closed || !this.live(flight) || flight.writingFiles) return;
       if (operationId && this.store.operation(operationId).status !== 'persisted') return;
-      const remaining = end - this.clock.monotonicNow();
+      const remaining = left();
       if (remaining > 0) return;
       try {
         this.expire(flight, reason);
@@ -545,8 +556,9 @@ class LocalEngine implements Engine {
     };
     const tick = () => {
       check();
-      const remaining = end - this.clock.monotonicNow();
-      if (!stopped && !this.closed && remaining > 0) cancel = this.clock.setTimer(tick, remaining);
+      const remaining = left();
+      if (!stopped && !this.closed && (remaining > 0 || flight.writingFiles))
+        cancel = this.clock.setTimer(tick, Math.max(remaining, 10));
     };
     cancel = this.clock.setTimer(tick, duration);
     const stop = () => {
@@ -1753,27 +1765,68 @@ class LocalEngine implements Engine {
         (t.type === 'error' && t.outcome === 'failed'))
     );
   }
+  /** Runs a wait for files at a turn's end: not timed out by a close, nor counted by a deadline. */
+  private async whileWriting(flight: Flight, work: () => Promise<void>): Promise<void> {
+    const started = this.clock.monotonicNow();
+    flight.writingFiles = true;
+    try {
+      await work();
+    } finally {
+      flight.writingFiles = false;
+      flight.fileWaitMs = (flight.fileWaitMs ?? 0) + (this.clock.monotonicNow() - started);
+    }
+  }
+  /** The release evidence of a dispatch whose runtime stopped; also predicted ahead (SPEC-0057). */
+  private releaseEvidenceText(d: Dispatch, evidenceRef: string, occurredAt: string): string {
+    return JSON.stringify({
+      instanceId: this.instanceId,
+      dispatchId: d.id,
+      taskId: d.taskId,
+      sessionId: d.sessionId,
+      generation: d.generation,
+      provider: d.provider,
+      providerSessionId: d.providerSessionId,
+      providerTurnId: d.providerTurnId,
+      terminalEvidenceRef: d.terminalCertificateRef ?? null,
+      preSubmissionEvidenceRef: d.preSubmissionEvidenceRef ?? null,
+      state: d.executionState ?? null,
+      latestObservationRef: evidenceRef,
+      occurredAt,
+    });
+  }
+  /**
+   * SPEC-0057 W02: writes the files a turn's end registers, its result and the evidence of its
+   * lease's release, before the transaction that registers them and without blocking the event
+   * loop. The release evidence is predicted from the dispatch as it is now and the time `at` that
+   * the transaction will write; a prediction that misses, or a write that fails, leaves the
+   * transaction to write as it did before.
+   */
+  private async prepareTerminalFiles(
+    flight: Flight,
+    terminal: RuntimeEvent,
+    at: number,
+  ): Promise<void> {
+    try {
+      const texts: string[] = [];
+      if (
+        terminal.type === 'result' &&
+        typeof terminal.text === 'string' &&
+        terminal.text.length <= 524288
+      )
+        texts.push(terminal.text);
+      const d = this.store.get<Dispatch>('dispatches', flight.dispatchId);
+      if (d?.executionEvidenceRef && d.executionLease.status !== 'released')
+        texts.push(this.releaseEvidenceText(d, d.executionEvidenceRef, new Date(at).toISOString()));
+      await Promise.all(texts.map((text) => this.store.prepareArtifact(text).catch(() => {})));
+    } catch {
+      // Preparing is an optimization: the transaction writes what was not prepared.
+    }
+  }
   private release(d: Dispatch, evidenceRef: string, reason: string): void {
     if (d.executionLease.status === 'released') return;
     if (reason === 'runtime_stop_and_cleanup' && d.verificationPending) return;
     if (reason === 'runtime_stop_and_cleanup')
-      evidenceRef = this.store.artifact(
-        JSON.stringify({
-          instanceId: this.instanceId,
-          dispatchId: d.id,
-          taskId: d.taskId,
-          sessionId: d.sessionId,
-          generation: d.generation,
-          provider: d.provider,
-          providerSessionId: d.providerSessionId,
-          providerTurnId: d.providerTurnId,
-          terminalEvidenceRef: d.terminalCertificateRef ?? null,
-          preSubmissionEvidenceRef: d.preSubmissionEvidenceRef ?? null,
-          state: d.executionState ?? null,
-          latestObservationRef: evidenceRef,
-          occurredAt: this.time(),
-        }),
-      );
+      evidenceRef = this.store.artifact(this.releaseEvidenceText(d, evidenceRef, this.time()));
     d.executionLease = {
       ...d.executionLease,
       status: 'released',
@@ -1866,7 +1919,31 @@ class LocalEngine implements Engine {
       // Progress may be lost; it never changes the turn (SPEC-0053 A02).
     }
   }
+  /**
+   * SPEC-0057 W03: a dispatch's evidence takes effect in the order it was reported, each after its
+   * artifact is on disk, written off the event loop. The turn's terminal handling waits for what
+   * was reported before it (invariant 1).
+   */
   private reportEvidence(flight: Flight, provider: string, evidence: ExecutionEvidence): void {
+    if (this.closed) return;
+    // Only while the turn runs and its terminal handling has not begun: that handling waits for the
+    // queue. Evidence that arrives later, or for a flight that ended, takes effect at once, as it
+    // always did, so that a close, a reconciliation or a rollover right after it sees it.
+    if (flight.evidenceSettled || this.flights.get(flight.sessionId) !== flight)
+      return this.applyEvidence(flight, provider, evidence);
+    let text: string | undefined;
+    try {
+      text = JSON.stringify({ instanceId: this.instanceId, taskId: flight.taskId, evidence });
+    } catch {
+      // Evidence that cannot be written is rejected when it is applied.
+    }
+    flight.evidence = (flight.evidence ?? Promise.resolve()).then(async () => {
+      if (text !== undefined && !this.closed)
+        await this.store.prepareArtifact(text).catch(() => {});
+      this.applyEvidence(flight, provider, evidence);
+    });
+  }
+  private applyEvidence(flight: Flight, provider: string, evidence: ExecutionEvidence): void {
     if (this.closed) return;
     try {
       this.store.transaction(() => {
@@ -3962,6 +4039,10 @@ class LocalEngine implements Engine {
             { dispatchId, taskId: task.id, messageId, text },
             { taskId: task.id, sessionId: session.id, operationId },
           );
+          // SPEC-0056 invariant 3: the runtime said, before this answer was recorded, that the
+          // steer did not reach its turn.
+          if (this.undeliveredSteers.delete(messageId))
+            this.steerUndelivered(message, dispatchId, session.id);
         } else if (answer) {
           message.status = 'failed';
           op.status = 'failed';
@@ -3988,6 +4069,38 @@ class LocalEngine implements Engine {
       });
     } catch {
       // A host that closed meanwhile leaves the steer persisted; its next start records it unknown.
+    }
+  }
+  /** Steers a runtime reported undelivered before their own answer was recorded (SPEC-0056). */
+  private undeliveredSteers = new Set<string>();
+  /** Inside a transaction: the steer did not reach its turn (SPEC-0056 S04). */
+  private steerUndelivered(message: MessageSnapshot, dispatchId: string, sessionId: string): void {
+    message.status = 'expired';
+    this.store.put('messages', message.id, message);
+    this.store.event(
+      'session.steer_undelivered',
+      { dispatchId, taskId: message.taskId, messageId: message.id },
+      { taskId: message.taskId, sessionId },
+    );
+  }
+  /**
+   * SPEC-0056 S04: a runtime that accepts a steer before it knows whether the turn takes it says so
+   * later. A steer that was not delivered expires, with its event, once; a delivered one changes
+   * nothing. It never throws to the adapter.
+   */
+  private steerOutcome(flight: Flight, outcome: { steerId: string; delivered: boolean }): void {
+    try {
+      if (this.closed || !outcome || outcome.delivered !== false) return;
+      if (typeof outcome.steerId !== 'string') return;
+      const message = this.store.get<MessageSnapshot>('messages', outcome.steerId);
+      if (!message || message.kind !== 'steer' || message.dispatchId !== flight.dispatchId) return;
+      if (message.status === 'dispatching') this.undeliveredSteers.add(message.id);
+      else if (message.status === 'completed')
+        this.store.transaction(() =>
+          this.steerUndelivered(message, flight.dispatchId, flight.sessionId),
+        );
+    } catch {
+      // The outcome is an observation; it never changes the turn.
     }
   }
   private control(p: Record<string, unknown>, context: CallContext): OperationSnapshot {
@@ -5063,6 +5176,7 @@ class LocalEngine implements Engine {
         reportUsage: (event: RuntimeUsageEvent) =>
           this.recordUsage(flight, adapter.provider, event),
         reportProgress: (progress: RuntimeProgress) => this.reportProgress(flight, progress),
+        reportSteerOutcome: (outcome) => this.steerOutcome(flight, outcome),
         ...(this.config.runtimeApprovals?.enabled
           ? {
               requestPermission: (request: RuntimePermissionRequest) =>
@@ -5134,6 +5248,15 @@ class LocalEngine implements Engine {
         outcome: 'unknown',
       };
     }
+    // SPEC-0057 invariant 1: the evidence reported before the terminal has taken effect before the
+    // stop proof is read.
+    await this.whileWriting(flight, async () => {
+      for (let waited: Promise<void> | undefined; waited !== flight.evidence; ) {
+        waited = flight.evidence;
+        await waited;
+      }
+    });
+    flight.evidenceSettled = true;
     let verification: VerificationEvidence[] | undefined;
     const activeApproval = this.task(flight.taskId).approvalId;
     if (
@@ -5169,6 +5292,10 @@ class LocalEngine implements Engine {
         outcome: 'unknown',
         message: 'Verification cleanup is unconfirmed',
       };
+    // SPEC-0057 W02: the files of the turn's end, written off the event loop. Invariant 2: the
+    // deadlines and the flight are checked again after the wait, as after verification.
+    const settledAt = this.clock.wallNow();
+    await this.whileWriting(flight, () => this.prepareTerminalFiles(flight, terminal!, settledAt));
     try {
       for (const check of flight.deadlineChecks) check();
       if (!this.live(flight)) return;
@@ -5359,7 +5486,7 @@ class LocalEngine implements Engine {
           );
         }
         this.config.storageFault?.('terminal.before_commit');
-      });
+      }, settledAt);
     } catch (error) {
       // Preserve uncertainty if result persistence or native identity checks fail.
       this.store.transaction(() => {
@@ -5488,7 +5615,13 @@ class LocalEngine implements Engine {
       this.beginAdapterClose();
     }
     while (this.flights.size) {
-      if (performance.now() >= deadline) throw this.shutdownIncomplete();
+      // A flight whose runtime has ended and that only writes its files is finishing, however
+      // slow the disk: before SPEC-0057 those writes blocked this loop and could not time out.
+      if (
+        performance.now() >= deadline &&
+        [...this.flights.values()].some((flight) => !flight.writingFiles)
+      )
+        throw this.shutdownIncomplete();
       await sleep(Math.min(10, Math.max(1, deadline - performance.now())));
     }
     if (this.closed) return { status: 'closed', operationId: this.shutdownId };
@@ -5511,8 +5644,10 @@ class LocalEngine implements Engine {
     } finally {
       if (timer) clearTimeout(timer);
     }
-    // A reserve that storage.configure or a store switch is writing finishes first (W02).
+    // A reserve that storage.configure or a store switch is writing finishes first (W02), and so
+    // does an artifact file that a turn's end is writing (SPEC-0057).
     await this.storage.settled();
+    await this.store.writesSettled();
     if (!this.closed) {
       const op = this.store.operation(this.shutdownId);
       op.status = 'completed';
@@ -5555,6 +5690,7 @@ class LocalEngine implements Engine {
     this.handoffTimer?.();
     if (this.storageTimer) clearInterval(this.storageTimer);
     await this.storage.settled();
+    await this.store.writesSettled();
     this.store.close();
     this.controlPlane?.close();
     this.closed = true;

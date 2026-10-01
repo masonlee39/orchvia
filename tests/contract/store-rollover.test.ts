@@ -5,7 +5,18 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createEngine } from '../../packages/engine/src/index.ts';
 import { createFakeAdapter } from '../../packages/engine/src/fake.ts';
-import { Store } from '../../packages/engine/src/store.ts';
+import { Store, artifactWritesSettled } from '../../packages/engine/src/store.ts';
+
+/** Waits until the cancelled turn has ended and released its lease, files included (SPEC-0057). */
+async function idle(engine: { call(method: string, params?: object): Promise<unknown> }) {
+  for (let i = 0; i < 400; i++) {
+    await artifactWritesSettled();
+    const scheduler = (await engine.call('scheduler.get', {})) as { executionOccupied: number };
+    if (scheduler.executionOccupied === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail('the cancelled turn did not end');
+}
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'orch-rollover-')));
   for (const name of ['work', 'state', 'control', 'stores', 'archives'])
@@ -37,7 +48,7 @@ test('B10/B13/B14/B17 settled rollover preserves archive receipts and fences old
   try {
     const task = (await call('tasks.create', { spec, idempotencyKey: 'K' })) as any;
     await call('tasks.cancel', { taskId: task.id, idempotencyKey: 'cancel' });
-    await new Promise((resolve) => setTimeout(resolve, 15));
+    await idle(engine);
     const rollover = (await call('stores.rollover', { idempotencyKey: 'switch' })) as any;
     assert.equal(rollover.status, 'completed');
     assert.notEqual(engine.storeId, original);
@@ -155,7 +166,7 @@ test('B07/B18 old backup import gets fresh identity and cannot recreate an old r
       { expectedStoreId: firstStore, idempotencyKey: 'cancel', taskId: task.id },
       { owner: true },
     );
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await idle(engine);
     oldManifest = readFileSync(join(f.config.stores.controlDir, 'manifest.json'), 'utf8');
     await engine.call(
       'stores.rollover',

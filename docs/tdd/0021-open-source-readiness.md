@@ -536,6 +536,10 @@ Pull request #79 carried SPEC-0052 and the version 0.1.27. A local Claude Code s
 
 Pull request #80 carried SPEC-0053 and the version 0.1.28. A local Claude Code session merged it and pushed the tag `v0.1.28` on the merge commit `3627fa7`, on the owner's authorization ([36734580543](https://github.com/masonlee39/orchvia/actions/runs/36734580543)). The owner approved the deployments, and every job passed at the first attempt. npm lists 0.1.28 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.28 with its wheel and sdist.
 
+## The twenty-eighth release, 0.1.29
+
+Pull request #81 carried SPEC-0054 and SPEC-0055 and the version 0.1.29. A local Claude Code session merged it and pushed the tag `v0.1.29` on the merge commit `18acdb9`, on the owner's authorization ([36794840310](https://github.com/masonlee39/orchvia/actions/runs/36794840310)). The owner approved the deployments, and every job passed at the first attempt. npm lists 0.1.29 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.29 with its wheel and sdist.
+
 ## P10: no document names the latest release (D-rel-3)
 
 On 2026-09-27 the owner chose D-rel-3: a release is recorded by the next release pull request, and no document names the latest release.

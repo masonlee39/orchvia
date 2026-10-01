@@ -56,7 +56,7 @@ This section is the only source for running the benchmark. A real run calls a mo
    - Failure: `"stopped":true` means the budget refused a request; its row says `not_run` with `reason: "budget"`, and the report keeps what ran.
    - Every finished request is also in `bench/results/<name>-pilot.json.rows.jsonl` the moment it finishes, so a run that stops half-way keeps its rows. A request that failed is a row with `status: "error"` and its message, and an unknown cost is `null`, never 0.
 
-4. The full run repeats step 3 with `--reps 3`, a budget the owner sets from the pilot's cost, and a `-full.json` name.
+4. The full run repeats step 3 with `--reps 3`, a budget the owner sets from the pilot's cost, and a `-full.json` name. [PREREGISTRATION.md](PREREGISTRATION.md) fixes the first paid run's hypotheses, thresholds and limits; read it before either run.
 
 `--fake` runs every arm offline with the reference solutions ([solutions](solutions/)) in place of the agent's edits, and `--fake-skip X2` leaves one request's solution out, which its checks must then fail. `npm test` runs both (`tests/contract/bench.test.ts`). `--gateway` answers every model request from a loopback gateway ([gateway.mjs](gateway.mjs)) that reads and writes the reference solutions through Claude Code's own tools; CI runs it on Linux and macOS with `--require-pass`, which exits with 1 unless every arm passes every request.
 
