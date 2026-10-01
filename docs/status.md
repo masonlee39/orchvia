@@ -100,6 +100,7 @@ Each specification has a matching TDD record of observed failures before the cha
 | [SPEC-0053](specs/0053-dispatch-progress.md) | Progress of a running turn, its tool starts, text and retries, as `dispatch.progress` events that the Claude and Codex adapters report (0.1.28) |
 | [SPEC-0054](specs/0054-path-case.md) | Paths in another case than the one on disk are compared as the volume names them, without rewriting what a store recorded (0.1.29) |
 | [SPEC-0055](specs/0055-mutations-wake-the-scheduler.md) | Every mutation wakes the scheduler, so a cancelled task that did not run frees the task queued behind it and fails its dependants at once (0.1.29) |
+| [SPEC-0056](specs/0056-claude-steer.md) | Steering a Claude member: a line from the user joins the running turn between tool calls, and a steer the turn did not take is reported (0.1.30) |
 
 ## Claude and Codex baselines
 

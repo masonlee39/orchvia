@@ -122,6 +122,10 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Real Claude binary with a scripted loopback gateway (no paid models)
         run: node scripts/native-gateway-smoke.mjs claude dist/verification/native-claude.json
+      # SPEC-0056 N01: a steer joins a turn during a tool call, and starts no turn of its own.
+      - name: Steering a Claude member with the real Claude binary and a scripted loopback gateway (no paid models)
+        if: ${{ !cancelled() }}
+        run: node scripts/native-claude-steer-smoke.mjs dist/verification/native-claude-steer.json
       - name: Usage outside the main loop with the real Claude binary and a scripted loopback gateway (no paid models)
         if: ${{ !cancelled() }}
         run: node scripts/native-usage-smoke.mjs dist/verification/native-usage.json

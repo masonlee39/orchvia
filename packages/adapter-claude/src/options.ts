@@ -65,13 +65,16 @@ export interface ClaudeUserMessage {
   parent_tool_use_id: null;
   session_id: string;
   uuid: UUID;
+  /** A steer waits for the next tool round of the running turn (SPEC-0056 S02). */
+  priority?: 'now' | 'next' | 'later';
 }
 export interface ClaudeQueryRequest<Extra extends object = object> {
   prompt: AsyncIterable<ClaudeUserMessage>;
   options: ClaudeQueryBaseOptions & Extra;
 }
 export type ClaudeQuery = AsyncIterable<unknown> & {
-  interrupt?(): Promise<unknown>;
+  /** `cancelQueued` also cancels the user messages still queued (SPEC-0056 S03). */
+  interrupt?(options?: { cancelQueued?: boolean }): Promise<unknown>;
   close?(): void | Promise<void>;
 };
 export type ClaudeQueryFactory<Extra extends object = object> = (

@@ -558,6 +558,21 @@ export function createClaudeAdapter<Extra extends object = object>(
     30_000,
   );
   const active = new Set<ActiveQuery>();
+  // SPEC-0056: each dispatch's running turn, for steers.
+  const steering = new Map<
+    string,
+    {
+      ended: boolean;
+      compact: boolean;
+      /** Main-loop tool calls that started and have not returned. */
+      outstanding: Set<string>;
+      /** Accepted, waiting for a tool call to start. */
+      held: ClaudeUserMessage[];
+      /** Given to Claude Code, by uuid. */
+      given: Set<string>;
+      give(message: ClaudeUserMessage): void;
+    }
+  >();
   let closed = false;
 
   function confirmCleanup(handle: ActiveQuery): void {
@@ -721,6 +736,8 @@ export function createClaudeAdapter<Extra extends object = object>(
       provider: providerName,
       resume: true,
       interrupt: true,
+      // SPEC-0056 S01: a line from the user joins the running turn at its next tool round.
+      steer: true,
       permissionProfiles: [profile],
       fork: true,
       // SPEC-0013 M05: a native fork resends the source history to the requested model.
@@ -739,6 +756,37 @@ export function createClaudeAdapter<Extra extends object = object>(
         terminalCoversExecution: coversExecution || observeExecutionStop !== undefined,
       },
     }),
+    async steer(target, text, steerId) {
+      const turn = steering.get(target.dispatchId);
+      if (!turn || turn.ended)
+        return {
+          status: 'rejected',
+          turnEnded: true,
+          message: 'no running turn for this dispatch',
+        };
+      if (turn.compact)
+        return {
+          status: 'rejected',
+          turnEnded: false,
+          notSteerable: true,
+          message: 'a compaction cannot be steered',
+        };
+      const message: ClaudeUserMessage = {
+        type: 'user',
+        message: { role: 'user', content: text },
+        parent_tool_use_id: null,
+        session_id: '',
+        uuid: steerId as ClaudeUserMessage['uuid'],
+        priority: 'next',
+      };
+      // SPEC-0056 S02, invariant 2: Claude Code folds a queued message into the turn only between
+      // tool rounds; given at any other time it would start a turn of its own.
+      if (turn.outstanding.size) {
+        turn.given.add(steerId);
+        turn.give(message);
+      } else turn.held.push(message);
+      return { status: 'accepted' };
+    },
     async inspect(input) {
       if (config.query && !config.inspectSession)
         return {
@@ -869,6 +917,27 @@ export function createClaudeAdapter<Extra extends object = object>(
       const inputClosed = new Promise<void>((resolve) => {
         closeInput = resolve;
       });
+      // SPEC-0056: steers join the open prompt stream after the dispatch's own prompt.
+      const queued: ClaudeUserMessage[] = [];
+      let wakePrompt: (() => void) | undefined;
+      let promptClosed = false;
+      void inputClosed.then(() => {
+        promptClosed = true;
+        wakePrompt?.();
+      });
+      const turn = {
+        ended: false,
+        compact: input.nativeAction === 'compact',
+        outstanding: new Set<string>(),
+        held: [] as ClaudeUserMessage[],
+        given: new Set<string>(),
+        give(message: ClaudeUserMessage) {
+          queued.push({ ...message, session_id: sessionId ?? '' });
+          wakePrompt?.();
+        },
+      };
+      steering.set(input.dispatchId, turn);
+      let steersSettled = false;
       async function* prompt(): AsyncIterable<ClaudeUserMessage> {
         yield {
           type: 'user',
@@ -880,7 +949,11 @@ export function createClaudeAdapter<Extra extends object = object>(
           session_id: input.providerSessionId ?? '',
           uuid: randomUUID(),
         };
-        await inputClosed;
+        for (;;) {
+          while (queued.length) yield queued.shift()!;
+          if (promptClosed) return;
+          await new Promise<void>((resolve) => (wakePrompt = resolve));
+        }
       }
       const request: ClaudeQueryRequest<Extra> = {
         prompt: prompt(),
@@ -1283,7 +1356,80 @@ export function createClaudeAdapter<Extra extends object = object>(
               };
               if (typeof message.uuid === 'string') nativeCheckpoint = message.uuid;
             }
+            // SPEC-0056 S02: which tool calls of the main loop run now; a held steer goes with the
+            // first one that starts.
+            if (observedId === sessionId && !message.parent_tool_use_id) {
+              const blocks = (message.message as { content?: unknown } | undefined)?.content;
+              for (const block of Array.isArray(blocks) ? blocks : []) {
+                const {
+                  type,
+                  id,
+                  tool_use_id: answered,
+                } = (block ?? {}) as Record<string, unknown>;
+                if (message.type === 'assistant' && type === 'tool_use' && typeof id === 'string')
+                  turn.outstanding.add(id);
+                if (
+                  message.type === 'user' &&
+                  type === 'tool_result' &&
+                  typeof answered === 'string'
+                )
+                  turn.outstanding.delete(answered);
+              }
+              if (turn.outstanding.size)
+                for (const held of turn.held.splice(0)) {
+                  turn.given.add(held.uuid);
+                  turn.give(held);
+                }
+            }
             if (message.type !== 'result') continue;
+            // SPEC-0056 S03: no steer is accepted from here on, and each one's outcome is known
+            // before the terminal is reported.
+            turn.ended = true;
+            if (observedId === sessionId && (turn.given.size || turn.held.length)) {
+              const consumed = new Set(
+                Array.isArray(message.user_message_uuids) ? message.user_message_uuids : [],
+              );
+              const lost = [...turn.given].filter((id) => !consumed.has(id));
+              if (lost.length) {
+                // Invariant 1: a steer that Claude Code holds would start a turn outside this
+                // dispatch. Cancel it, and let a turn that had started end, before the terminal.
+                const bounded = <T>(work: Promise<T>): Promise<T | undefined> =>
+                  Promise.race([
+                    work.catch(() => undefined),
+                    new Promise<undefined>((resolve) => {
+                      const timer = setTimeout(() => resolve(undefined), cleanupTimeoutMs);
+                      timer.unref?.();
+                    }),
+                  ]);
+                const receipt = record(
+                  await bounded(
+                    Promise.resolve().then(() =>
+                      handle?.query?.interrupt?.({ cancelQueued: true }),
+                    ),
+                  ),
+                );
+                const cancelled = new Set(
+                  Array.isArray(receipt?.cancelled) ? receipt.cancelled : [],
+                );
+                if (!lost.every((id) => cancelled.has(id))) {
+                  const deadline = performance.now() + cleanupTimeoutMs;
+                  while (performance.now() < deadline) {
+                    const next = await bounded(Promise.resolve().then(() => iterator.next()));
+                    if (!next || next.done) break;
+                    const later = record(next.value);
+                    if (later?.type !== 'result') continue;
+                    // The session's totals are cumulative: the later result holds them.
+                    if (later.modelUsage !== undefined) message.modelUsage = later.modelUsage;
+                    break;
+                  }
+                }
+              }
+              steersSettled = true;
+              for (const id of turn.given)
+                input.reportSteerOutcome?.({ steerId: id, delivered: consumed.has(id) });
+              for (const held of turn.held.splice(0))
+                input.reportSteerOutcome?.({ steerId: held.uuid, delivered: false });
+            }
             terminal = true;
             if (!sessionId || !observedId || observedId !== sessionId) {
               pending = [
@@ -1357,6 +1503,15 @@ export function createClaudeAdapter<Extra extends object = object>(
               ];
       } finally {
         toolsRevoked = true;
+        // A turn that ended without a result delivers nothing more (SPEC-0056 S03).
+        turn.ended = true;
+        if (steering.get(input.dispatchId) === turn) steering.delete(input.dispatchId);
+        // Steers that no result settled were not delivered: the turn ended another way.
+        if (!steersSettled) {
+          steersSettled = true;
+          for (const id of [...turn.given, ...turn.held.splice(0).map((held) => held.uuid)])
+            input.reportSteerOutcome?.({ steerId: id, delivered: false });
+        }
         closeInput();
         input.signal.removeEventListener('abort', onAbort);
         if (handle) {

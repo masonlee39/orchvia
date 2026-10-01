@@ -797,6 +797,11 @@ export interface RuntimeInput {
   reportExecutionEvidence?: (evidence: ExecutionEvidence) => void;
   /** Persists received usage even after the main iterator/deadline; never changes execution state. */
   reportUsage?: (event: RuntimeUsageEvent) => void;
+  /**
+   * Whether a steer the runtime accepted reached its turn, once, before the turn's terminal event
+   * (SPEC-0056 S04). A runtime whose acceptance is the delivery, as Codex's, never calls it.
+   */
+  reportSteerOutcome?: (outcome: { steerId: string; delivered: boolean }) => void;
   /** Progress for the host to show; never throws, and changes nothing else (SPEC-0053 A02). */
   reportProgress?: (progress: RuntimeProgress) => void;
   /** Canonical owner-registered write scope; adapters must narrow their sandbox to it. */

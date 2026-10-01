@@ -3962,6 +3962,10 @@ class LocalEngine implements Engine {
             { dispatchId, taskId: task.id, messageId, text },
             { taskId: task.id, sessionId: session.id, operationId },
           );
+          // SPEC-0056 invariant 3: the runtime said, before this answer was recorded, that the
+          // steer did not reach its turn.
+          if (this.undeliveredSteers.delete(messageId))
+            this.steerUndelivered(message, dispatchId, session.id);
         } else if (answer) {
           message.status = 'failed';
           op.status = 'failed';
@@ -3988,6 +3992,38 @@ class LocalEngine implements Engine {
       });
     } catch {
       // A host that closed meanwhile leaves the steer persisted; its next start records it unknown.
+    }
+  }
+  /** Steers a runtime reported undelivered before their own answer was recorded (SPEC-0056). */
+  private undeliveredSteers = new Set<string>();
+  /** Inside a transaction: the steer did not reach its turn (SPEC-0056 S04). */
+  private steerUndelivered(message: MessageSnapshot, dispatchId: string, sessionId: string): void {
+    message.status = 'expired';
+    this.store.put('messages', message.id, message);
+    this.store.event(
+      'session.steer_undelivered',
+      { dispatchId, taskId: message.taskId, messageId: message.id },
+      { taskId: message.taskId, sessionId },
+    );
+  }
+  /**
+   * SPEC-0056 S04: a runtime that accepts a steer before it knows whether the turn takes it says so
+   * later. A steer that was not delivered expires, with its event, once; a delivered one changes
+   * nothing. It never throws to the adapter.
+   */
+  private steerOutcome(flight: Flight, outcome: { steerId: string; delivered: boolean }): void {
+    try {
+      if (this.closed || !outcome || outcome.delivered !== false) return;
+      if (typeof outcome.steerId !== 'string') return;
+      const message = this.store.get<MessageSnapshot>('messages', outcome.steerId);
+      if (!message || message.kind !== 'steer' || message.dispatchId !== flight.dispatchId) return;
+      if (message.status === 'dispatching') this.undeliveredSteers.add(message.id);
+      else if (message.status === 'completed')
+        this.store.transaction(() =>
+          this.steerUndelivered(message, flight.dispatchId, flight.sessionId),
+        );
+    } catch {
+      // The outcome is an observation; it never changes the turn.
     }
   }
   private control(p: Record<string, unknown>, context: CallContext): OperationSnapshot {
@@ -5063,6 +5099,7 @@ class LocalEngine implements Engine {
         reportUsage: (event: RuntimeUsageEvent) =>
           this.recordUsage(flight, adapter.provider, event),
         reportProgress: (progress: RuntimeProgress) => this.reportProgress(flight, progress),
+        reportSteerOutcome: (outcome) => this.steerOutcome(flight, outcome),
         ...(this.config.runtimeApprovals?.enabled
           ? {
               requestPermission: (request: RuntimePermissionRequest) =>
