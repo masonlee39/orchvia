@@ -124,7 +124,8 @@ function canonicalPath(path: string): string | null {
   const rest: string[] = [];
   for (let current = path; ; current = dirname(current)) {
     try {
-      return join(realpathSync(current), ...rest);
+      // SPEC-0054: the case on disk, as Codex names the files it changes.
+      return join(realpathSync.native(current), ...rest);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
       try {
@@ -261,10 +262,10 @@ function timeout(value: number | undefined, fallback: number): number {
 function managedHome(stateDir: string): string {
   if (!isAbsolute(stateDir)) throw new Error('Codex stateDir must be absolute');
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  const state = realpathSync(stateDir);
+  const state = realpathSync.native(stateDir);
   const home = join(state, 'runtime', 'codex');
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  const actual = realpathSync(home);
+  const actual = realpathSync.native(home);
   if (!actual.startsWith(state + sep)) throw new Error('Codex managed home escapes stateDir');
   chmodSync(home, 0o700);
   const configPath = join(actual, 'config.toml');
@@ -642,7 +643,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
       const started = performance.now();
       const child = spawn(
         config.command ?? 'codex',
-        defensiveArgs(config.args ?? ['app-server'], realpathSync(input.workspace)),
+        defensiveArgs(config.args ?? ['app-server'], realpathSync.native(input.workspace)),
         {
           cwd: input.workspace,
           env: {
@@ -909,13 +910,13 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
       try {
         if (remainingAcceptanceMs() <= 0)
           throw new Error('Codex execution budget expired before startup');
-        workspace = realpathSync(input.workspace);
+        workspace = realpathSync.native(input.workspace);
         writePaths = input.writePaths?.map((path) => workspacePath(workspace, path)) ?? [workspace];
         let settings: string[] = [];
         if (local) {
           if (!isAbsolute(input.stateDir)) throw new Error('Codex stateDir must be absolute');
           mkdirSync(input.stateDir, { recursive: true, mode: 0o700 });
-          const state = realpathSync(input.stateDir);
+          const state = realpathSync.native(input.stateDir);
           if (overlaps(local, [workspace, state]))
             throw new Error(
               coded(

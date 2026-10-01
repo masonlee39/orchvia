@@ -149,7 +149,8 @@ export function claudeReadPolicy(config: {
     (path) => {
       if (!isAbsolute(path)) invalid('readRoots');
       try {
-        const root = realpathSync(path);
+        // SPEC-0054: as the volume names it, so that another spelling compares equal.
+        const root = realpathSync.native(path);
         if (!statSync(root).isDirectory()) invalid('readRoots');
         return root;
       } catch {
@@ -266,7 +267,8 @@ export function copyClaudeOptions<Extra extends object>(
 function canonical(path: string, depth = 0): string {
   if (depth > 64) invalid('path');
   try {
-    return realpathSync(path);
+    // SPEC-0054: the case on disk, which the Claude process and the model use.
+    return realpathSync.native(path);
   } catch (error) {
     if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
     try {

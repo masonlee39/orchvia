@@ -81,7 +81,7 @@ export function connectionHome(home: unknown): string {
     invalidConfig('connection.home must be absolute');
   let real: string;
   try {
-    real = realpathSync(home);
+    real = realpathSync.native(home);
     if (!statSync(real).isDirectory()) throw new Error('not a directory');
   } catch {
     invalidConfig('connection.home must be an existing directory');
@@ -453,7 +453,7 @@ export function resolveDenyRead(paths: readonly string[], workspace: string): st
   return paths.map((path) => {
     const absolute = resolve(workspace, path);
     try {
-      return realpathSync(absolute);
+      return realpathSync.native(absolute);
     } catch {
       return absolute;
     }
@@ -472,7 +472,7 @@ export function deniedCheckPath(
     if (!isAbsolute(given)) continue;
     let path = given;
     try {
-      path = realpathSync(given);
+      path = realpathSync.native(given);
     } catch {
       /* a path that does not exist is checked as given */
     }

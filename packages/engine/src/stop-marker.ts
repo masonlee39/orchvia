@@ -1,3 +1,4 @@
+import { insidePath } from './paths.ts';
 import { execFile, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
@@ -505,7 +506,13 @@ export class StopMarkers {
     const canonical = realpathSync(workspace);
     if (this.#root !== undefined)
       for (const other of [canonical, ...(stateDir ? [realpathSync(stateDir)] : [])])
-        if (inside(this.#root, other) || inside(other, this.#root))
+        if (
+          inside(this.#root, other) ||
+          inside(other, this.#root) ||
+          // SPEC-0054: another spelling of the same place overlaps too.
+          insidePath(this.#root, other) ||
+          insidePath(other, this.#root)
+        )
           throw new Error(
             'stopMarker.directory must lie outside the workspace and the state directory',
           );

@@ -1,3 +1,4 @@
+import { insidePath, rebasePath } from './paths.ts';
 import { createHash } from 'node:crypto';
 import { lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
@@ -13,9 +14,13 @@ export function contains(parent: string, path: string): boolean {
 
 export function workspacePath(workspace: string, path: string): string {
   const canonical = realpathSync(resolve(workspace, path));
-  if (!contains(realpathSync(workspace), canonical))
+  const root = realpathSync(workspace);
+  if (contains(root, canonical)) return canonical;
+  // SPEC-0054: another spelling of a path inside the workspace, on a case-insensitive volume, is
+  // inside it; it is recorded in the workspace's own spelling.
+  if (!insidePath(root, canonical))
     fail('INVALID_WORKSPACE_SCOPE', 'Path leaves the registered workspace');
-  return canonical;
+  return rebasePath(root, canonical);
 }
 
 /** Checks that a rule's paths resolve inside the workspace now (SPEC-0017 A01). */

@@ -329,3 +329,46 @@ test('0028-B03 other tasks and a read-only view carry no blockedBy', async () =>
     await f.close();
   }
 });
+
+// SPEC-0055 C01: cancelling a task that does not run frees its session and fails its dependants at
+// once; nothing else has to wake the scheduler. The test waits without a scheduler pass of its own.
+test('AC-0055-C01 cancelling a task that does not run lets the task queued behind it run', async () => {
+  const f = await setup();
+  try {
+    const parent = await create(f.engine, 'parent');
+    const waiting = await wait(f.engine, parent.id, 'waiting_approval');
+    const child = await create(f.engine, 'child', {
+      parentTaskId: parent.id,
+      contextPlan: {
+        requestedMode: 'reuse',
+        independent: true,
+        candidateSessionId: waiting.sessionId,
+      },
+    });
+    await held(f, child.id, {
+      reason: 'session_busy',
+      sessionId: waiting.sessionId,
+      taskIds: [parent.id],
+    });
+    await f.engine.call('tasks.cancel', { taskId: parent.id, idempotencyKey: 'cancel-parent' });
+    assert.equal((await get(f.engine, parent.id)).status, 'cancelled');
+    await wait(f.engine, child.id, 'waiting_approval');
+  } finally {
+    await f.close();
+  }
+});
+
+test('AC-0055-C01 cancelling a task that does not run fails its dependants at once', async () => {
+  const f = await setup();
+  try {
+    const upstream = await create(f.engine, 'upstream');
+    await wait(f.engine, upstream.id, 'waiting_approval');
+    const downstream = await create(f.engine, 'downstream', { dependencyTaskIds: [upstream.id] });
+    await wait(f.engine, downstream.id, 'waiting_dependency');
+    await f.engine.call('tasks.cancel', { taskId: upstream.id, idempotencyKey: 'cancel-upstream' });
+    const blocked = await wait(f.engine, downstream.id, 'blocked');
+    assert.equal(blocked.reason, 'dependency_failed');
+  } finally {
+    await f.close();
+  }
+});
