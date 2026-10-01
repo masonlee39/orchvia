@@ -8,7 +8,7 @@ A start's sweep that no longer takes its whole time (SPEC-0059), and every steer
 
 ### Added
 
-- `acknowledgeStopMarkers(directory, dispatchIds, { attested: true })` retires a dispatch that is not proven stopped, once the host's user confirmed that it stopped. It is refused while the dispatch's instance runs (`instance_live`) or a process holds its marker (`holders_left`).
+- `acknowledgeStopMarkers(directory, dispatchIds, { attested: true })` retires a dispatch that is not proven stopped, once the host's user confirmed that it stopped. It is refused while the dispatch's instance runs (`instance_live`) or a process holds its marker (`holders_left`). The host that ran the dispatch retires it without a restart through `adapter.acknowledgeStopMarkers(dispatchIds, { attested: true })`, on a Claude or Codex adapter.
 - Each stray process names when it `started`, and a swept dispatch says `waited` when the sweep waited for its strays.
 - A steer whose runtime reports its outcome later, as a Claude member's, has `steerDelivery` on its message: `pending`, then `delivered`, `not_taken` or `unknown`. A delivered steer writes the event `session.steer_delivered`, and `session.steer_undelivered` carries a `reason`, `not_taken` or `unknown`.
 - A runtime's answer to a steer may say `outcomePending: true`.

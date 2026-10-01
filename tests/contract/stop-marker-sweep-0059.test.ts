@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createClaudeAdapter } from '../../packages/adapter-claude/src/index.ts';
 import * as stopMarker from '../../packages/engine/src/stop-marker.ts';
 import {
   StopMarkers,
@@ -246,3 +247,86 @@ test(
     assert.equal(existsSync(marker.path), true);
   },
 );
+
+// SPEC-0059 R03: the instance that ran a dispatch retires it without waiting for a restart.
+const context = (dispatchId: string, timeoutMs = 15_000) =>
+  ({
+    target: { dispatchId },
+    terminal: { type: 'result', text: 'done' },
+    remainingMs: () => timeoutMs,
+  }) as never;
+
+test(
+  'AC-0059-R03 a running instance retires its own dispatch once the user confirmed it',
+  { skip: !posix },
+  async (t) => {
+    const { base, root } = await roots(t);
+    const workspace = join(base, 'live');
+    await mkdir(workspace);
+    const markers = new StopMarkers({ root });
+    t.after(() => markers.endAll(15_000));
+    const marker = markers.prepare('confirmed', '/bin/sh', workspace);
+    const stray = Number(
+      spawnSync(marker.wrapper, [STRAY], { cwd: workspace, encoding: 'utf8' }).stdout.trim(),
+    );
+    t.after(() => alive(stray) && process.kill(stray, 'SIGKILL'));
+    assert.deepEqual(
+      markers.acknowledge(['confirmed'], { attested: true }).refused,
+      [{ dispatchId: 'confirmed', reason: 'dispatch_running' }],
+      'not before the dispatch ended',
+    );
+    assert.equal(await markers.observer(context('confirmed')), false, 'a stray keeps it unstopped');
+    assert.deepEqual(markers.acknowledge(['confirmed']).refused, [
+      { dispatchId: 'confirmed', reason: 'not_proven' },
+    ]);
+    assert.equal(existsSync(marker.path), true);
+    assert.deepEqual(markers.acknowledge(['confirmed', 'absent'], { attested: true }), {
+      removed: ['confirmed'],
+      refused: [],
+      missing: ['absent'],
+    });
+    for (const file of [marker.path, marker.wrapper, marker.path.replace(/\.tag$/, '.json')])
+      assert.equal(existsSync(file), false, file);
+    assert.equal(existsSync(markers.directory), true, 'the live instance keeps its directory');
+    assert.ok(alive(stray), 'nothing is ended');
+    assert.deepEqual(markers.acknowledge(['confirmed'], { attested: true }).missing, ['confirmed']);
+    // A later start finds nothing of it.
+    assert.deepEqual((await stopMarker.staleStopMarkers(root)).dispatches, []);
+  },
+);
+
+test(
+  'AC-0059-R03 a process that holds the marker refuses the retirement in the instance too',
+  { skip: !posix },
+  async (t) => {
+    const { base, root } = await roots(t);
+    const workspace = join(base, 'held');
+    await mkdir(workspace);
+    const markers = new StopMarkers({ root });
+    t.after(() => markers.endAll(15_000));
+    const marker = markers.prepare('held', '/bin/sh', workspace);
+    const holder = Number(
+      spawnSync(marker.wrapper, ['sleep 120 >/dev/null 2>&1 & echo $!'], {
+        cwd: workspace,
+        encoding: 'utf8',
+      }).stdout.trim(),
+    );
+    t.after(() => alive(holder) && process.kill(holder, 'SIGKILL'));
+    // The dispatch ended, and nothing could be listed in no time: the holder still runs.
+    assert.equal(await markers.end('held', () => 0), false);
+    assert.deepEqual(markers.acknowledge(['held'], { attested: true }).refused, [
+      { dispatchId: 'held', reason: 'holders_left' },
+    ]);
+    assert.equal(existsSync(marker.path), true);
+    assert.ok(alive(holder));
+  },
+);
+
+test('AC-0059-R03 an adapter without stop markers has nothing to retire', () => {
+  const adapter = createClaudeAdapter({ permissionProfile: 'read-only' } as never);
+  assert.deepEqual(adapter.acknowledgeStopMarkers(['none'], { attested: true }), {
+    removed: [],
+    refused: [],
+    missing: ['none'],
+  });
+});

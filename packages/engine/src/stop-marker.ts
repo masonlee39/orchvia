@@ -114,8 +114,11 @@ export interface StopMarkerAcknowledgement {
   removed: string[];
   refused: {
     dispatchId: string;
-    /** The last three only with `attested` (SPEC-0059 R02). */
-    reason: 'not_proven' | 'instance_live' | 'holders_left' | 'unlisted';
+    /**
+     * All but the first only with `attested` (SPEC-0059 R02); `dispatch_running` only from an
+     * adapter's own `acknowledgeStopMarkers` (R03).
+     */
+    reason: 'not_proven' | 'instance_live' | 'holders_left' | 'unlisted' | 'dispatch_running';
   }[];
   missing: string[];
 }
@@ -509,6 +512,8 @@ export class StopMarkers {
   #directory: string | undefined;
   #startedAt = 0;
   readonly #markers = new Map<string, StopMarker>();
+  /** Dispatches whose runtime has finished: `end` or the observer was asked about them. */
+  readonly #ended = new Set<string>();
 
   constructor(options: StopMarkersOptions = {}) {
     this.#root = options.root === undefined ? undefined : checkStopMarkerRoot(options.root);
@@ -603,6 +608,7 @@ export class StopMarkers {
    * the dispatch stopped, so that a later sweep can still prove it.
    */
   async end(dispatchId: string, remainingMs: () => number): Promise<boolean> {
+    this.#ended.add(dispatchId);
     const marker = this.#markers.get(dispatchId);
     if (!marker) return false;
     const { stopped } = await endHolders(marker.path, remainingMs, true);
@@ -625,6 +631,7 @@ export class StopMarkers {
    */
   readonly observer: RuntimeStopObserver = async (context) => {
     const dispatchId = context.target.dispatchId;
+    this.#ended.add(dispatchId);
     const marker = this.#markers.get(dispatchId);
     if (!marker) return false;
     const held = await endHolders(marker.path, context.remainingMs, true);
@@ -653,6 +660,56 @@ export class StopMarkers {
     if (stopped) this.#retire(dispatchId, marker);
     return stopped;
   };
+
+  /**
+   * SPEC-0059 R03: retires dispatches of this instance that are not proven stopped, once the
+   * host's user confirmed that they stopped, without waiting for the next start's sweep. Only with
+   * `attested`, only with a host root, and only a dispatch that has ended. A process that holds
+   * the marker refuses it, as in `acknowledgeStopMarkers`. Ends nothing and never throws.
+   */
+  acknowledge(
+    dispatchIds: string[],
+    options: StopMarkerAcknowledgeOptions = {},
+  ): StopMarkerAcknowledgement {
+    const result: StopMarkerAcknowledgement = { removed: [], refused: [], missing: [] };
+    for (const dispatchId of dispatchIds) {
+      const base =
+        this.#root === undefined || this.#directory === undefined || typeof dispatchId !== 'string'
+          ? undefined
+          : join(this.#directory, Buffer.from(dispatchId).toString('base64url'));
+      if (!base || !existsSync(`${base}.tag`)) {
+        result.missing.push(dispatchId);
+        continue;
+      }
+      let reason: StopMarkerAcknowledgement['refused'][number]['reason'] | null = null;
+      if (options.attested !== true) reason = 'not_proven';
+      else if (!this.#ended.has(dispatchId)) reason = 'dispatch_running';
+      else {
+        let holding: number[] | null;
+        try {
+          holding = this.#listHolders([`${base}.tag`], earliest(this.#startedAt), 5000);
+        } catch {
+          holding = null;
+        }
+        reason = holding === null ? 'unlisted' : holding.length ? 'holders_left' : null;
+      }
+      if (reason) {
+        result.refused.push({ dispatchId, reason });
+        continue;
+      }
+      try {
+        // The marker first, as in an acknowledgement after a sweep (SPEC-0037 invariant 2).
+        for (const suffix of ['.tag', '.json', '.sh', '.proven'])
+          rmSync(base + suffix, { force: true });
+        this.#markers.delete(dispatchId);
+        this.#ended.delete(dispatchId);
+        result.removed.push(dispatchId);
+      } catch {
+        result.refused.push({ dispatchId, reason: 'unlisted' });
+      }
+    }
+    return result;
+  }
 
   /** Ends the holders of every marker left; true when none remains. */
   async endAll(timeoutMs: number): Promise<boolean> {

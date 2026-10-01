@@ -1,6 +1,6 @@
 # SPEC-0059: A sweep's time, an application's processes, and retiring a confirmed dispatch
 
-Date: 2026-10-01. Status: implemented at the options recommended to the owner (D-sweep-1 option 1; D-stray-1 option 2, which the reporting host asked for, with the start time of option 1); the owner decides at the merge. Release: 0.1.31. Environments: macOS and Linux. Evidence: [TDD-0059](../tdd/0059-sweep-time-and-retirement.md). Corrects [SPEC-0036](0036-stop-marker-restart.md) S01, extends [SPEC-0045](0045-host-reported-fixes.md) K03 and [SPEC-0037](0037-stop-marker-acknowledgement.md) K03.
+Date: 2026-10-01. Status: implemented at the options recommended to the owner (D-sweep-1 option 1; D-stray-1 option 2, which the reporting host asked for, with the start time of option 1); the owner decides at the merge. D-ack-1 option 2 was decided by the owner on 2026-10-01. Release: 0.1.31. Environments: macOS and Linux. Evidence: [TDD-0059](../tdd/0059-sweep-time-and-retirement.md). Corrects [SPEC-0036](0036-stop-marker-restart.md) S01, extends [SPEC-0045](0045-host-reported-fixes.md) K03 and [SPEC-0037](0037-stop-marker-acknowledgement.md) K03.
 
 ## Why
 
@@ -36,6 +36,8 @@ A process that launchd adopted and that started after the dead host exited still
   - `unlisted` when the process table or the holders cannot be listed.
     The call ends no process. Without `attested`, `not_proven` as before.
 
+- **R03** `adapter.acknowledgeStopMarkers(dispatchIds, { attested: true })`, on a Claude or Codex adapter with a host directory, retires dispatches of that adapter itself, so that a host need not wait for its next start (D-ack-1 option 2). The result has the same shape. A dispatch that is still running is refused with `dispatch_running`: it has ended once its runtime finished and the adapter ended the marker's holders or was asked to prove it stopped. A process that holds the marker refuses it with `holders_left`, and `unlisted` is as in R02. Without `attested`, `not_proven`. A dispatch that this adapter does not hold, or an adapter without a host directory, gives `missing`.
+
 An acknowledgement removes files only. Reporting the dispatch stopped to the engine is `sessions.reconcile`, whose own rules are unchanged.
 
 ## Timing invariants
@@ -47,7 +49,7 @@ An acknowledgement removes files only. Reporting the dispatch stopped to the eng
 
 ## Compatibility
 
-Additions only: `started` on a stray, `waited` on a swept dispatch, `strayWaitAt` in a dispatch's record, the option `attested` and three refusal reasons that only it produces. A sweep that used to take its whole time takes less. On macOS a dispatch may now be proven stopped where an application's processes kept it unstopped.
+Additions only: `started` on a stray, `waited` on a swept dispatch, `strayWaitAt` in a dispatch's record, the option `attested` and the refusal reasons that only it produces, and `acknowledgeStopMarkers` on an adapter. A sweep that used to take its whole time takes less. On macOS a dispatch may now be proven stopped where an application's processes kept it unstopped.
 
 ## Acceptance
 
@@ -60,6 +62,7 @@ Additions only: `started` on a stray, `waited` on a swept dispatch, `strayWaitAt
 | 0059-A02 | Strays name when they started                                                                                                                                    | same                                            |
 | 0059-R01 | An attested acknowledgement removes an unproven dispatch and its empty instance, and ends nothing                                                                | same                                            |
 | 0059-R02 | A held marker and a live instance refuse it                                                                                                                      | same                                            |
+| 0059-R03 | An adapter retires its own ended dispatch; a running one and a held marker are refused; without markers, missing                                                 | same                                            |
 
 ## Rollback
 
