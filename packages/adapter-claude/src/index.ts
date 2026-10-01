@@ -15,6 +15,8 @@ import { observeRuntimeStop, requireStopProof } from '../../engine/src/stop-obse
 import {
   StopMarkers,
   type StopMarkerObservation,
+  type StopMarkerAcknowledgeOptions,
+  type StopMarkerAcknowledgement,
   type StopMarkerSyncResult,
 } from '../../engine/src/stop-marker.ts';
 import { existsSync } from 'node:fs';
@@ -35,6 +37,7 @@ export {
   endStopMarkersSync,
   sweepStopMarkers,
   staleStopMarkers,
+  type StopMarkerAcknowledgeOptions,
   type StopMarkerAcknowledgement,
   type StopMarkerRootSyncResult,
   type StopMarkerDispatch,
@@ -263,6 +266,14 @@ export interface ClaudeRuntimeAdapter extends RuntimeAdapter {
    * `stopMarker`, nothing is marked and it is true.
    */
   endStopMarkersSync(timeoutMs: number): StopMarkerSyncResult;
+  /**
+   * SPEC-0059 R03: with `{ attested: true }`, retires dispatches of this adapter that were not
+   * proven stopped, once the host's user confirmed that they stopped; see the guide.
+   */
+  acknowledgeStopMarkers(
+    dispatchIds: string[],
+    options?: StopMarkerAcknowledgeOptions,
+  ): StopMarkerAcknowledgement;
 }
 interface ActiveQuery {
   sessionId: string;
@@ -803,6 +814,15 @@ export function createClaudeAdapter<Extra extends object = object>(
     },
     endStopMarkersSync(timeoutMs: number): StopMarkerSyncResult {
       return markers?.endAllSync(timeoutMs) ?? { stopped: true, holders: 0, ended: 0 };
+    },
+    acknowledgeStopMarkers(dispatchIds, options) {
+      return (
+        markers?.acknowledge(dispatchIds, options) ?? {
+          removed: [],
+          refused: [],
+          missing: [...dispatchIds],
+        }
+      );
     },
     async close(): Promise<void> {
       closed = true;

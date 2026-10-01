@@ -25,6 +25,8 @@ import { observeRuntimeStop, requireStopProof } from '../../engine/src/stop-obse
 import {
   StopMarkers,
   type StopMarkerObservation,
+  type StopMarkerAcknowledgeOptions,
+  type StopMarkerAcknowledgement,
   type StopMarkerSyncResult,
 } from '../../engine/src/stop-marker.ts';
 import { adapterProviderName } from '../../engine/src/runtime.ts';
@@ -96,6 +98,7 @@ export {
   endStopMarkersSync,
   sweepStopMarkers,
   staleStopMarkers,
+  type StopMarkerAcknowledgeOptions,
   type StopMarkerAcknowledgement,
   type StopMarkerRootSyncResult,
   type StopMarkerDispatch,
@@ -248,6 +251,14 @@ export interface CodexAdapterConfig {
 export interface CodexRuntimeAdapter extends RuntimeAdapter {
   /** Ends what holds this adapter's markers within `timeoutMs`; never throws. */
   endStopMarkersSync(timeoutMs: number): StopMarkerSyncResult;
+  /**
+   * SPEC-0059 R03: with `{ attested: true }`, retires dispatches of this adapter that were not
+   * proven stopped, once the host's user confirmed that they stopped.
+   */
+  acknowledgeStopMarkers(
+    dispatchIds: string[],
+    options?: StopMarkerAcknowledgeOptions,
+  ): StopMarkerAcknowledgement;
 }
 
 /** SPEC-0039 H05: the time a hook command has to answer its probe before a dispatch. */
@@ -637,6 +648,15 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
     },
     endStopMarkersSync(timeoutMs: number): StopMarkerSyncResult {
       return markers?.endAllSync(timeoutMs) ?? { stopped: true, holders: 0, ended: 0 };
+    },
+    acknowledgeStopMarkers(dispatchIds, options) {
+      return (
+        markers?.acknowledge(dispatchIds, options) ?? {
+          removed: [],
+          refused: [],
+          missing: [...dispatchIds],
+        }
+      );
     },
     async inspect(input) {
       if (stopping) throw new Error('Codex adapter is closing');

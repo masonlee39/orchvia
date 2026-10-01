@@ -398,7 +398,8 @@ test(
       );
       const running = run(adapter, workspace, state);
       try {
-        for (let i = 0; i < 1000 && !seen.ran; i++) await delay(10);
+        // A loaded machine takes longer than ten seconds to start the stand-in and its command.
+        for (let i = 0; i < 6000 && !seen.ran; i++) await delay(10);
         assert.ok(seen.ran && alive(seen.ran.pid), 'the command runs');
         const started = performance.now();
         const result = adapter.endStopMarkersSync(budget);
