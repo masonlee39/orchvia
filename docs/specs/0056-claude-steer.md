@@ -23,6 +23,8 @@ Measured offline with Claude Agent SDK 0.3.274 and 0.3.283, the real binary agai
   - a steer given but not listed was not delivered: before the adapter reports the turn's end, it calls `interrupt({ cancelQueued: true })` and waits for the receipt, at most the cleanup time. When the receipt does not list the steer as cancelled, the queued turn had started: the adapter reads on to that turn's result, at most the cleanup time, and takes the session's totals from it.
 - **S04** The adapter reports each steer's outcome once through `RuntimeInput.reportSteerOutcome({ steerId, delivered })`, before the turn's terminal event. For a steer that was not delivered the engine sets the steer's message to `expired` and writes the event `session.steer_undelivered` with `dispatchId`, `taskId` and `messageId`. A delivered steer changes nothing: its message is `completed` since the steer was accepted.
 
+[SPEC-0058](0058-steer-outcomes-and-evidence-order.md) extends this: a delivered steer has its own record and event, and a steer whose outcome was never reported ends unknown.
+
 A steer reaches Claude between tool calls only. A turn that calls no further tool cannot be steered; the host then sees `session.steer_undelivered` and can send the line as a new message or task.
 
 ## Timing invariants
@@ -33,13 +35,13 @@ A steer reaches Claude between tool calls only. A turn that calls no further too
 
 ## Acceptance
 
-| ID | Criterion | Test |
-| --- | --- | --- |
-| 0056-S01 | The capability; accepted while the turn runs; refused after it, for an unknown dispatch and for a compaction | `tests/contract/claude-steer-0056.test.ts` |
-| 0056-S02 | A steer is given with priority `next` and its id while a tool call is outstanding, and held until one starts otherwise | same |
-| 0056-S03 | Delivered when the result lists it; a held one is never given; a given one that is not listed is cancelled by an interrupt before the terminal, and a started turn's result is read first | same |
-| 0056-S04 | Outcomes are reported once, before the terminal; the engine expires the message and writes `session.steer_undelivered` | same, `tests/engine/steer-0048.test.ts` |
-| 0056-N01 | [Native] The real binary with a scripted gateway: delivered during a tool; not delivered during a last answer, with no second model request | `scripts/native-gateway-smoke.mjs` |
+| ID       | Criterion                                                                                                                                                                                 | Test                                       |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| 0056-S01 | The capability; accepted while the turn runs; refused after it, for an unknown dispatch and for a compaction                                                                              | `tests/contract/claude-steer-0056.test.ts` |
+| 0056-S02 | A steer is given with priority `next` and its id while a tool call is outstanding, and held until one starts otherwise                                                                    | same                                       |
+| 0056-S03 | Delivered when the result lists it; a held one is never given; a given one that is not listed is cancelled by an interrupt before the terminal, and a started turn's result is read first | same                                       |
+| 0056-S04 | Outcomes are reported once, before the terminal; the engine expires the message and writes `session.steer_undelivered`                                                                    | same, `tests/engine/steer-0048.test.ts`    |
+| 0056-N01 | [Native] The real binary with a scripted gateway: delivered during a tool; not delivered during a last answer, with no second model request                                               | `scripts/native-claude-steer-smoke.mjs`    |
 
 ## Rollback
 

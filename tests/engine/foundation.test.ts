@@ -852,9 +852,11 @@ test('AC11 large Unicode output stays in its artifact and has a bounded inline p
   const f = await fixture({ adapters: [createFakeAdapter({ result: full })] });
   try {
     const t = await create(f.engine);
+    // 1.2 MB written and synced: a loaded disk takes longer than the default two seconds.
     const result = await until(
       () => task(f.engine, t.id),
       (t) => t.status === 'waiting_approval',
+      20_000,
     );
     assert.ok(
       Buffer.byteLength(JSON.stringify(result)) < 262144,

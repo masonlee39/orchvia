@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 3927cd8a8d08c0d01e6461998d3766ad3fd0170caa50b0e58a1deb58507d7e89. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 c4a45635e60dce32d08b7f600e16f1d00cf7f3d1eacb97b099ee3bd858c90569. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -1935,6 +1935,11 @@ export const protocolSchema = {
           type: 'string',
           minLength: 1,
           maxLength: 128,
+        },
+        steerDelivery: {
+          description:
+            'For a steer whose runtime reports its outcome later (SPEC-0058): pending until its turn took it (delivered), did not (not_taken), or ended without saying (unknown). Absent for a steer whose acceptance is its delivery.',
+          enum: ['pending', 'delivered', 'not_taken', 'unknown'],
         },
         summary: {
           type: 'string',

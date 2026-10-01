@@ -114,7 +114,12 @@ function claude(t: any, options: { receipt?: unknown; compact?: boolean } = {}) 
     wake?.();
     await Promise.race([done.catch(() => {}), new Promise((resolve) => setTimeout(resolve, 2000))]);
   });
-  return { adapter, given, interrupts, outcomes, events, order, emit, done: settled };
+  /** The stream ends without a result. */
+  const end = () => {
+    ended = true;
+    wake?.();
+  };
+  return { adapter, given, interrupts, outcomes, events, order, emit, end, done: settled };
 }
 const steers = (c: ReturnType<typeof claude>) =>
   c.given.filter((message) => message.uuid === STEER);
@@ -128,7 +133,10 @@ test('AC-0056-S01 the Claude adapter can be steered while its turn runs, and not
     turnEnded: true,
     message: 'no running turn for this dispatch',
   });
-  assert.deepEqual(await c.adapter.steer!(target, 'held', STEER), { status: 'accepted' });
+  assert.deepEqual(await c.adapter.steer!(target, 'held', STEER), {
+    status: 'accepted',
+    outcomePending: true,
+  });
   c.emit(result([]));
   await c.done;
   assert.equal((await c.adapter.steer!(target, 'late', STEER)).status, 'rejected');
@@ -151,6 +159,7 @@ test('AC-0056-S02 AC-0056-S03 a steer during a tool call is given at once and de
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(await c.adapter.steer!(target, 'keep config.json', STEER), {
     status: 'accepted',
+    outcomePending: true,
   });
   await until(() => steers(c).length === 1, 'the steer on the prompt stream');
   assert.deepEqual(
@@ -224,4 +233,25 @@ test('AC-0056-S03 a queued turn that had started is read to its result before th
   await c.done;
   assert.deepEqual(c.order, ['accepted', 'outcome:false', 'result']);
   assert.equal((c.events.at(-1) as { text?: string }).text, "the turn's answer");
+});
+
+// SPEC-0058 D03: without a result nothing says whether Claude Code read a steer it was given.
+test('AC-0058-D03 a turn that ends without a result reports a held steer, and not a given one', async (t) => {
+  const given = claude(t);
+  given.emit(toolUse);
+  await until(() => given.events.length === 1, 'acceptance');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await given.adapter.steer!(target, 'given, then the stream ends', STEER);
+  await until(() => steers(given).length === 1, 'the steer on the prompt stream');
+  given.end();
+  await given.done.catch(() => {});
+  assert.deepEqual(given.outcomes, [], 'unknown: the engine records it so');
+
+  const held = claude(t);
+  await until(() => held.events.length === 1, 'acceptance');
+  await held.adapter.steer!(target, 'held, then the stream ends', STEER);
+  held.end();
+  await held.done.catch(() => {});
+  assert.equal(steers(held).length, 0);
+  assert.deepEqual(held.outcomes, [{ steerId: STEER, delivered: false }]);
 });

@@ -83,10 +83,23 @@ test('AC-0044-T02 a handler decides each approval once, and settling goes on', a
 });
 
 test('AC-0044-T01 an expired approval pauses the task, and settle returns paused', async (t) => {
-  const orch = await orchestrator(t, [createFakeAdapter()], { approvalTtlMs: 200 });
+  // The approval's lifetime passes on an injected clock: no runner's speed decides whether the
+  // first read finds it pending.
+  let later = 0;
+  const orch = await orchestrator(t, [createFakeAdapter()], {
+    approvalTtlMs: 60_000,
+    clock: {
+      wallNow: () => Date.now() + later,
+      monotonicNow: () => performance.now(),
+      setTimer(callback: () => void, delayMs: number) {
+        const timer = setTimeout(callback, delayMs);
+        return () => clearTimeout(timer);
+      },
+    },
+  });
   const task = await orch.tasks.create(spec('left alone'));
   assert.equal((await task.settle()).reason, 'waiting_approval');
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  later = 61_000;
   const settled = await task.settle({ timeoutMs: 5000 });
   assert.equal(settled.reason, 'paused');
   assert.equal(settled.task.status, 'paused');

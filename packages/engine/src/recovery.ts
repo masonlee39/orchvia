@@ -1,5 +1,11 @@
 import type { Store } from './store.ts';
-import type { ApprovalRequest, OperationSnapshot, SessionSnapshot, TaskSnapshot } from './types.ts';
+import type {
+  ApprovalRequest,
+  MessageSnapshot,
+  OperationSnapshot,
+  SessionSnapshot,
+  TaskSnapshot,
+} from './types.ts';
 
 // Which rows startup recovery changes. The engine's recovery acts on exactly these, and a read-only
 // view reports whether any exist, from the same definitions (SPEC-0027 R05).
@@ -11,6 +17,15 @@ export function pendingRuntimeApprovals(store: Store): ApprovalRequest[] {
     .filter(
       (approval) => approval.purpose === 'runtime_permission' && approval.status === 'pending',
     );
+}
+
+/** Steers whose runtime never said whether its turn took them (SPEC-0058 D04). */
+export function pendingSteers(store: Store): MessageSnapshot[] {
+  return (
+    store.db
+      .prepare("SELECT data FROM messages WHERE json_extract(data,'$.steerDelivery')='pending'")
+      .all() as { data: string }[]
+  ).map((row) => JSON.parse(row.data) as MessageSnapshot);
 }
 
 /**
@@ -47,7 +62,7 @@ export function closedSessionsWithMessages(store: Store): string[] {
 
 /** Whether starting an engine on this store would change rows during recovery. */
 export function recoveryPending(store: Store): boolean {
-  if (pendingRuntimeApprovals(store).length) return true;
+  if (pendingRuntimeApprovals(store).length || pendingSteers(store).length) return true;
   for (const task of store.all<TaskSnapshot>('tasks')) {
     const session = store.get<SessionSnapshot>('sessions', task.sessionId);
     if (session && recoveryAction(task, session)) return true;

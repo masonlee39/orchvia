@@ -629,6 +629,11 @@ export interface MessageSnapshot extends Omit<MessageSpec, 'kind'> {
   kind: MessageSpec['kind'] | 'steer';
   /** For a steer: the dispatch whose turn it was added to. */
   dispatchId?: string;
+  /**
+   * For a steer whose runtime reports its outcome later (SPEC-0058 D01): `pending` until the turn
+   * took it (`delivered`), did not (`not_taken`), or ended without saying (`unknown`).
+   */
+  steerDelivery?: 'pending' | 'delivered' | 'not_taken' | 'unknown';
   retryIdentity?: RetryIdentity;
   id: string;
   fromSessionId: string;
@@ -752,7 +757,14 @@ export interface RuntimeCapabilities {
 }
 /** A runtime's answer to a steer (SPEC-0048 C01); a thrown error is no answer. */
 export type RuntimeSteerAnswer =
-  | { status: 'accepted' }
+  | {
+      status: 'accepted';
+      /**
+       * The runtime reports later, through `reportSteerOutcome`, whether its turn took the steer
+       * (SPEC-0058 D01). Without it an accepted steer has reached its turn, as Codex's.
+       */
+      outcomePending?: true;
+    }
   | { status: 'rejected'; turnEnded: boolean; notSteerable?: boolean; message: string };
 /** What a running turn does, for the host to show (SPEC-0053 A01). Every field is optional data. */
 export type RuntimeProgress =
@@ -799,7 +811,8 @@ export interface RuntimeInput {
   reportUsage?: (event: RuntimeUsageEvent) => void;
   /**
    * Whether a steer the runtime accepted reached its turn, once, before the turn's terminal event
-   * (SPEC-0056 S04). A runtime whose acceptance is the delivery, as Codex's, never calls it.
+   * (SPEC-0056 S04). A runtime whose acceptance is the delivery, as Codex's, never calls it. A
+   * steer accepted with `outcomePending` that no call settles ends `unknown` (SPEC-0058 D03).
    */
   reportSteerOutcome?: (outcome: { steerId: string; delivered: boolean }) => void;
   /** Progress for the host to show; never throws, and changes nothing else (SPEC-0053 A02). */
