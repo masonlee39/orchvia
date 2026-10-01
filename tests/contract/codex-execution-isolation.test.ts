@@ -112,7 +112,10 @@ async function setup(
     observeExecutionStop: async () => true,
     command: process.execPath,
     args: ['-e', fixtureSource, mode],
-    closeTimeoutMs: 20,
+    // Time for the fixture's process to end. A loaded machine takes longer than the 20 ms this
+    // was: the adapter then rightly reported that cleanup was unconfirmed, and a test that
+    // expected the result failed. A test of a cleanup that fails sets its own short time.
+    closeTimeoutMs: 5000,
     env: { FIXTURE_PID: pidPath, FIXTURE_REQUESTS: requestsPath, FIXTURE_GATE: gatePath },
     ...options.config,
   });
@@ -324,7 +327,8 @@ test('A2 Codex uses the negotiated host clock instead of starting another explic
       if (event.type === 'usage') offset += 1001;
     },
   });
-  assert.equal((await bounded(f.finished)).at(-1)?.type, 'result');
+  const events = await bounded(f.finished);
+  assert.equal(events.at(-1)?.type, 'result', JSON.stringify(events));
 });
 
 test('A2 Codex reports a matching terminal and native checkpoint before full stopping evidence', async (t) => {
@@ -361,7 +365,8 @@ test('A2 Codex reports a matching terminal and native checkpoint before full sto
 
 test('A2 Codex retains the terminal through cleanup failure and notifies late exit after its iterator ended', async (t) => {
   t.mock.method(ChildProcess.prototype, 'kill', () => false);
-  const f = await setup(t);
+  // The process cannot be ended here, so the cleanup's whole time passes: keep it short.
+  const f = await setup(t, 'complete', { config: { closeTimeoutMs: 20 } });
   const events = await bounded(f.finished);
   assert.equal(events.at(-1)?.type, 'error');
   assert.equal((events.at(-1) as Extract<RuntimeEvent, { type: 'error' }>).outcome, 'unknown');
@@ -448,7 +453,8 @@ test('A2 Codex timer wakeups recheck a fixed host budget instead of timing it ou
   host.budget.remainingAcceptanceMs = () => 20;
   host.budget.remainingTurnMs = () => 20;
   const f = await setup(t, 'delayed-terminal', { input: { executionBudget: host.budget } });
-  assert.equal((await bounded(f.finished, 700)).at(-1)?.type, 'result');
+  const events = await bounded(f.finished, 700);
+  assert.equal(events.at(-1)?.type, 'result', JSON.stringify(events));
 });
 
 test('A2 Codex stalled stream still expires when the authoritative host remaining budget reaches zero', async (t) => {
