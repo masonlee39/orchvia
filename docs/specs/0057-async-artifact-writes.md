@@ -16,6 +16,8 @@ Measured with the fake runtime, a task took 56.5 ms and the event loop's 95th pe
 - **W03** Execution evidence that a runtime reports while its turn runs, before the terminal handling has begun, is applied in the order it was reported, each after its artifact is prepared; the terminal handling waits for it. Evidence that arrives later, or for a flight that has ended, is applied at once, as before, so that a close, a reconciliation or a rollover right after it sees it.
 - **W04** While a turn's end only waits for its files, a close does not report `SHUTDOWN_INCOMPLETE` for it, and no deadline of the flight expires; the time spent so counts against no deadline. Those writes used to block the event loop, where neither could happen. `close()` waits for the writes in progress before it closes the store.
 
+[SPEC-0058](0058-steer-outcomes-and-evidence-order.md) E01 adds that the terminal itself is recorded only after the evidence queued before it: in 0.1.30 the terminal was recorded first, which changed a dispatch's `lastEvidence`.
+
 Preparing is an optimization only: every path is correct when a prepare fails or was skipped, since `artifact()` then writes.
 
 ## Timing invariants
@@ -31,12 +33,12 @@ A turn now settles some milliseconds after its runtime's last event, once its fi
 
 ## Acceptance
 
-| ID | Criterion | Test |
-| --- | --- | --- |
-| 0057-W01 | A prepared artifact registers without a write; another text writes; a prepared one that was not registered is a recovered orphan at the next start | `tests/engine/async-artifacts-0057.test.ts` |
-| 0057-W02 | A task's end writes no file inside a transaction | same |
-| 0057-W03 | Evidence takes effect in order, and the terminal waits for it | same |
-| 0057-T01 | While the files are written: a deadline does not expire the turn, a close waits and keeps the result, and a cancel settles as a cancel during verification does | same |
+| ID       | Criterion                                                                                                                                                       | Test                                        |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| 0057-W01 | A prepared artifact registers without a write; another text writes; a prepared one that was not registered is a recovered orphan at the next start              | `tests/engine/async-artifacts-0057.test.ts` |
+| 0057-W02 | A task's end writes no file inside a transaction                                                                                                                | same                                        |
+| 0057-W03 | Evidence takes effect in order, and the terminal waits for it                                                                                                   | same                                        |
+| 0057-T01 | While the files are written: a deadline does not expire the turn, a close waits and keeps the result, and a cancel settles as a cancel during verification does | same                                        |
 
 ## Rollback
 

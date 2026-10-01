@@ -1916,6 +1916,10 @@
           "minLength": 1,
           "maxLength": 128
         },
+        "steerDelivery": {
+          "description": "For a steer whose runtime reports its outcome later (SPEC-0058): pending until its turn took it (delivered), did not (not_taken), or ended without saying (unknown). Absent for a steer whose acceptance is its delivery.",
+          "enum": ["pending", "delivered", "not_taken", "unknown"]
+        },
         "summary": {
           "type": "string",
           "minLength": 1,

@@ -211,3 +211,48 @@ test('AC-0057-T01 a cancel that arrives while the files are written settles', as
   assert.equal(settled.status, 'completed');
   assert.equal(await g.occupied(), 0);
 });
+
+// SPEC-0058 E01: evidence reported before the terminal takes effect before the terminal is
+// recorded, as it did when it was applied synchronously.
+for (const type of ['error', 'result'] as const)
+  test(`AC-0058-E01 a dispatch whose turn ended with ${type} keeps terminal_${type} as its last evidence`, async (t) => {
+    const base = createFakeAdapter();
+    const adapter = {
+      ...base,
+      async *execute(input: any) {
+        const terminal =
+          type === 'error'
+            ? { type: 'error' as const, message: 'boom', outcome: 'failed' as const }
+            : { type: 'result' as const, text: 'done' };
+        input.reportExecutionEvidence?.({
+          version: 1,
+          sequence: 1,
+          dispatchId: input.dispatchId,
+          sessionId: input.sessionId,
+          generation: input.generation,
+          provider: 'fake',
+          providerSessionId: 'native-1',
+          source: 'runtime_terminal',
+          observedAt: new Date().toISOString(),
+          localResources: 'stopped',
+          remoteExecution: 'stopped',
+          detail: 'fixture',
+          terminal,
+        });
+        yield terminal;
+      },
+    };
+    const engine: any = await createEngine({ ...(await dirs(t)), adapters: [adapter as any] });
+    t.after(() => engine.close({ mode: 'interrupt', timeoutMs: 1000 }));
+    const task = (await engine.call('tasks.create', {
+      spec: spec('evidence order'),
+      idempotencyKey: type,
+    })) as TaskSnapshot;
+    await until(
+      () => engine.call('tasks.get', { taskId: task.id }) as Promise<TaskSnapshot>,
+      (now) => !['queued', 'running'].includes(now.status),
+      'the turn to end',
+    );
+    const [dispatch] = engine.store.all('dispatches') as { lastEvidence: string }[];
+    assert.equal(dispatch!.lastEvidence, `terminal_${type}`);
+  });

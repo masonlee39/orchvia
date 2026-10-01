@@ -785,7 +785,8 @@ export function createClaudeAdapter<Extra extends object = object>(
         turn.given.add(steerId);
         turn.give(message);
       } else turn.held.push(message);
-      return { status: 'accepted' };
+      // SPEC-0058 D01: whether the turn takes it is reported later.
+      return { status: 'accepted', outcomePending: true };
     },
     async inspect(input) {
       if (config.query && !config.inspectSession)
@@ -1506,11 +1507,13 @@ export function createClaudeAdapter<Extra extends object = object>(
         // A turn that ended without a result delivers nothing more (SPEC-0056 S03).
         turn.ended = true;
         if (steering.get(input.dispatchId) === turn) steering.delete(input.dispatchId);
-        // Steers that no result settled were not delivered: the turn ended another way.
+        // The turn ended without a result. A steer still held was never given to Claude Code. One
+        // that was given may or may not have been read: nothing is reported, and the engine
+        // records its outcome as unknown (SPEC-0058 D03).
         if (!steersSettled) {
           steersSettled = true;
-          for (const id of [...turn.given, ...turn.held.splice(0).map((held) => held.uuid)])
-            input.reportSteerOutcome?.({ steerId: id, delivered: false });
+          for (const held of turn.held.splice(0))
+            input.reportSteerOutcome?.({ steerId: held.uuid, delivered: false });
         }
         closeInput();
         input.signal.removeEventListener('abort', onAbort);

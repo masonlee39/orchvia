@@ -2,6 +2,20 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+Every steer's outcome, and evidence before its terminal (SPEC-0058).
+
+### Added
+
+- A steer whose runtime reports its outcome later, as a Claude member's, has `steerDelivery` on its message: `pending`, then `delivered`, `not_taken` or `unknown`. A delivered steer writes the event `session.steer_delivered`, and `session.steer_undelivered` carries a `reason`, `not_taken` or `unknown`.
+- A runtime's answer to a steer may say `outcomePending: true`.
+
+### Fixed
+
+- A steer whose outcome was never reported, because its turn ended without a result, the host closed or the host crashed, no longer stays `completed` without an event: it ends `unknown` when the turn's runtime finishes, or at the next start.
+- A dispatch whose runtime reported evidence before its turn ended keeps `terminal_error` or `terminal_result` as its `lastEvidence` again. 0.1.30 left `runtime_terminal`.
+
 ## [0.1.30] - 2026-10-01
 
 Steering a Claude member (SPEC-0056), and a turn's end that no longer blocks the event loop (SPEC-0057).

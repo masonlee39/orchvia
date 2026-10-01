@@ -221,12 +221,12 @@ async function run(scenario) {
 
 try {
   const tool = await run('tool');
-  assert.deepEqual(tool.steered, { status: 'accepted' });
+  assert.deepEqual(tool.steered, { status: 'accepted', outcomePending: true });
   assert.deepEqual(tool.outcomes, [true], 'the steer joined the turn with the tool result');
   assert.equal(tool.requestsWithSteer, 1);
   assert.equal(tool.events.at(-1), 'result');
   const text = await run('text');
-  assert.deepEqual(text.steered, { status: 'accepted' });
+  assert.deepEqual(text.steered, { status: 'accepted', outcomePending: true });
   assert.deepEqual(text.outcomes, [false], 'a turn without a tool call takes no steer');
   assert.equal(text.requestsWithSteer, 0, 'no model request carried the steer');
   assert.equal(text.modelRequests, 1, 'no second turn ran');

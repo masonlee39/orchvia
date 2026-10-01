@@ -11,6 +11,7 @@ import { VERSION } from './version.ts';
 import {
   closedSessionsWithMessages,
   pendingRuntimeApprovals,
+  pendingSteers,
   recoveryAction,
   unfinishedOperations,
 } from './recovery.ts';
@@ -160,6 +161,10 @@ interface Dispatch extends Record<string, unknown> {
   terminalCoversExecution?: boolean;
 }
 interface Flight {
+  /** Steers accepted with `outcomePending` that nothing has settled yet (SPEC-0058 D03). */
+  pendingSteers?: Set<string>;
+  /** The turn's runtime has finished: a steer answered from here on is unknown at once. */
+  steersSettled?: true;
   taskId: string;
   sessionId: string;
   dispatchId: string;
@@ -1943,6 +1948,15 @@ class LocalEngine implements Engine {
       this.applyEvidence(flight, provider, evidence);
     });
   }
+  /** Waits until every evidence report queued so far has been applied (SPEC-0057 W03, W04). */
+  private evidenceApplied(flight: Flight): Promise<void> {
+    return this.whileWriting(flight, async () => {
+      for (let waited: Promise<void> | undefined; waited !== flight.evidence; ) {
+        waited = flight.evidence;
+        await waited;
+      }
+    });
+  }
   private applyEvidence(flight: Flight, provider: string, evidence: ExecutionEvidence): void {
     if (this.closed) return;
     try {
@@ -2313,6 +2327,9 @@ class LocalEngine implements Engine {
   private recover(): void {
     this.store.transaction(() => {
       // Each step acts on the rows that recovery.ts selects (SPEC-0027 R05).
+      // SPEC-0058 D04, O01: before anything rewrites a task.
+      for (const message of pendingSteers(this.store))
+        this.settleSteer(message, message.toSessionId, 'unknown');
       for (const approval of pendingRuntimeApprovals(this.store)) {
         approval.status = 'invalidated';
         approval.revision++;
@@ -4039,10 +4056,20 @@ class LocalEngine implements Engine {
             { dispatchId, taskId: task.id, messageId, text },
             { taskId: task.id, sessionId: session.id, operationId },
           );
-          // SPEC-0056 invariant 3: the runtime said, before this answer was recorded, that the
-          // steer did not reach its turn.
-          if (this.undeliveredSteers.delete(messageId))
-            this.steerUndelivered(message, dispatchId, session.id);
+          const early = this.earlySteerOutcomes.get(messageId);
+          this.earlySteerOutcomes.delete(messageId);
+          if (answer.outcomePending) {
+            message.steerDelivery = 'pending';
+            const flight = this.flights.get(session.id);
+            // SPEC-0056 invariant 3: the runtime said, before this answer was recorded, whether
+            // the steer reached its turn.
+            if (early !== undefined)
+              this.settleSteer(message, session.id, early ? 'delivered' : 'not_taken');
+            // SPEC-0058 D03: a turn that has ended reports nothing more.
+            else if (flight?.dispatchId !== dispatchId || flight.steersSettled)
+              this.settleSteer(message, session.id, 'unknown');
+            else (flight.pendingSteers ??= new Set()).add(messageId);
+          } else if (early === false) this.settleSteer(message, session.id, 'not_taken');
         } else if (answer) {
           message.status = 'failed';
           op.status = 'failed';
@@ -4071,33 +4098,72 @@ class LocalEngine implements Engine {
       // A host that closed meanwhile leaves the steer persisted; its next start records it unknown.
     }
   }
-  /** Steers a runtime reported undelivered before their own answer was recorded (SPEC-0056). */
-  private undeliveredSteers = new Set<string>();
-  /** Inside a transaction: the steer did not reach its turn (SPEC-0056 S04). */
-  private steerUndelivered(message: MessageSnapshot, dispatchId: string, sessionId: string): void {
+  /** Outcomes a runtime reported before the steer's own answer was recorded (SPEC-0056). */
+  private earlySteerOutcomes = new Map<string, boolean>();
+  /**
+   * Inside a transaction: the steer's outcome, once (SPEC-0056 S04, SPEC-0058 D02). The caller puts
+   * the message when it writes it anyway; this writes it too, so that either order holds.
+   */
+  private settleSteer(
+    message: MessageSnapshot,
+    sessionId: string,
+    outcome: 'delivered' | 'not_taken' | 'unknown',
+  ): void {
+    const data = { dispatchId: message.dispatchId!, taskId: message.taskId, messageId: message.id };
+    const context = { taskId: message.taskId, sessionId };
+    if (message.steerDelivery) message.steerDelivery = outcome;
+    this.flights.get(sessionId)?.pendingSteers?.delete(message.id);
+    if (outcome === 'delivered') {
+      this.store.put('messages', message.id, message);
+      this.store.event('session.steer_delivered', data, context);
+      return;
+    }
     message.status = 'expired';
     this.store.put('messages', message.id, message);
-    this.store.event(
-      'session.steer_undelivered',
-      { dispatchId, taskId: message.taskId, messageId: message.id },
-      { taskId: message.taskId, sessionId },
-    );
+    this.store.event('session.steer_undelivered', { ...data, reason: outcome }, context);
+  }
+  /**
+   * SPEC-0058 D03, O01: once a turn's runtime has finished, the steers it never settled are
+   * unknown. In a transaction of its own, before the turn's end writes anything.
+   */
+  private settlePendingSteers(flight: Flight): void {
+    flight.steersSettled = true;
+    if (!flight.pendingSteers?.size) return;
+    try {
+      this.store.transaction(() => {
+        for (const id of [...flight.pendingSteers!]) {
+          const message = this.store.get<MessageSnapshot>('messages', id);
+          if (message?.steerDelivery === 'pending')
+            this.settleSteer(message, flight.sessionId, 'unknown');
+        }
+      });
+    } catch {
+      // A store that cannot be written leaves them pending; the next start settles them (D04).
+    }
   }
   /**
    * SPEC-0056 S04: a runtime that accepts a steer before it knows whether the turn takes it says so
-   * later. A steer that was not delivered expires, with its event, once; a delivered one changes
-   * nothing. It never throws to the adapter.
+   * later. A steer that was not delivered expires, with its event, once; a delivered one whose
+   * answer said `outcomePending` is marked so, with its event (SPEC-0058 D02). It never throws to
+   * the adapter.
    */
   private steerOutcome(flight: Flight, outcome: { steerId: string; delivered: boolean }): void {
     try {
-      if (this.closed || !outcome || outcome.delivered !== false) return;
+      if (this.closed || !outcome || typeof outcome.delivered !== 'boolean') return;
       if (typeof outcome.steerId !== 'string') return;
       const message = this.store.get<MessageSnapshot>('messages', outcome.steerId);
       if (!message || message.kind !== 'steer' || message.dispatchId !== flight.dispatchId) return;
-      if (message.status === 'dispatching') this.undeliveredSteers.add(message.id);
-      else if (message.status === 'completed')
+      const delivered = outcome.delivered;
+      if (message.status === 'dispatching') {
+        if (!this.earlySteerOutcomes.has(message.id))
+          this.earlySteerOutcomes.set(message.id, delivered);
+      } else if (
+        message.status === 'completed' &&
+        // A steer accepted without `outcomePending` only ever says that it was not delivered.
+        (message.steerDelivery === 'pending' || (!message.steerDelivery && !delivered))
+      )
         this.store.transaction(() =>
-          this.steerUndelivered(message, flight.dispatchId, flight.sessionId),
+          this.settleSteer(message, flight.sessionId, delivered ? 'delivered' : 'not_taken'),
         );
     } catch {
       // The outcome is an observation; it never changes the turn.
@@ -5206,6 +5272,9 @@ class LocalEngine implements Engine {
           this.store.transaction(() => this.accepted(flight, event.providerSessionId));
         else {
           terminal = event;
+          // SPEC-0058 E01: what the runtime reported before its terminal takes effect before the
+          // terminal is recorded, in the order it happened.
+          await this.evidenceApplied(flight);
           this.store.transaction(() => {
             if (event.type === 'result') {
               resultText(event.text);
@@ -5250,13 +5319,9 @@ class LocalEngine implements Engine {
     }
     // SPEC-0057 invariant 1: the evidence reported before the terminal has taken effect before the
     // stop proof is read.
-    await this.whileWriting(flight, async () => {
-      for (let waited: Promise<void> | undefined; waited !== flight.evidence; ) {
-        waited = flight.evidence;
-        await waited;
-      }
-    });
+    await this.evidenceApplied(flight);
     flight.evidenceSettled = true;
+    this.settlePendingSteers(flight);
     let verification: VerificationEvidence[] | undefined;
     const activeApproval = this.task(flight.taskId).approvalId;
     if (

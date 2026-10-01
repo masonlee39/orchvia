@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 3927cd8a8d08c0d01e6461998d3766ad3fd0170caa50b0e58a1deb58507d7e89. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 c4a45635e60dce32d08b7f600e16f1d00cf7f3d1eacb97b099ee3bd858c90569. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -409,6 +409,7 @@ class MessageSnapshot(TypedDict):
     expectedGeneration: int
     kind: Literal["assignment", "finding", "result", "question", "steer"]
     dispatchId: NotRequired[str]
+    steerDelivery: NotRequired[Literal["pending", "delivered", "not_taken", "unknown"]]
     summary: str
     artifactRefs: NotRequired[list[str]]
     ttlMs: NotRequired[int]
