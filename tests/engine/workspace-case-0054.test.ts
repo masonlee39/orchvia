@@ -90,30 +90,34 @@ test('AC-0054-E02 a write path named in the case on disk is inside a workspace r
     providers: { fake: { permissionProfile: 'workspace-write' } },
     writeScopes: { main: ['.'] },
   });
-  t.after(() => engine.close({ mode: 'interrupt', timeoutMs: 1000 }));
-  const task = (await engine.call('tasks.create', {
-    spec: {
-      goal: 'write',
-      runtime: { provider: 'fake', model: 'fixture' },
-      acceptance: { mode: 'human', criteria: ['Review'] },
-      writeScope: 'main',
-      writePath: join(base, 'Project-x', 'WS', 'src'),
-    },
-    idempotencyKey: 'write',
-  })) as TaskSnapshot;
-  assert.equal(task.writePaths?.length, 1);
-  // Recorded in the workspace's own spelling, as tasks were before.
-  assert.equal(task.writePaths![0], join(realpathSync(join(base, 'project-x', 'WS')), 'src'));
-  // A write path recorded in another spelling of the same directory still conflicts.
-  const holders = engine.writeConflictHolders(
-    { writePaths: [join(base, 'project-x', 'ws', 'src')] },
-    [
-      {
-        taskId: 'earlier',
-        executionLease: { status: 'held' },
-        writePaths: [join(base, 'PROJECT-X', 'WS')],
+  // Closed before the directory is removed: the turn's end writes files (SPEC-0057).
+  try {
+    const task = (await engine.call('tasks.create', {
+      spec: {
+        goal: 'write',
+        runtime: { provider: 'fake', model: 'fixture' },
+        acceptance: { mode: 'human', criteria: ['Review'] },
+        writeScope: 'main',
+        writePath: join(base, 'Project-x', 'WS', 'src'),
       },
-    ],
-  );
-  assert.deepEqual(holders, ['earlier']);
+      idempotencyKey: 'write',
+    })) as TaskSnapshot;
+    assert.equal(task.writePaths?.length, 1);
+    // Recorded in the workspace's own spelling, as tasks were before.
+    assert.equal(task.writePaths![0], join(realpathSync(join(base, 'project-x', 'WS')), 'src'));
+    // A write path recorded in another spelling of the same directory still conflicts.
+    const holders = engine.writeConflictHolders(
+      { writePaths: [join(base, 'project-x', 'ws', 'src')] },
+      [
+        {
+          taskId: 'earlier',
+          executionLease: { status: 'held' },
+          writePaths: [join(base, 'PROJECT-X', 'WS')],
+        },
+      ],
+    );
+    assert.deepEqual(holders, ['earlier']);
+  } finally {
+    await engine.close({ mode: 'interrupt', timeoutMs: 1000 });
+  }
 });

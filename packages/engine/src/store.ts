@@ -1,5 +1,6 @@
 import { completeMigrationBackup } from './archive.ts';
-import { atomicFile, syncDirectory } from './durable-files.ts';
+import { lstat, readFile, realpath } from 'node:fs/promises';
+import { atomicFile, atomicFileAsync, syncDirectory } from './durable-files.ts';
 import { DatabaseSync } from 'node:sqlite';
 import {
   mkdirSync,
@@ -160,6 +161,20 @@ function openForReading(stateDir: string) {
     throw error;
   }
 }
+/** The artifact writes in progress in this process (SPEC-0057). */
+const artifactWrites = new Set<Promise<void>>();
+/**
+ * Test seam: resolves once no artifact is being written and what waited for one has run. A turn's
+ * end waits for its files, so a test that looked at the engine a few ticks after a runtime's last
+ * event waits for this first.
+ */
+export async function artifactWritesSettled(): Promise<void> {
+  do {
+    await Promise.allSettled([...artifactWrites]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } while (artifactWrites.size);
+}
+
 /** SPEC-0053 F01: the event types an events.read leaves out when it names no filter. */
 export const DEFAULT_EXCLUDED_EVENTS: readonly string[] = Object.freeze(['dispatch.progress']);
 /** SPEC-0053 F02: the most events one filtered read scans. */
@@ -451,11 +466,12 @@ export class Store {
       JSON.stringify([...features, { name, engineVersion: VERSION }]),
     );
   }
-  transaction<T>(fn: () => T): T {
+  /** `at`, when given, is the transaction's one time, read before it began (SPEC-0057). */
+  transaction<T>(fn: () => T, at?: number): T {
     this.assertWritable();
     this.db.exec('BEGIN IMMEDIATE');
     // One reading for the whole transaction: every time written in it is this one (SPEC-0030 B01).
-    this.commitTime = this.now();
+    this.commitTime = at ?? this.now();
     try {
       const result = fn();
       this.db.exec('COMMIT');
@@ -1018,6 +1034,63 @@ export class Store {
       cursor = String(last.cursor);
     return { events, cursor, storeId: this.storeId };
   }
+  /** Digests whose journal and file this process wrote and verified, not yet registered. */
+  private prepared = new Set<string>();
+  /**
+   * SPEC-0057 W01: writes an artifact's journal and file as `artifact()` does, in the same order
+   * and with the same syncs, without blocking the event loop. `artifact()` then registers it without
+   * touching the disk. A prepared artifact that is never registered is what an interrupted write
+   * leaves: the next start keeps it as a recovered orphan.
+   */
+  async prepareArtifact(text: string): Promise<void> {
+    const work = this.writeArtifact(text);
+    artifactWrites.add(work);
+    this.writing.add(work);
+    try {
+      await work;
+    } finally {
+      artifactWrites.delete(work);
+      this.writing.delete(work);
+    }
+  }
+  /** This store's artifact writes in progress; a close waits for them (SPEC-0057). */
+  private writing = new Set<Promise<void>>();
+  async writesSettled(): Promise<void> {
+    while (this.writing.size) await Promise.allSettled([...this.writing]);
+  }
+  /** Test seam: awaited before an artifact is written off the event loop (SPEC-0057). */
+  writePause?: () => Promise<void>;
+  private async writeArtifact(text: string): Promise<void> {
+    await this.writePause?.();
+    this.assertWritable();
+    const digest = createHash('sha256').update(text).digest('hex');
+    if (this.prepared.has(digest)) return;
+    const path = join(this.stateDir, 'artifacts', `${digest}.txt`),
+      ref = `sha256:${digest}`;
+    const record = { id: ref, path, sha256: digest, sizeBytes: Buffer.byteLength(text) };
+    const journal = join(this.stateDir, 'file-commits', `${digest}.json`);
+    for (const directory of [dirname(path), dirname(journal)])
+      if ((await realpath(directory)) !== directory)
+        fail('UNTRUSTED_PATH', 'Artifact directory changed');
+    const journalText = JSON.stringify({ ref, ...record });
+    await atomicFileAsync(journal, journalText);
+    this.onFileWritten?.(Buffer.byteLength(journalText));
+    this.options.fault?.('artifact.prepared');
+    if (!existsSync(path)) {
+      await atomicFileAsync(path, text);
+      this.onFileWritten?.(record.sizeBytes);
+    }
+    if (
+      !(await lstat(path)).isFile() ||
+      (await realpath(path)) !== path ||
+      createHash('sha256')
+        .update(await readFile(path))
+        .digest('hex') !== digest
+    )
+      fail('ARTIFACT_CORRUPT', 'Existing artifact failed digest verification');
+    this.options.fault?.('artifact.renamed');
+    if (!this.closed) this.prepared.add(digest);
+  }
   artifact(text: string): string {
     this.assertWritable();
     const digest = createHash('sha256').update(text).digest('hex');
@@ -1025,6 +1098,17 @@ export class Store {
       ref = `sha256:${digest}`;
     const record = { id: ref, path, sha256: digest, sizeBytes: Buffer.byteLength(text) };
     const journal = join(this.stateDir, 'file-commits', `${digest}.json`);
+    // SPEC-0057 W01: already on disk, synced and verified by prepareArtifact.
+    if (this.prepared.delete(digest)) {
+      try {
+        this.put('artifacts', ref, record);
+        this.options.fault?.('artifact.registered');
+        return ref;
+      } catch (error) {
+        this.storageFailure(error);
+        throw error;
+      }
+    }
     for (const directory of [dirname(path), dirname(journal)])
       if (realpathSync(directory) !== directory)
         fail('UNTRUSTED_PATH', 'Artifact directory changed');

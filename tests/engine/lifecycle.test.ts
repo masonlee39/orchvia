@@ -1,3 +1,4 @@
+import { artifactWritesSettled } from '../../packages/engine/src/store.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
@@ -47,8 +48,12 @@ class Clock implements EngineClock {
     }
   }
 }
+// A turn's end waits for its files (SPEC-0057), so "a few ticks later" includes those writes.
 const flush = async () => {
-  for (let i = 0; i < 5; i++) await new Promise<void>((r) => setImmediate(r));
+  for (let i = 0; i < 5; i++) {
+    await artifactWritesSettled();
+    await new Promise<void>((r) => setImmediate(r));
+  }
 };
 const spec = {
   goal: 'lifecycle evidence',

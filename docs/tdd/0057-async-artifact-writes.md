@@ -1,0 +1,11 @@
+# TDD-0057: Artifact files written off the event loop
+
+Specification: [SPEC-0057](../specs/0057-async-artifact-writes.md).
+
+- Measurement before the change, 100 fake tasks on an Apple M-series laptop: 56.5 ms per task, event loop 95th percentile 62.5 ms; seven commits took 2.2 ms per task, three `artifact()` calls 47.9 ms.
+- W01, W02 RED: `tests/engine/async-artifacts-0057.test.ts` failed 3 of 3: `Store` had no `prepareArtifact`, and a task's end wrote 6 files inside transactions. With the result and the release evidence prepared, 2 remained, the terminal evidence; with the evidence queue, 0. GREEN.
+- A first version queued every evidence report. 26 tests of the suite failed. Most looked at the engine a few ticks after a runtime's last event, which a turn's end with real file waits no longer meets; three showed a real change: evidence for a flight that had ended took effect later than a close, a reconciliation or a rollover that followed it. The queue now holds only evidence reported while the turn runs and before its terminal handling begins (W03); with that, and tests that wait with `artifactWritesSettled()` or for the scheduler instead of a fixed number of ticks or milliseconds, the suite passed again.
+- W04: `0011-R09`, a host under a disk whose syncs take 250 ms, reported `SHUTDOWN_INCOMPLETE`: the close's deadline now ran between the turn's commits, where it could not before. A flight that only writes its files is no longer timed out, and no deadline expires during that wait (invariant 6).
+- T01, W03: four tests with artifact writes held by a test seam (`Store.writePause`): the terminal waits for the evidence; a 300 ms turn deadline that passes during a 600 ms write does not expire the turn; a close with a 200 ms budget waits and keeps the result; a cancel during the write cancels the task and releases the lease. GREEN: 7 of 7.
+- Mutations, each restored from a copy: the terminal not waiting for the evidence queue fails four tests; deadlines expiring during the writes fails the deadline test; a close timing the writes out fails the close test; `artifact()` ignoring what was prepared fails W01 and W02.
+- After the change, the same 100 tasks: 44.3 ms per task, event loop 95th percentile 5.7 ms and maximum 8.4 ms, no file written inside a transaction.

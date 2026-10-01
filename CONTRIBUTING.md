@@ -42,6 +42,8 @@ CI runners are several times slower than a developer's machine, and slower still
 
 Before pushing such a test, run it under load: `node scripts/stress.mjs --copies 6 -- node --import ./tests/fixtures/reserve-guard.mjs --test <files>` keeps every core busy and runs six copies at once. The weekly stress workflow runs the whole suite the same way. When a CI run passes only on a second attempt, find the cause and record it in [docs/ci-flakes.md](docs/ci-flakes.md).
 
+A turn's end waits for its files (SPEC-0057), so a test must not read the engine a fixed number of ticks or milliseconds after a runtime's last event. Wait for the task's state, or for `artifactWritesSettled()` from `packages/engine/src/store.ts`.
+
 ## Test environment
 
 Ordinary tests use temporary workspace/stateDir directories and a deterministic fake runtime, without login credentials or paid model requests. A test engine uses a 4 KiB emergency reserve (`storage: { emergencyBytes: 4096 }`); the test commands fail any other process that would write a larger one, except the runnable examples. Real Claude/Codex acceptance must separately record versions, identity sources, task budgets, and model results; fake fixtures cannot prove it.

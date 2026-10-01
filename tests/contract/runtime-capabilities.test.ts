@@ -1,3 +1,4 @@
+import { artifactWritesSettled } from '../../packages/engine/src/store.ts';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -17,8 +18,12 @@ const taskSpec = {
   runtime: { provider: 'fake', model: 'fixture-model' },
   acceptance: { mode: 'human', criteria: ['Fixture review'] },
 };
+// A turn's end waits for its files (SPEC-0057), so "a few ticks later" includes those writes.
 const flush = async () => {
-  for (let n = 0; n < 5; n++) await new Promise<void>((resolve) => setImmediate(resolve));
+  for (let n = 0; n < 5; n++) {
+    await artifactWritesSettled();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 };
 
 async function fixture(capabilities: () => unknown) {
@@ -275,12 +280,12 @@ test('AC-H01 queued work rechecks its permission capability before entering the 
     })) as TaskSnapshot;
     capabilities = { ...capabilities, permissionProfiles: ['workspace-write'] };
     releases[0]();
-    for (let n = 0; n < 20; n++) {
+    // The first turn ends once its files are on disk (SPEC-0057); only then is the second considered.
+    let task = second;
+    for (const until = Date.now() + 10_000; task.status === 'queued' && Date.now() < until; ) {
       await new Promise<void>((resolve) => setTimeout(resolve, 5));
-      const s = (await engine.call('scheduler.get')) as SchedulerSnapshot;
-      if (s.executionOccupied === 0) break;
+      task = (await engine.call('tasks.get', { taskId: second.id })) as TaskSnapshot;
     }
-    const task = (await engine.call('tasks.get', { taskId: second.id })) as TaskSnapshot;
     assert.equal(inputs.length, 1, 'permission removal must prevent the second submission');
     assert.equal(task.status, 'paused');
     assert.match(task.reason!, /UNSUPPORTED_CAPABILITY:.*read-only/);
