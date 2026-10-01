@@ -330,3 +330,27 @@ test('AC-0059-R03 an adapter without stop markers has nothing to retire', () => 
     missing: ['none'],
   });
 });
+
+test(
+  'AC-0059-T01 a dispatch whose listing is slow uses its own share of the time only',
+  { skip: !posix },
+  async (t) => {
+    const { base, root } = await roots(t);
+    for (const name of ['slow', 'second', 'third']) await deadInstance(t, base, root, name, CLEAN);
+    let calls = 0;
+    const swept = await sweepStopMarkers(root, {
+      keepProven: true,
+      timeoutMs: 30_000,
+      // The first listing never answers within the time it is given.
+      listHolders: async (_path, timeoutMs) => {
+        if (calls++ > 0) return [];
+        await new Promise((resolve) => setTimeout(resolve, timeoutMs));
+        return null;
+      },
+    });
+    const stopped = swept.dispatches.filter((dispatch) => dispatch.stopped);
+    const unlisted = swept.dispatches.filter((dispatch) => dispatch.reason === 'unlisted');
+    assert.equal(unlisted.length, 1, JSON.stringify(swept.dispatches));
+    assert.equal(stopped.length, 2, 'the slow listing left the others their time');
+  },
+);

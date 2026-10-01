@@ -17,6 +17,15 @@ From 2026-09-20 to 2026-09-29 the contract workflow ran 308 times, and 8 runs ne
 | 2026-09-30 | [36593287495](https://github.com/masonlee39/orchvia/actions/runs/36593287495)                                                                                | `AC-0049-E01` on macOS 14, Node 24, in the release run of `v0.1.23`; nothing was published                   | The test gave the fixture's Claude process 20 ms to end and expected the exact error text; the runner took longer, and the adapter rightly added that cleanup was unconfirmed                                              | The test allows 5 seconds and checks that the message begins with the error's text; with the old adapter it still fails ([TDD-0049](tdd/0049-claude-error-text.md))                                                          |
 | 2026-10-01 | [36831247274](https://github.com/masonlee39/orchvia/actions/runs/36831247274)                                                                                | `AC-0044-T01 an expired approval pauses the task` on Ubuntu, Node 22; the push run of the same commit passed | An approval lifetime of 200 ms of real time: the runner read the task after it had passed, and found it paused where the test expected the pending approval                                                                | Fixed instead of rerun: the lifetime is 60 seconds on an injected `EngineClock`, which the test moves forward; with the expiry removed from the engine the test still fails                                                  |
 
+## Found under load before a CI run failed
+
+`node scripts/stress.mjs` on a developer's machine, with three busy loops per core, found these on 2026-10-01 and 2026-10-02. None had failed in CI.
+
+- **Codex execution isolation tests** (`tests/contract/codex-execution-isolation.test.ts`), one of several in about one round of three: the fixture gave the adapter 20 ms to end its process, and the adapter rightly reported `Codex app-server process did not exit after SIGKILL` where the test expected the result. The fixture now allows 5 seconds; the one test of a cleanup that fails keeps 20 ms.
+- **`0024-E02 after the collector removed every event`**: one `collect()` is a batch of 50 ms and may remove nothing on a loaded machine. The test now collects until no event is left.
+- **`AC11 large Unicode output`**: two seconds for 1.2 MB written and synced; now twenty.
+- **`0036-Y01 the synchronous cleanup`**: ten seconds for its fixture's command to start; now sixty.
+
 ## What they have in common
 
 - **Short real-time windows:** a lifetime, deadline or poll interval of milliseconds that a loaded runner overshoots. Use `EngineClock`.

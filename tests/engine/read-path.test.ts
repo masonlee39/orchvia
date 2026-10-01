@@ -146,7 +146,10 @@ test('0024-E02 after the collector removed every event, a task-filtered read kee
     });
     write(store, ['done', 'done', 'done']);
     now += 120 * DAY;
-    policy.collect();
+    // A collection is a bounded batch of 50 ms: on a loaded machine one call may remove nothing.
+    const left = () =>
+      (store.db.prepare('SELECT COUNT(*) AS n FROM events').get() as { n: number }).n;
+    for (let batch = 0; batch < 200 && left() > 0; batch++) policy.collect();
     const floor = store.metadata('retentionFloorCursor');
     assert.ok(floor && floor !== '0', 'the collector advanced the retention floor');
     assert.equal(

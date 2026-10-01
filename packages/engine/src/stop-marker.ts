@@ -155,6 +155,11 @@ export interface StopMarkerSweepOptions {
    */
   timeoutMs?: number;
   onObservation?: (observation: StopMarkerObservation) => void;
+  /**
+   * Test seam: lists what holds a marker within `timeoutMs`, or null when that cannot be shown.
+   * Hosts leave it out.
+   */
+  listHolders?: (path: string, timeoutMs: number) => Promise<number[] | null>;
 }
 
 const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
@@ -347,8 +352,9 @@ async function endHolders(
   path: string,
   remainingMs: () => number,
   end: boolean,
+  list: (path: string, timeoutMs: number) => Promise<number[] | null> = holders,
 ): Promise<{ holders: number[] | null; ended: number; stopped: boolean }> {
-  const initial = await holders(path, remainingMs());
+  const initial = await list(path, remainingMs());
   if (initial === null) return { holders: null, ended: 0, stopped: false };
   if (!initial.length || !end) return { holders: initial, ended: 0, stopped: !initial.length };
   let found: number[] | null = initial;
@@ -358,7 +364,7 @@ async function endHolders(
     const deadline = performance.now() + (name === 'SIGTERM' ? remainingMs() / 2 : 0);
     do {
       await wait(Math.min(25, deadline - performance.now()));
-      found = await holders(path, remainingMs());
+      found = await list(path, remainingMs());
     } while (found?.length && performance.now() < deadline);
   }
   const left = found ?? initial;
@@ -919,7 +925,7 @@ async function examine(
   for (const [index, item] of looking.entries()) {
     const until = performance.now() + remaining() / (looking.length - index);
     const share = () => Math.max(0, Math.min(until, deadline) - performance.now());
-    item.held = await endHolders(item.marker, share, end);
+    item.held = await endHolders(item.marker, share, end, options.listHolders);
     item.looked =
       item.held.stopped && item.meta
         ? await strays(item.meta, share())
