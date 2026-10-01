@@ -35,6 +35,7 @@ export {
   endStopMarkersSync,
   sweepStopMarkers,
   staleStopMarkers,
+  type StopMarkerAcknowledgeOptions,
   type StopMarkerAcknowledgement,
   type StopMarkerRootSyncResult,
   type StopMarkerDispatch,

@@ -2,17 +2,24 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.31] - 2026-10-01
 
-Every steer's outcome, and evidence before its terminal (SPEC-0058).
+A start's sweep that no longer takes its whole time (SPEC-0059), and every steer's outcome (SPEC-0058).
 
 ### Added
 
+- `acknowledgeStopMarkers(directory, dispatchIds, { attested: true })` retires a dispatch that is not proven stopped, once the host's user confirmed that it stopped. It is refused while the dispatch's instance runs (`instance_live`) or a process holds its marker (`holders_left`).
+- Each stray process names when it `started`, and a swept dispatch says `waited` when the sweep waited for its strays.
 - A steer whose runtime reports its outcome later, as a Claude member's, has `steerDelivery` on its message: `pending`, then `delivered`, `not_taken` or `unknown`. A delivered steer writes the event `session.steer_delivered`, and `session.steer_undelivered` carries a `reason`, `not_taken` or `unknown`.
 - A runtime's answer to a steer may say `outcomePending: true`.
 
+### Changed
+
+- On macOS a process below an application that launchd started is that application's, whenever the application started, and no longer keeps a dispatch unstopped. Before, this held only for an application that ran before the dispatch began.
+
 ### Fixed
 
+- `sweepStopMarkers` waited for a dispatch's strays until its whole `timeoutMs` had passed, at every start, and a dispatch whose strays stayed left the following ones `unlisted`. It now looks at every dispatch once, then waits at most 3 seconds, and only the first time for a dispatch.
 - A steer whose outcome was never reported, because its turn ended without a result, the host closed or the host crashed, no longer stays `completed` without an event: it ends `unknown` when the turn's runtime finishes, or at the next start.
 - A dispatch whose runtime reported evidence before its turn ended keeps `terminal_error` or `terminal_result` as its `lastEvidence` again. 0.1.30 left `runtime_terminal`.
 

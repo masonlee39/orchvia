@@ -10,6 +10,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -42,7 +43,12 @@ export type StopMarkerReason =
 export interface StrayProcess {
   pid: number;
   command: string;
-  /** Its nearest ancestor that started before the dispatch; null when none could be found. */
+  /** When it started, as `ps` reports it (SPEC-0059 A02). */
+  started: string;
+  /**
+   * Its nearest ancestor that started before the dispatch, or the application below which it runs
+   * (SPEC-0059 A01); null when none could be found.
+   */
   ancestor: { pid: number; command: string } | null;
 }
 
@@ -78,6 +84,8 @@ export interface StopMarkerDispatch {
   stopped: boolean;
   /** SPEC-0037 K: proven stopped by this or an earlier sweep with `keepProven`, and kept. */
   proven?: true;
+  /** SPEC-0059 T03: this sweep waited for the dispatch's strays to exit; a later one does not. */
+  waited?: true;
   reason?: StopMarkerReason;
 }
 
@@ -104,8 +112,20 @@ export interface StopMarkerRootSyncResult extends StopMarkerSyncResult {
 /** SPEC-0037 K03: what `acknowledgeStopMarkers` did with each dispatch it was given. */
 export interface StopMarkerAcknowledgement {
   removed: string[];
-  refused: { dispatchId: string; reason: 'not_proven' }[];
+  refused: {
+    dispatchId: string;
+    /** The last three only with `attested` (SPEC-0059 R02). */
+    reason: 'not_proven' | 'instance_live' | 'holders_left' | 'unlisted';
+  }[];
   missing: string[];
+}
+
+export interface StopMarkerAcknowledgeOptions {
+  /**
+   * SPEC-0059 R01: the host's user confirmed that these dispatches stopped. Their records are
+   * removed without a proof, unless their instance still runs or a process still holds the marker.
+   */
+  attested?: boolean;
 }
 
 export interface StopMarkersOptions {
@@ -126,8 +146,9 @@ export interface StopMarkerSweepOptions {
    */
   keepProven?: boolean;
   /**
-   * The whole sweep's time; 5,000 ms by default. A sweep that finds a process that may have
-   * dropped a marker looks again every 200 ms while this lasts.
+   * The whole sweep's time; 5,000 ms by default. Each dispatch is looked at once within its share
+   * of it. Then a sweep that found processes that may have dropped a marker looks again every
+   * 200 ms, for at most three seconds, and only the first time for a dispatch (SPEC-0059 T).
    */
   timeoutMs?: number;
   onObservation?: (observation: StopMarkerObservation) => void;
@@ -253,16 +274,35 @@ async function strays(
   } catch {
     return null;
   }
+  return sortStrays(candidates, rows, earliest(marker.startedAt), process.pid, process.platform);
+}
+
+/** On macOS, an application's own executable that launchd started (SPEC-0045 K03). */
+const launchdApplication = (row: Pick<ProcessRow, 'ppid' | 'command'>, platform: NodeJS.Platform) =>
+  platform === 'darwin' && row.ppid === 1 && /\.app\/Contents\/MacOS\/[^/]+$/.test(row.command);
+
+/**
+ * Which of `candidates` count as strays of a dispatch that began at `since`, and which are another
+ * tool's (SPEC-0045 K01). SPEC-0059 A01: a candidate below an application that launchd started is
+ * that application's, whenever the application started; the application itself, when it is a
+ * candidate, is judged as any other process. Exported for tests.
+ */
+export function sortStrays(
+  candidates: number[],
+  rows: ProcessRow[],
+  since: number,
+  self: number,
+  platform: NodeJS.Platform,
+): Strays {
   const byPid = new Map(rows.map((row) => [row.pid, row]));
   const ownTree = (pid: number): boolean => {
     for (let row = byPid.get(pid), steps = 0; row && steps < 4096; steps++) {
-      if (row.pid === process.pid) return true;
+      if (row.pid === self) return true;
       if (row.ppid === row.pid || row.ppid <= 0) return false;
       row = byPid.get(row.ppid);
     }
     return false;
   };
-  const since = earliest(marker.startedAt);
   // Invariant 2: only a process that started more than lstart's second before the dispatch.
   const before = (row: ProcessRow) => {
     const started = Date.parse(row.started);
@@ -273,7 +313,13 @@ async function strays(
     const row = byPid.get(pid);
     if (!row || before(row) || ownTree(pid)) continue; // Gone since lsof listed it, or not new.
     let ancestor: ProcessRow | undefined;
+    let application = false;
     for (let up = byPid.get(row.ppid), steps = 0; up && steps < 4096; steps++) {
+      if (launchdApplication(up, platform)) {
+        ancestor = up;
+        application = true;
+        break;
+      }
       if (before(up)) {
         ancestor = up;
         break;
@@ -284,10 +330,11 @@ async function strays(
     const item: StrayProcess = {
       pid,
       command: row.command,
+      started: row.started,
       ancestor: ancestor ? { pid: ancestor.pid, command: ancestor.command } : null,
     };
     // Invariant 1: an ancestor that exited leaves its children to process 1, so they count.
-    (countsAsStray(ancestor) ? found.counted : found.foreign).push(item);
+    (!application && countsAsStray(ancestor, platform) ? found.counted : found.foreign).push(item);
   }
   return found;
 }
@@ -700,7 +747,11 @@ interface DispatchRecord {
   dispatchId: string;
   workspace: string;
   startedAt: number;
+  /** SPEC-0059 T03: when a sweep waited for this dispatch's strays; no later sweep waits again. */
+  strayWaitAt?: string;
 }
+/** The longest a sweep waits for strays to exit, over all its dispatches (SPEC-0059 T02). */
+const STRAY_WAIT_MS = 3000;
 const readJson = (path: string): unknown => {
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
@@ -728,6 +779,20 @@ const dispatchRecord = (value: unknown): DispatchRecord | undefined => {
     : undefined;
 };
 
+/** One dispatch of a dead instance, as a sweep or a stale check works through it. */
+interface Examined {
+  found: StopMarkerDispatch;
+  meta: DispatchRecord | undefined;
+  marker: string;
+  record: string;
+  proof: string;
+  files: string[];
+  /** False when the dispatch needs no listing: proven before, or of an unknown instance. */
+  look: boolean;
+  held?: Awaited<ReturnType<typeof endHolders>>;
+  looked?: Strays | null;
+}
+
 async function examine(
   directory: string,
   end: boolean,
@@ -742,6 +807,8 @@ async function examine(
   const remaining = () => Math.max(0, deadline - performance.now());
   // Throws when the process table cannot be read: without it no instance can be told dead.
   const rows = new Map(processTable().map((row) => [row.pid, row]));
+  const examined: Examined[] = [];
+  const dead: string[] = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const instance = join(root, entry.name);
@@ -756,7 +823,6 @@ async function examine(
       const base = tag.slice(0, -'.tag'.length);
       const meta = dispatchRecord(readJson(join(instance, `${base}.json`)));
       const proof = join(instance, `${base}.proven`);
-      const files = [tag, `${base}.sh`, `${base}.json`, `${base}.proven`];
       const found: StopMarkerDispatch = {
         dispatchId: meta?.dispatchId ?? null,
         instance,
@@ -766,6 +832,17 @@ async function examine(
         strays: [],
         stopped: false,
       };
+      const item: Examined = {
+        found,
+        meta,
+        marker: join(instance, tag),
+        record: join(instance, `${base}.json`),
+        proof,
+        files: [tag, `${base}.sh`, `${base}.json`, `${base}.proven`].map((file) =>
+          join(instance, file),
+        ),
+        look: false,
+      };
       // Without its record an instance may be one being created now: never signalled.
       if (!record) found.reason = 'instance_unknown';
       else if (meta && existsSync(proof)) {
@@ -773,71 +850,116 @@ async function examine(
         found.stopped = true;
         found.proven = true;
         if (end && !options.keepProven)
-          for (const file of files) rmSync(join(instance, file), { force: true });
-      } else {
-        const held = await endHolders(join(instance, tag), remaining, end);
-        let looked: Strays | null =
-          held.stopped && meta ? await strays(meta, remaining()) : { counted: [], foreign: [] };
-        // The dead host's own runtime, such as Claude Code, can take a moment to notice that its
-        // input closed; a sweep looks again while its time lasts. A stale check does not wait.
-        while (end && meta && looked?.counted.length && remaining() > 400) {
-          await wait(200);
-          // A look that fails keeps what the last one found: still not stopped, and still named.
-          const again = await strays(meta, remaining());
-          if (again === null) break;
-          looked = again;
-        }
-        const left = looked ? looked.counted.map((item) => item.pid) : null;
-        found.holders = held.holders ?? [];
-        found.ended = held.ended;
-        found.strays = left ?? [];
-        Object.assign(
-          found,
-          detail(looked?.counted ?? [], 'strayProcesses'),
-          detail(looked?.foreign ?? [], 'foreignProcesses'),
+          for (const file of item.files) rmSync(file, { force: true });
+      } else item.look = true;
+      examined.push(item);
+    }
+    if (record) dead.push(instance);
+  }
+  // SPEC-0059 T01: every dispatch is looked at once, within its share of the time that is left, and
+  // nothing waits. A dispatch whose listing is slow, or whose strays stay, takes no other's time.
+  const looking = examined.filter((item) => item.look);
+  for (const [index, item] of looking.entries()) {
+    const until = performance.now() + remaining() / (looking.length - index);
+    const share = () => Math.max(0, Math.min(until, deadline) - performance.now());
+    item.held = await endHolders(item.marker, share, end);
+    item.looked =
+      item.held.stopped && item.meta
+        ? await strays(item.meta, share())
+        : { counted: [], foreign: [] };
+  }
+  // SPEC-0059 T02, T03: then the dispatches that only their strays keep unstopped are looked at
+  // again, together. The dead host's own runtime, such as Claude Code, can take a moment to notice
+  // that its input closed. A stray that is the user's own process never exits, so the wait is
+  // bounded, and a dispatch is waited for by one sweep only. A stale check does not wait.
+  let waiting = looking.filter(
+    (item) => end && item.meta && !item.meta.strayWaitAt && item.looked?.counted.length,
+  );
+  const waitUntil = performance.now() + Math.min(STRAY_WAIT_MS, remaining() - 400);
+  const waitLeft = () => Math.max(0, Math.min(waitUntil, deadline) - performance.now());
+  for (const item of waiting) item.found.waited = true;
+  while (waiting.length && waitLeft() > 0) {
+    await wait(Math.min(200, waitLeft()));
+    const still: Examined[] = [];
+    for (const item of waiting) {
+      // A look that fails keeps what the last one found: still not stopped, and still named.
+      const again = await strays(item.meta!, remaining());
+      if (again === null) continue;
+      item.looked = again;
+      if (again.counted.length) still.push(item);
+    }
+    waiting = still;
+  }
+  for (const item of examined) {
+    const { found, meta } = item;
+    if (item.look) {
+      const held = item.held!;
+      const looked = item.looked ?? null;
+      const left = looked ? looked.counted.map((stray) => stray.pid) : null;
+      found.holders = held.holders ?? [];
+      found.ended = held.ended;
+      found.strays = left ?? [];
+      Object.assign(
+        found,
+        detail(looked?.counted ?? [], 'strayProcesses'),
+        detail(looked?.foreign ?? [], 'foreignProcesses'),
+      );
+      found.stopped = held.stopped && meta !== undefined && left !== null && !left.length;
+      if (!found.stopped)
+        found.reason =
+          held.holders === null || left === null
+            ? 'unlisted'
+            : !held.stopped
+              ? 'holders_left'
+              : !meta
+                ? 'metadata_missing'
+                : 'strays';
+      if (end && found.stopped && options.keepProven) {
+        // Invariant 1 (SPEC-0037): the proof is written only once the dispatch is proven.
+        writeFileSync(
+          item.proof,
+          JSON.stringify({
+            version: 1,
+            dispatchId: meta!.dispatchId,
+            provenAt: new Date().toISOString(),
+          }) + '\n',
+          { mode: 0o600 },
         );
-        found.stopped = held.stopped && meta !== undefined && left !== null && !left.length;
-        if (!found.stopped)
-          found.reason =
-            held.holders === null || left === null
-              ? 'unlisted'
-              : !held.stopped
-                ? 'holders_left'
-                : !meta
-                  ? 'metadata_missing'
-                  : 'strays';
-        if (end && found.stopped && options.keepProven) {
-          // Invariant 1 (SPEC-0037): the proof is written only once the dispatch is proven.
+        found.proven = true;
+      } else if (end && found.stopped) for (const file of item.files) rmSync(file, { force: true });
+      else if (found.waited && meta) {
+        // Renamed into place: a record cut short would leave the dispatch without its metadata.
+        try {
+          const partial = `${item.record}.partial`;
           writeFileSync(
-            proof,
-            JSON.stringify({
-              version: 1,
-              dispatchId: meta!.dispatchId,
-              provenAt: new Date().toISOString(),
-            }) + '\n',
+            partial,
+            JSON.stringify({ ...meta, strayWaitAt: new Date().toISOString() }) + '\n',
             { mode: 0o600 },
           );
-          found.proven = true;
-        } else if (end && found.stopped)
-          for (const file of files) rmSync(join(instance, file), { force: true });
+          renameSync(partial, item.record);
+        } catch {
+          // Not recorded: the next sweep waits once more.
+        }
       }
-      result.dispatches.push(found);
-      report(options.onObservation, {
-        kind: end ? 'sweep' : 'stale',
-        dispatchId: found.dispatchId,
-        holders: found.holders.length,
-        ended: found.ended,
-        strays: found.strays.length,
-        ...detail(found.strayProcesses ?? [], 'strayProcesses'),
-        ...detail(found.foreignProcesses ?? [], 'foreignProcesses'),
-        stopped: found.stopped,
-        ...(found.reason ? { reason: found.reason } : {}),
-      });
     }
-    // A record or wrapper without its marker never ran a command: the marker is written first.
-    if (end && record && !readdirSync(instance).some((file) => file.endsWith('.tag')))
-      rmSync(instance, { recursive: true, force: true });
+    result.dispatches.push(found);
+    report(options.onObservation, {
+      kind: end ? 'sweep' : 'stale',
+      dispatchId: found.dispatchId,
+      holders: found.holders.length,
+      ended: found.ended,
+      strays: found.strays.length,
+      ...detail(found.strayProcesses ?? [], 'strayProcesses'),
+      ...detail(found.foreignProcesses ?? [], 'foreignProcesses'),
+      stopped: found.stopped,
+      ...(found.reason ? { reason: found.reason } : {}),
+    });
   }
+  // A record or wrapper without its marker never ran a command: the marker is written first.
+  if (end)
+    for (const instance of dead)
+      if (!readdirSync(instance).some((file) => file.endsWith('.tag')))
+        rmSync(instance, { recursive: true, force: true });
   result.stopped = result.dispatches.every((dispatch) => dispatch.stopped);
   return result;
 }
@@ -845,13 +967,39 @@ async function examine(
 /**
  * SPEC-0037 K03: removes the files of dispatches that a sweep with `keepProven` proved stopped,
  * once the host has acted on the proof, and the instance directory when nothing is left in it.
- * A dispatch not proven is refused; one not found is missing. Removing the marker first means an
+ * A dispatch not proven is refused, unless the host passes `attested` (SPEC-0059 R01); one not
+ * found is missing. Removing the marker first means an
  * interrupted call leaves either a proven dispatch or files without a marker, which the next
  * sweep removes. Repeating a call changes nothing more. Needs no engine; never touches the root.
  */
+/**
+ * SPEC-0059 R02: why a dispatch that is not proven cannot be retired on the host's word, or null.
+ * A user's confirmation answers for processes that may have dropped the marker. It does not
+ * answer for a host that still runs, or for a process that holds the marker: that one is the
+ * dispatch's beyond doubt, and a sweep ends it.
+ */
+function attestable(
+  instance: string,
+  tag: string,
+  meta: DispatchRecord,
+  rows: Map<number, ProcessRow> | undefined,
+): 'instance_live' | 'holders_left' | 'unlisted' | null {
+  const record = instanceRecord(readJson(join(instance, 'instance.json')));
+  if (!rows) return 'unlisted';
+  if (!record || rows.get(record.pid)?.started === record.started) return 'instance_live';
+  let holding: number[] | null;
+  try {
+    holding = listHoldersSync([join(instance, tag)], earliest(meta.startedAt), 5000);
+  } catch {
+    holding = null;
+  }
+  return holding === null ? 'unlisted' : holding.length ? 'holders_left' : null;
+}
+
 export function acknowledgeStopMarkers(
   directory: string,
   dispatchIds: string[],
+  options: StopMarkerAcknowledgeOptions = {},
 ): StopMarkerAcknowledgement {
   const result: StopMarkerAcknowledgement = { removed: [], refused: [], missing: [] };
   const wanted = new Set(dispatchIds);
@@ -875,8 +1023,12 @@ export function acknowledgeStopMarkers(
         if (!meta || !wanted.has(meta.dispatchId)) continue;
         seen.add(meta.dispatchId);
         if (!existsSync(join(instance, `${base}.proven`))) {
-          result.refused.push({ dispatchId: meta.dispatchId, reason: 'not_proven' });
-          continue;
+          const refusal =
+            options.attested === true ? attestable(instance, tag, meta, rows) : 'not_proven';
+          if (refusal) {
+            result.refused.push({ dispatchId: meta.dispatchId, reason: refusal });
+            continue;
+          }
         }
         // Invariant 2 (SPEC-0037): the marker first, the proof last.
         for (const file of [tag, `${base}.json`, `${base}.sh`, `${base}.proven`])
