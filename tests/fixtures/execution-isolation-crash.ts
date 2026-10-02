@@ -43,6 +43,18 @@ const task = (await engine.call('tasks.create', {
   idempotencyKey: 'original',
 })) as TaskSnapshot;
 progress(`task ${task.status}`);
+// A stall has stopped here twice in CI and never locally. Each second says whether this process
+// still runs its timers, how late they are, and what the scheduler holds, so that the next stall
+// tells a deadline that did not fire from a process that did not run.
+const began = performance.now();
+let beats = 0;
+const heartbeat = setInterval(() => {
+  const late = Math.round(performance.now() - began - ++beats * 1000);
+  void (async () => engine.call('scheduler.get', {}))()
+    .then((status) => progress(`alive ${beats} s, ${late} ms late, ${JSON.stringify(status)}`))
+    .catch((error) => progress(`alive ${beats} s, ${late} ms late, status failed: ${error}`));
+}, 1000);
+heartbeat.unref();
 let session: SessionSnapshot;
 let seen = '';
 do {
@@ -51,6 +63,7 @@ do {
   const state = `session ${session.status}, task ${((await engine.call('tasks.get', { taskId: task.id })) as TaskSnapshot).status}`;
   if (state !== seen) progress((seen = state));
 } while (session.status !== 'outcome_unknown');
+clearInterval(heartbeat);
 end({ type: 'error', outcome: 'unknown', message: 'observer closed; no stop proof yet' });
 await new Promise<void>((r) => setImmediate(r));
 const original = Store.prototype.event;

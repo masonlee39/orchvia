@@ -552,6 +552,10 @@ Pull request #84 carried SPEC-0059 and the version 0.1.31, and released SPEC-005
 
 Pull request #86 carried SPEC-0060 and the version 0.1.32. A local Claude Code session merged it and pushed the tag `v0.1.32` on the merge commit `7679e20`, on the owner's authorization ([36958645837](https://github.com/masonlee39/orchvia/actions/runs/36958645837)). The owner approved the deployments, and every job passed at the first attempt. npm lists 0.1.32 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.32 with its wheel and sdist.
 
+## The thirty-second release, 0.1.33
+
+Pull request #88 carried SPEC-0062 and the version 0.1.33, and released SPEC-0061, which pull request #87 had merged without a version. A local Claude Code session merged it and pushed the tag `v0.1.33` on the merge commit `9d2ef28`, on the owner's authorization ([36996226968](https://github.com/masonlee39/orchvia/actions/runs/36996226968)). At the first attempt the contract job on macOS with Node.js 22 failed in `A2-09`, whose owner fixture stayed at `session running, task running` for 30 seconds, and no publishing job ran. The owner chose to run the failed job again; it passed, the owner approved the deployments, and the other jobs passed. npm lists 0.1.33 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.33 with its wheel and sdist. The failure is in [ci-flakes.md](../ci-flakes.md).
+
 ## P10: no document names the latest release (D-rel-3)
 
 On 2026-09-27 the owner chose D-rel-3: a release is recorded by the next release pull request, and no document names the latest release.
