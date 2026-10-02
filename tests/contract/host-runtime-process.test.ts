@@ -175,7 +175,7 @@ test(
 
 test(
   'AC-H06 reusable suite detects a bridge that falsely equates main-turn result with full stop',
-  { timeout: 10000 },
+  { timeout: 90000 },
   async () => {
     const negative = fileURLToPath(
       new URL('../fixtures/host-contract-negative.ts', import.meta.url),
@@ -185,7 +185,8 @@ test(
     delete env.NODE_TEST_CONTEXT;
     await assert.rejects(
       execute(process.execPath, ['--test', '--test-name-pattern=AC-H06', negative], {
-        timeout: 6000,
+        // The suite gives a step eight seconds before it says that the bridge is wrong.
+        timeout: 60000,
         env,
       }),
       (error) => {
