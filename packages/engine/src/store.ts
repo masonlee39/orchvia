@@ -478,23 +478,54 @@ export class Store {
       JSON.stringify([...features, { name, engineVersion: VERSION }]),
     );
   }
+  /**
+   * The journals of the artifacts registered in the transaction in progress, with their sizes
+   * (SPEC-0061 J01); undefined outside a transaction this store began.
+   */
+  private registered: Map<string, number> | undefined;
+  /** Told the size of each file the store removes under stateDir (SPEC-0061 J01). */
+  onFileRemoved?: (bytes: number) => void;
   /** `at`, when given, is the transaction's one time, read before it began (SPEC-0057). */
   transaction<T>(fn: () => T, at?: number): T {
     this.assertWritable();
     this.db.exec('BEGIN IMMEDIATE');
     // One reading for the whole transaction: every time written in it is this one (SPEC-0030 B01).
     this.commitTime = at ?? this.now();
+    const registered = (this.registered = new Map<string, number>());
+    let result: T;
     try {
-      const result = fn();
+      result = fn();
       this.db.exec('COMMIT');
-      return result;
     } catch (error) {
       if (this.db.isTransaction) this.db.exec('ROLLBACK');
       this.storageFailure(error);
       throw error;
     } finally {
       this.commitTime = undefined;
+      this.registered = undefined;
     }
+    this.removeJournals(registered);
+    return result;
+  }
+  /**
+   * SPEC-0061 J01: a journal has no use once the transaction that registered its artifact has
+   * committed (invariant 1). Nothing here changes that transaction's result (invariant 3): a
+   * journal that cannot be removed stays for the next start, which removes it (J03).
+   */
+  private removeJournals(journals: Map<string, number>): void {
+    if (!journals.size) return;
+    try {
+      this.options.fault?.('artifact.committed');
+    } catch {
+      return; // A test stops here, as a crash would: the journals stay for the next start.
+    }
+    for (const [journal, bytes] of journals)
+      try {
+        unlinkSync(journal);
+        this.onFileRemoved?.(bytes);
+      } catch {
+        // Gone already, or left for the next start.
+      }
   }
   /** The time of a write: the reading of the transaction in progress, or a new one outside it. */
   wallTime(): number {
@@ -1110,10 +1141,17 @@ export class Store {
       ref = `sha256:${digest}`;
     const record = { id: ref, path, sha256: digest, sizeBytes: Buffer.byteLength(text) };
     const journal = join(this.stateDir, 'file-commits', `${digest}.json`);
+    const journalText = JSON.stringify({ ref, ...record });
+    // SPEC-0061 J01: in a transaction of this store, which removes the journal once it committed.
+    const register = () =>
+      this.write(() => {
+        this.put('artifacts', ref, record);
+        this.registered?.set(journal, Buffer.byteLength(journalText));
+      });
     // SPEC-0057 W01: already on disk, synced and verified by prepareArtifact.
     if (this.prepared.delete(digest)) {
       try {
-        this.put('artifacts', ref, record);
+        register();
         this.options.fault?.('artifact.registered');
         return ref;
       } catch (error) {
@@ -1125,7 +1163,6 @@ export class Store {
       if (realpathSync(directory) !== directory)
         fail('UNTRUSTED_PATH', 'Artifact directory changed');
     try {
-      const journalText = JSON.stringify({ ref, ...record });
       atomicFile(journal, journalText);
       this.onFileWritten?.(Buffer.byteLength(journalText));
       this.options.fault?.('artifact.prepared');
@@ -1140,9 +1177,10 @@ export class Store {
       )
         fail('ARTIFACT_CORRUPT', 'Existing artifact failed digest verification');
       this.options.fault?.('artifact.renamed');
-      this.put('artifacts', ref, record);
+      register();
       this.options.fault?.('artifact.registered');
-      // Journal removal is deferred until recovery when the outer transaction is known committed.
+      // The journal is removed once the transaction that registered the artifact has committed
+      // (SPEC-0061 J01), or by the next start.
       return ref;
     } catch (error) {
       this.storageFailure(error);

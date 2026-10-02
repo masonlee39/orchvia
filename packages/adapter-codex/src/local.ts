@@ -778,7 +778,9 @@ function hookShell(): string {
 
 /**
  * The dispatch's private channel from the hook to the host: a Unix socket in a 0700 directory and
- * a token, given to Codex's environment in names that commands never see (ORCHVIA_HOOK_*).
+ * a token, given to Codex's environment in names kept out of a command's own environment
+ * (ORCHVIA_HOOK_*). A command may read them from the Codex process on macOS; with the network off
+ * it cannot connect to the socket (SPEC-0061 E).
  */
 export async function hostHookChannel(
   hook: CodexHostHook,

@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 
 /** One process of a tree, with the start time that tells it apart from a later reuse of its PID. */
 export interface TreeProcess {
@@ -17,14 +17,14 @@ export interface ProcessRow {
   command: string;
 }
 
-/** The process table now; throws when it cannot be read within `timeoutMs`. */
-export function processTable(timeoutMs = 5000): ProcessRow[] {
-  const out = execFileSync('ps', ['-axo', 'pid=,ppid=,pgid=,lstart=,comm='], {
-    encoding: 'utf8',
-    timeout: Math.max(1, Math.ceil(timeoutMs)),
-    maxBuffer: 16 * 1024 * 1024,
-    env: { ...process.env, LC_ALL: 'C' },
-  });
+const PS_ARGUMENTS = ['-axo', 'pid=,ppid=,pgid=,lstart=,comm='];
+const psOptions = (timeoutMs: number) => ({
+  encoding: 'utf8' as const,
+  timeout: Math.max(1, Math.ceil(timeoutMs)),
+  maxBuffer: 16 * 1024 * 1024,
+  env: { ...process.env, LC_ALL: 'C' },
+});
+function rows(out: string): ProcessRow[] {
   return (
     out
       .split('\n')
@@ -44,24 +44,41 @@ export function processTable(timeoutMs = 5000): ProcessRow[] {
 }
 
 /**
+ * The process table now; throws when it cannot be read within `timeoutMs`. It holds the thread
+ * while `ps` runs, some tens of milliseconds: for a path that cannot wait (SPEC-0061 T02).
+ */
+export function processTable(timeoutMs = 5000): ProcessRow[] {
+  return rows(execFileSync('ps', PS_ARGUMENTS, psOptions(timeoutMs)));
+}
+/** SPEC-0061 T01: the process table now, read without holding the thread; rejects as above. */
+export function processTableAsync(timeoutMs = 5000): Promise<ProcessRow[]> {
+  return new Promise((resolve, reject) =>
+    execFile('ps', PS_ARGUMENTS, psOptions(timeoutMs), (error, stdout) =>
+      error ? reject(error) : resolve(rows(stdout)),
+    ),
+  );
+}
+
+/**
  * The descendants of `pid` now, on macOS and Linux (SPEC-0034 A03). A process that already left
  * the tree, as a backgrounded command does when its shell exits, is not among them. Empty when
- * the process table cannot be read, or on Windows.
+ * the process table cannot be read, or on Windows. SPEC-0061 T01: listed without holding the thread.
  */
-export function descendantsOf(pid: number): TreeProcess[] {
+export async function descendantsOf(pid: number): Promise<TreeProcess[]> {
   if (process.platform === 'win32') return [];
-  let rows: ProcessRow[];
   try {
-    rows = processTable();
+    return descendants(pid, await processTableAsync());
   } catch {
     return [];
   }
+}
+function descendants(pid: number, table: ProcessRow[]): TreeProcess[] {
   const found: TreeProcess[] = [];
   const queue = [pid];
   const seen = new Set(queue);
   while (queue.length) {
     const parent = queue.shift()!;
-    for (const row of rows)
+    for (const row of table)
       if (row.ppid === parent && !seen.has(row.pid)) {
         seen.add(row.pid);
         queue.push(row.pid);
@@ -78,31 +95,33 @@ export function descendantsOf(pid: number): TreeProcess[] {
  */
 export async function endProcesses(processes: TreeProcess[], graceMs: number): Promise<void> {
   if (!processes.length || process.platform === 'win32') return;
-  const current = (): { pid: number; group: boolean }[] => {
-    let rows: ProcessRow[];
+  // SPEC-0061 T01: listed without holding the thread, each time.
+  const current = async (): Promise<{ pid: number; group: boolean }[]> => {
+    let table: ProcessRow[];
     try {
-      rows = processTable();
+      table = await processTableAsync();
     } catch {
       return [];
     }
-    const own = rows.find((row) => row.pid === process.pid)?.pgid;
+    const own = table.find((row) => row.pid === process.pid)?.pgid;
     return processes.flatMap((target) => {
-      const row = rows.find((candidate) => candidate.pid === target.pid);
+      const row = table.find((candidate) => candidate.pid === target.pid);
       if (!row || row.started !== target.started || target.pid === process.pid) return [];
       return [{ pid: target.pid, group: row.pgid === target.pid && row.pgid !== own }];
     });
   };
-  const signal = (name: NodeJS.Signals) => {
-    for (const { pid, group } of current())
+  // Invariant: a listing's processes are signalled in the turn in which it was read.
+  const signal = async (name: NodeJS.Signals) => {
+    for (const { pid, group } of await current())
       try {
         process.kill(group ? -pid : pid, name);
       } catch {
         // Gone already.
       }
   };
-  signal('SIGTERM');
+  await signal('SIGTERM');
   const deadline = performance.now() + graceMs;
-  while (performance.now() < deadline && current().length)
+  while (performance.now() < deadline && (await current()).length)
     await new Promise((resolve) => setTimeout(resolve, 25));
-  signal('SIGKILL');
+  await signal('SIGKILL');
 }

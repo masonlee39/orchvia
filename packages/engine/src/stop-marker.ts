@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, sep } from 'node:path';
-import { processTable, type ProcessRow } from './process-tree.ts';
+import { processTable, processTableAsync, type ProcessRow } from './process-tree.ts';
 import type { RuntimeStopObserver } from './types.ts';
 
 /** The files that mark one dispatch's commands (SPEC-0034 B01). */
@@ -278,7 +278,8 @@ async function strays(
   if (!candidates.length) return { counted: [], foreign: [] };
   let rows: ProcessRow[];
   try {
-    rows = processTable();
+    // SPEC-0061 T01: without holding the thread, as the listing of the workspace above.
+    rows = await processTableAsync();
   } catch {
     return null;
   }
@@ -869,7 +870,7 @@ async function examine(
   const deadline = performance.now() + (options.timeoutMs ?? 5000);
   const remaining = () => Math.max(0, deadline - performance.now());
   // Throws when the process table cannot be read: without it no instance can be told dead.
-  const rows = new Map(processTable().map((row) => [row.pid, row]));
+  const rows = new Map((await processTableAsync()).map((row) => [row.pid, row]));
   const examined: Examined[] = [];
   const dead: string[] = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {

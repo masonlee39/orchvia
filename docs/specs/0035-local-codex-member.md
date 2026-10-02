@@ -33,7 +33,7 @@ A host wants to run the Codex CLI that the user installed and signed in to as a 
 - **B01** The adapter uses Codex's named permission profiles (`default_permissions` and `permissions.<name>.filesystem`) instead of the sandbox parameter, because only they keep an approved command inside the profile. The read profile: the file system readable, `none` for the connection home, the state directory, `denyRead` and the stop marker root's other instances; the stop marker instance directory readable. The write profile adds the workspace (or `writePaths`) and the temporary directory as writable (D-35-4): Codex's `:tmpdir`, the whole of `TMPDIR`, not a directory of the dispatch's own. The settings are `-c default_permissions="orchvia"` and `-c permissions.orchvia={filesystem={…}}`; a `none` path wins over the readable root and over a writable workspace that contains it.
 - **B02** `denyRead: string[]` takes the same shape as the Claude adapter's (absolute or workspace-relative paths), so one list can fence both members (R1).
 - **B03** A file change is checked as in SPEC-0038 in every mode, because Codex applies approved patches outside the sandbox.
-- **B04** Commands see no credentials (SPEC-0038 P02), and `SSH_AUTH_SOCK` is not passed to them.
+- **B04** Commands see no credentials (SPEC-0038 P02), and `SSH_AUTH_SOCK` is not passed to them. This holds for a command's own environment; on macOS a command can read the Codex process's environment, where these variables are ([SPEC-0061](0061-review-second-batch.md) E01).
 
 ## C. The connection API
 
@@ -80,7 +80,7 @@ A host wants to run the Codex CLI that the user installed and signed in to as a 
 
 ## H. Host tools
 
-- **H01** `hostMcpServers: { [name]: { command, args?, env?, approval? } | { url, token, approval? } }`. A URL server's token reaches Codex through an environment variable whose name contains `TOKEN`, so commands never see it. `approval` is `'ask'` (default, Codex's `prompt`, through G01) or `'approve'` (Codex's `approve`, no question). A stdio server's `env` reaches it through the app-server's environment and `env_vars`, never the command line, and its names are excluded from commands' environment; a URL server's token goes in `ORCHVIA_HOST_MCP_TOKEN_<n>`. Codex's own MCP handshake carries the token.
+- **H01** `hostMcpServers: { [name]: { command, args?, env?, approval? } | { url, token, approval? } }`. A URL server's token reaches Codex through an environment variable whose name contains `TOKEN`, so it is not in a command's own environment; on macOS a command can read it from the Codex process, so the token is not a secret from the member ([SPEC-0061](0061-review-second-batch.md) E01). `approval` is `'ask'` (default, Codex's `prompt`, through G01) or `'approve'` (Codex's `approve`, no question). A stdio server's `env` reaches it through the app-server's environment and `env_vars`, never the command line, and its names are excluded from commands' environment; a URL server's token goes in `ORCHVIA_HOST_MCP_TOKEN_<n>`. Codex's own MCP handshake carries the token.
 - **H02** Host MCP servers run outside the command sandbox; what they can reach is the host's responsibility.
 
 ## R. The host's command rules

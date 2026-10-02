@@ -548,6 +548,10 @@ Pull request #82 carried SPEC-0056 and SPEC-0057, the benchmark's pre-registrati
 
 Pull request #84 carried SPEC-0059 and the version 0.1.31, and released SPEC-0058, which pull request #83 had merged without a version. A local Claude Code session merged it and pushed the tag `v0.1.31` on the merge commit `e5f527b`, on the owner's authorization ([36845377948](https://github.com/masonlee39/orchvia/actions/runs/36845377948)). The owner approved the deployments, and every job passed at the first attempt. npm lists 0.1.31 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.31 with its wheel and sdist.
 
+## The thirty-first release, 0.1.32
+
+Pull request #86 carried SPEC-0060 and the version 0.1.32. A local Claude Code session merged it and pushed the tag `v0.1.32` on the merge commit `7679e20`, on the owner's authorization ([36958645837](https://github.com/masonlee39/orchvia/actions/runs/36958645837)). The owner approved the deployments, and every job passed at the first attempt. npm lists 0.1.32 as the `latest` version of all five packages, and PyPI lists `orchvia` 0.1.32 with its wheel and sdist.
+
 ## P10: no document names the latest release (D-rel-3)
 
 On 2026-09-27 the owner chose D-rel-3: a release is recorded by the next release pull request, and no document names the latest release.
