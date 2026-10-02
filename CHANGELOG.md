@@ -2,6 +2,21 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.1.32] - 2026-10-02
+
+Corrections from a review of 0.1.31 (SPEC-0060). Upgrade if a host runs members that write commands: the first correction ends a way to stop the engine.
+
+### Fixed
+
+- Masking what looks like a secret in a progress event took time that grew with the square or the cube of a command's length: a command of 6,000 characters such as `token-token-token-…`, which a model can be led to write, held the engine's only thread for 8 seconds, and one of 10,000 for 17. It now takes time proportional to the text, and masks the same things.
+- Taking the Codex start lock never ended when the lock file in the temporary directory could not be read or removed. It now ends at its time with `CODEX_START_LOCK_TIMEOUT`, which names the file. What lies at the lock's path and is not a regular file of this user (a symbolic link, a FIFO, another user's file) is no longer read; the start fails at once with the new code `CODEX_START_LOCK_UNUSABLE`.
+- `store.sqlite-wal`, `store.sqlite-shm` and `owner.sqlite-journal` of a new store had mode 0644 inside the 0700 state directory until the store was closed. They are 0600 from the first start, and a store's files that an earlier version left are set at its next start.
+- The limit of tool calls per dispatch and the message rate limit each read a whole table at every call, so a tool call took 39 ms and `messages.send` 47 ms in a store with 100,000 rows. Two new indexes, `tool_calls_dispatch` and `messages_sender_created`, answer them; a store gets them at its next start, and an earlier version still opens it.
+
+### Changed
+
+- The message of an `api_retry` progress is masked as commands and text are.
+
 ## [0.1.31] - 2026-10-01
 
 A start's sweep that no longer takes its whole time (SPEC-0059), and every steer's outcome (SPEC-0058).

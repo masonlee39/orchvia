@@ -7,14 +7,13 @@ import {
   realpathSync,
   readFileSync,
   renameSync,
-  chmodSync,
   copyFileSync,
 } from 'node:fs';
 import { join, isAbsolute, relative, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
 import { StorageGovernance } from './storage.ts';
-import { atomicFile, fileDigest, syncDirectory } from './durable-files.ts';
+import { atomicFile, fileDigest, privateDatabaseFiles, syncDirectory } from './durable-files.ts';
 import { createArchive, verifyArchive, archiveArtifact } from './archive.ts';
 import { requestDigest, type RetryIdentity } from './identity.ts';
 import { fail } from './errors.ts';
@@ -206,7 +205,7 @@ export class ControlPlane {
       this.lock.close();
       fail('HOST_ALREADY_RUNNING', 'Another host owns the control directory');
     }
-    chmodSync(join(directories.controlDir, 'owner.sqlite'), 0o600);
+    privateDatabaseFiles(join(directories.controlDir, 'owner.sqlite'));
     try {
       this.manifest = existsSync(this.path())
         ? this.read()

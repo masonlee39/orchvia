@@ -1,6 +1,11 @@
 import { completeMigrationBackup } from './archive.ts';
 import { lstat, readFile, realpath } from 'node:fs/promises';
-import { atomicFile, atomicFileAsync, syncDirectory } from './durable-files.ts';
+import {
+  atomicFile,
+  atomicFileAsync,
+  privateDatabaseFiles,
+  syncDirectory,
+} from './durable-files.ts';
 import { DatabaseSync } from 'node:sqlite';
 import {
   mkdirSync,
@@ -279,7 +284,8 @@ export class Store {
     }
     let database: DatabaseSync | undefined;
     try {
-      chmodSync(join(this.stateDir, 'owner.sqlite'), 0o600);
+      // SPEC-0060 P01: the lock's journal exists now, and stays for the life of the store.
+      privateDatabaseFiles(join(this.stateDir, 'owner.sqlite'));
       database = new DatabaseSync(join(this.stateDir, 'store.sqlite'));
       this.db = database;
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
@@ -374,6 +380,11 @@ export class Store {
         this.db.exec(
           "CREATE INDEX IF NOT EXISTS dispatches_session ON dispatches(json_extract(data, '$.sessionId'))",
         );
+        // SPEC-0060 I01, I02: the tool call limit counts one dispatch's calls, and the message rate
+        // limit one sender's recent messages; both read whole tables that only grow before.
+        this.db.exec(
+          "CREATE INDEX IF NOT EXISTS tool_calls_dispatch ON tool_calls(json_extract(data, '$.dispatchId')); CREATE INDEX IF NOT EXISTS messages_sender_created ON messages(json_extract(data,'$.fromSessionId'), json_extract(data,'$.createdAt'));",
+        );
         // Only rows that can still expire, keyed by expiry: the checks before each call and in each
         // scheduler pass read no finished approval, message or handoff (SPEC-0024 X01).
         this.db.exec(
@@ -434,7 +445,8 @@ export class Store {
         this.db.exec('ROLLBACK');
         throw error;
       }
-      chmodSync(join(this.stateDir, 'store.sqlite'), 0o600);
+      // SPEC-0060 P01: the database, its WAL and the WAL's index, new or left by an earlier version.
+      privateDatabaseFiles(join(this.stateDir, 'store.sqlite'));
       for (const name of ['artifacts', 'file-commits', 'quarantine']) {
         const path = join(this.stateDir, name);
         if (existsSync(path) && (!lstatSync(path).isDirectory() || realpathSync(path) !== path))

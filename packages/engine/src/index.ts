@@ -8,6 +8,7 @@ import { isAbsolute, relative } from 'node:path';
 import { canonicalPath } from './paths.ts';
 import { Store } from './store.ts';
 import { VERSION } from './version.ts';
+import { MASKED_CHARACTERS, maskSecrets } from './masking.ts';
 import {
   closedSessionsWithMessages,
   pendingRuntimeApprovals,
@@ -203,26 +204,6 @@ const PROGRESS_LIMIT = 1000;
 const PROGRESS_TEXT_MS = 5000;
 const PROGRESS_THINKING_MS = 30_000;
 
-/**
- * SPEC-0053 E07: masks what looks like a secret in a command or in text, before it is written: the
- * value after a name such as TOKEN, SECRET, PASSWORD or API_KEY, a Bearer or Basic credential, and
- * the shapes of common keys. It is a best effort, not a guarantee.
- */
-const SECRET_NAME =
-  '[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|private[_-]?key|credential)[A-Za-z0-9_-]*';
-const SECRET_VALUE = `(?:"[^"]*"|'[^']*'|[A-Za-z0-9_+/=~@](?:[A-Za-z0-9_+/=.~:@-]*[A-Za-z0-9_+/=~@-])?)`;
-const SECRETS: [RegExp, string][] = [
-  [new RegExp(`(\\b${SECRET_NAME}\\s*[=:]\\s*)${SECRET_VALUE}`, 'gi'), '$1***'],
-  [new RegExp(`(--?${SECRET_NAME}\\s+)${SECRET_VALUE}`, 'gi'), '$1***'],
-  [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 ***'],
-  [
-    /\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[abprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16})\b/g,
-    '***',
-  ],
-];
-function redact(value: string): string {
-  return SECRETS.reduce((text, [pattern, mask]) => text.replace(pattern, mask), value);
-}
 /** A progress's bounded data, or null when it is malformed (SPEC-0053 E01). */
 function progressData(value: unknown, workspace: string): Record<string, any> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -238,7 +219,11 @@ function progressData(value: unknown, workspace: string): Record<string, any> | 
   if (p.kind === 'tool_started') {
     const tool = text(p.tool, 128);
     if (!tool) return null;
-    const command = p.command === undefined ? undefined : text(redact(String(p.command)), 200);
+    // SPEC-0060 M03: 200 characters are kept; a bounded part of the command is examined.
+    const command =
+      p.command === undefined
+        ? undefined
+        : text(maskSecrets(String(p.command).slice(0, MASKED_CHARACTERS)), 200);
     const paths = Array.isArray(p.paths)
       ? p.paths
           .filter((path): path is string => typeof path === 'string' && path.length > 0)
@@ -275,7 +260,8 @@ function progressData(value: unknown, workspace: string): Record<string, any> | 
   if (p.kind === 'thinking') return { kind: 'thinking' };
   if (p.kind === 'assistant_text') {
     if (typeof p.text !== 'string' || !p.text) return null;
-    return { kind: 'assistant_text', text: redact(p.text) };
+    // SPEC-0060 M03: 280 characters are kept; a bounded part of the text is examined.
+    return { kind: 'assistant_text', text: maskSecrets(p.text.slice(-MASKED_CHARACTERS)) };
   }
   if (p.kind === 'api_retry') {
     const fields = {
@@ -285,7 +271,13 @@ function progressData(value: unknown, workspace: string): Record<string, any> | 
       status: count(p.status),
     };
     if (Object.values(fields).some((v) => v === undefined)) return null;
-    const message = p.message === null || p.message === undefined ? null : text(p.message, 300);
+    // SPEC-0060 M04: an error's text can hold the credential it refused.
+    const message =
+      p.message === null || p.message === undefined
+        ? null
+        : typeof p.message === 'string'
+          ? text(maskSecrets(p.message.slice(0, MASKED_CHARACTERS)), 300)
+          : undefined;
     if (message === undefined) return null;
     return { kind: 'api_retry', ...fields, message };
   }

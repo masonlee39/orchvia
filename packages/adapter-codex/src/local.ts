@@ -4,6 +4,7 @@ import {
   chmodSync,
   existsSync,
   closeSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -130,7 +131,24 @@ function alive(pid: number): boolean {
     return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
 }
-/** Takes the file lock, removing one whose process is gone; false when `deadline` passes. */
+/**
+ * SPEC-0060 L02: why what lies at a lock's path cannot be this user's lock file, or null. The
+ * temporary directory is shared on some systems, so the path may hold what another user put there.
+ * Exported for tests.
+ */
+export function unusableLock(
+  stat: { isFile(): boolean; uid: number },
+  uid: number | undefined,
+): string | null {
+  if (!stat.isFile()) return 'it is not a regular file';
+  if (uid !== undefined && stat.uid !== uid) return 'it belongs to another user';
+  return null;
+}
+/**
+ * Takes the file lock, removing one whose process is gone; false when `deadline` passes. A lock
+ * that cannot be read or removed is waited for like a held one, so the loop always ends at its
+ * time (SPEC-0060 L01). What is not a regular file of this user is never read (L02).
+ */
 async function takeFileLock(path: string, deadline: number): Promise<boolean> {
   while (true) {
     try {
@@ -141,17 +159,27 @@ async function takeFileLock(path: string, deadline: number): Promise<boolean> {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
+    let removed = false;
     try {
+      const problem = unusableLock(lstatSync(path), process.getuid?.());
+      if (problem)
+        throw Object.assign(
+          new Error(coded('CODEX_START_LOCK_UNUSABLE', `${path}: ${problem}; remove it`)),
+          { unusable: true },
+        );
       const pid = Number(readFileSync(path, 'utf8'));
       if (!Number.isSafeInteger(pid) || pid <= 0 || !alive(pid)) {
         unlinkSync(path);
-        continue;
+        removed = true;
       }
-    } catch {
-      continue; // removed meanwhile
+    } catch (error) {
+      if ((error as { unusable?: boolean }).unusable) throw error;
+      // Removed meanwhile: try again at once. Anything else is waited for below.
+      removed = (error as NodeJS.ErrnoException).code === 'ENOENT';
     }
     if (performance.now() >= deadline) return false;
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Always a turn of the event loop, so that no sequence of files holds the thread.
+    await new Promise((resolve) => setTimeout(resolve, removed ? 0 : 50));
   }
 }
 
@@ -189,7 +217,10 @@ export async function startLock(home: string, timeoutMs: number): Promise<() => 
     ]).finally(() => clearTimeout(timer));
     if (!(await takeFileLock(path, deadline)))
       throw new Error(
-        coded('CODEX_START_LOCK_TIMEOUT', 'another process is starting Codex on this home'),
+        coded(
+          'CODEX_START_LOCK_TIMEOUT',
+          `another process is starting Codex on this home, or left its lock file ${path}`,
+        ),
       );
   } catch (error) {
     releaseInProcess();
