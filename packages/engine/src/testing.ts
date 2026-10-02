@@ -65,7 +65,8 @@ async function bounded<T>(value: Promise<T>, label: string, ms = 2000): Promise<
   }
 }
 async function until(check: () => Promise<boolean> | boolean, label: string): Promise<void> {
-  const deadline = performance.now() + 1500;
+  // It returns once the check holds; a loaded machine took more than 1.5 seconds for one step.
+  const deadline = performance.now() + 8000;
   while (!(await check())) {
     if (performance.now() >= deadline) throw new Error(`Runtime contract timed out: ${label}`);
     await new Promise<void>((resolve) => setTimeout(resolve, 5));
@@ -169,7 +170,7 @@ export function registerRuntimeAdapterContract(
 ): void {
   test(
     `${name}: AC-H02/H03/H07 native acceptance, deduplicated usage, and separate task review`,
-    { timeout: 10000 },
+    { timeout: 30000 },
     async (t) => {
       const f = await harness(t, createFixture);
       assert.equal((await session(f.engine, f.created.sessionId)).providerSessionId, null);
@@ -217,7 +218,7 @@ export function registerRuntimeAdapterContract(
 
   test(
     `${name}: AC-H03 queued host rejection is not native acceptance`,
-    { timeout: 10000 },
+    { timeout: 30000 },
     async (t) => {
       const f = await harness(t, createFixture);
       await f.act('reject');
@@ -237,7 +238,7 @@ export function registerRuntimeAdapterContract(
   for (const accepted of [false, true]) {
     test(
       `${name}: AC-H04 ambiguous disconnect ${accepted ? 'after' : 'before'} native acceptance is never retried`,
-      { timeout: 10000 },
+      { timeout: 30000 },
       async (t) => {
         const f = await harness(t, createFixture);
         if (accepted) await f.act('accept');
@@ -260,7 +261,7 @@ export function registerRuntimeAdapterContract(
 
   test(
     `${name}: AC-H05 cancellation acknowledgement cannot stand in for stop proof`,
-    { timeout: 10000 },
+    { timeout: 30000 },
     async (t) => {
       const f = await harness(t, createFixture);
       await f.act('accept');
@@ -300,7 +301,7 @@ export function registerRuntimeAdapterContract(
 
   test(
     `${name}: AC-H06 live background work, stale evidence, and explicit result reconciliation`,
-    { timeout: 10000 },
+    { timeout: 30000 },
     async (t) => {
       const f = await harness(t, createFixture);
       await f.act('accept');
@@ -365,7 +366,7 @@ export function registerRuntimeAdapterContract(
 
   test(
     `${name}: AC-H02 host queue waiting consumes the original acceptance budget`,
-    { timeout: 10000 },
+    { timeout: 30000 },
     async (t) => {
       const f = await harness(t, createFixture, { acceptanceMs: 30, turnMs: 1000 });
       const budget = f.input.executionBudget;
