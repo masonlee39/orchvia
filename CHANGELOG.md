@@ -10,6 +10,8 @@ A stop marker's waits last at least five seconds, and a warning before the defau
 
 - With `stopMarker`, a dispatch on a busy machine could end with `outcome_unknown: Execution stop or local cleanup is unconfirmed` and an observation of `reason: 'unlisted'`: the observation had the adapter's `closeTimeoutMs` or `cleanupTimeoutMs`, one second by default, and `lsof` took longer. The observation, the end of a dispatch's marker holders and the end of all markers at close now last the larger of that time and 5 seconds. They return once done, so nothing takes longer unless a listing does.
 
+- A stop marker's record said `reason: 'holders_left'` with `ended: 0` when the holders had been signalled and could not be listed again within the time. It now says `unlisted`, as when the first listing fails. A synchronous cleanup that cannot list returns `unlisted: true` (SPEC-0064).
+
 ### Added
 
 - An engine that has verification rules and no `verificationEnvironment` emits one process warning, `ORCHVIA_VERIFICATION_ENVIRONMENT_DEFAULT`: with the next minor version the default becomes `'minimal'`. Set `'inherit'` or `'minimal'` to say which the checks need.

@@ -103,6 +103,8 @@ export interface StopMarkerSyncResult {
   stopped: boolean;
   holders: number;
   ended: number;
+  /** SPEC-0064 U02: the holders could not be listed within the time, so none was ended. */
+  unlisted?: true;
 }
 
 /** SPEC-0037 Y02: a synchronous cleanup of every instance of this process under a root. */
@@ -359,13 +361,17 @@ export function sortStrays(
   return found;
 }
 
-/** SIGTERM, then SIGKILL, what holds `path`; `stopped` once nothing does within the time. */
+/**
+ * SIGTERM, then SIGKILL, what holds `path`; `stopped` once nothing does within the time.
+ * `unlisted` (SPEC-0064 U01): the holders were signalled and could not be listed again, so
+ * whether any is left is not known; `ended` then counts none.
+ */
 async function endHolders(
   path: string,
   remainingMs: () => number,
   end: boolean,
   list: (path: string, timeoutMs: number) => Promise<number[] | null> = holders,
-): Promise<{ holders: number[] | null; ended: number; stopped: boolean }> {
+): Promise<{ holders: number[] | null; ended: number; stopped: boolean; unlisted?: true }> {
   const initial = await list(path, remainingMs());
   if (initial === null) return { holders: null, ended: 0, stopped: false };
   if (!initial.length || !end) return { holders: initial, ended: 0, stopped: !initial.length };
@@ -384,6 +390,7 @@ async function endHolders(
     holders: initial,
     ended: initial.filter((pid) => !left.includes(pid)).length,
     stopped: found !== null && !found.length,
+    ...(found === null ? { unlisted: true as const } : {}),
   };
 }
 
@@ -448,7 +455,7 @@ function endHoldersSync(
   const found = find();
   // What one listing costs; a round starts only when a listing still fits after it.
   const cost = performance.now() - listing;
-  if (found === null) return { stopped: false, holders: 0, ended: 0 };
+  if (found === null) return { stopped: false, holders: 0, ended: 0, unlisted: true };
   if (!found.length) return { stopped: true, holders: 0, ended: 0 };
   const running = (pid: number) => {
     try {
@@ -676,7 +683,7 @@ export class StopMarkers {
     const stopped = held.stopped && left !== null && !left.length;
     const reason: StopMarkerReason | undefined = stopped
       ? undefined
-      : held.holders === null || left === null
+      : held.holders === null || held.unlisted || left === null
         ? 'unlisted'
         : !held.stopped
           ? 'holders_left'
@@ -791,7 +798,9 @@ export class StopMarkers {
       ended: result.ended,
       strays: 0,
       stopped: result.stopped,
-      ...(result.stopped ? {} : { reason: 'holders_left' as const }),
+      ...(result.stopped
+        ? {}
+        : { reason: result.unlisted ? ('unlisted' as const) : ('holders_left' as const) }),
     });
   }
 
@@ -1011,7 +1020,7 @@ async function examine(
       found.stopped = held.stopped && meta !== undefined && left !== null && !left.length;
       if (!found.stopped)
         found.reason =
-          held.holders === null || left === null
+          held.holders === null || held.unlisted || left === null
             ? 'unlisted'
             : !held.stopped
               ? 'holders_left'
