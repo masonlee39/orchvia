@@ -38,6 +38,7 @@ import {
   effectiveRules,
   normalizeRules,
   ruleKey,
+  verificationEnvironment,
   verifyRule,
   workspacePath,
 } from './verification.ts';
@@ -399,6 +400,8 @@ class LocalEngine implements Engine {
         fail('UNSUPPORTED_CAPABILITY', `Provider ${provider} cannot enforce ${profile}`);
     }
     this.config = config;
+    // SPEC-0061 V01, V02: refused at start, not at the first verification.
+    verificationEnvironment(config.verificationEnvironment, config.verificationInheritEnv);
     if (config.stores)
       this.controlPlane = new ControlPlane(
         config.workspace,
@@ -5337,7 +5340,18 @@ class LocalEngine implements Engine {
       });
       verification = [];
       for (const rule of candidate.verificationRules) {
-        verification.push(await verifyRule(this.store.workspace, rule, flight.controller.signal));
+        verification.push(
+          await verifyRule(
+            this.store.workspace,
+            rule,
+            flight.controller.signal,
+            // SPEC-0061 V01: read when the command starts, from the host's environment then.
+            verificationEnvironment(
+              this.config.verificationEnvironment,
+              this.config.verificationInheritEnv,
+            ),
+          ),
+        );
         if (!verification.at(-1)!.passed) break;
       }
     }

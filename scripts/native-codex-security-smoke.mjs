@@ -1,7 +1,9 @@
 /**
  * SPEC-0038: the real Codex binary behind the Codex adapter. A file change the host approves
  * stays inside the write paths, and commands see neither the orchestration bridge's token nor
- * credentials in the environment. Loopback-only scripted gateway; no credentials or paid models.
+ * credentials in the environment. SPEC-0061 E02: what a command reads of the Codex process's
+ * environment, and that it cannot reach the bridge with it while the network is off.
+ * Loopback-only scripted gateway; no credentials or paid models.
  * Usage: node scripts/native-codex-security-smoke.mjs EVIDENCE.json [BINARY]
  */
 import assert from 'node:assert/strict';
@@ -65,7 +67,10 @@ const server = createServer(async (request, response) => {
           call_id: `call_${n}`,
           status: 'completed',
           name: 'exec_command',
-          arguments: JSON.stringify({ cmd: step.cmd }),
+          // A function is called now, when Codex and its servers are running.
+          arguments: JSON.stringify({
+            cmd: typeof step.cmd === 'function' ? step.cmd() : step.cmd,
+          }),
         }
       : {
           type: 'message',
@@ -149,6 +154,89 @@ async function runCase(name, script, options, input = {}, prepare = async () => 
   }
   return { record, workspace };
 }
+
+/** The processes this process started, with theirs: Codex and the servers it runs. */
+function startedByThisProcess() {
+  const rows = execFileSync('ps', ['-axo', 'pid=,ppid='], { encoding: 'utf8', timeout: 5000 })
+    .trim()
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/).map(Number));
+  const found = [];
+  const queue = [process.pid];
+  while (queue.length) {
+    const parent = queue.shift();
+    for (const [pid, ppid] of rows)
+      if (ppid === parent && !found.includes(pid)) {
+        found.push(pid);
+        queue.push(pid);
+      }
+  }
+  return found;
+}
+/**
+ * 0061-E02, run by a command: reads the environment of the given processes and of its own
+ * ancestors (macOS: sysctl KERN_PROCARGS2, as ps does; Linux: /proc), and tries the bridge's
+ * socket with the token it found. It prints what it could do, never a value, and always exits 0,
+ * so that Codex has no failure to run again outside the sandbox.
+ */
+const ENVIRONMENT_PROBE = String.raw`
+import ctypes, json, os, socket, sys
+
+def environment(pid):
+    if sys.platform == 'darwin':
+        libc = ctypes.CDLL(None, use_errno=True)
+        mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2
+        size = ctypes.c_size_t(1 << 20)
+        data = ctypes.create_string_buffer(size.value)
+        if libc.sysctl(mib, 3, data, ctypes.byref(size), None, 0) != 0:
+            return None
+        return data.raw[: size.value]
+    try:
+        with open('/proc/%d/environ' % pid, 'rb') as file:
+            return file.read()
+    except OSError:
+        return None
+
+def ancestors():
+    found, pid = [], os.getppid()
+    while pid > 1 and pid not in found:
+        found.append(pid)
+        try:
+            with open('/proc/%d/status' % pid) as file:
+                pid = next(int(line.split()[1]) for line in file if line.startswith('PPid:'))
+        except (OSError, StopIteration):
+            break
+    return found
+
+NAMES = ('AGENT_ORCH_BRIDGE_TOKEN', 'AGENT_ORCH_BRIDGE_SOCKET', 'OPENAI_API_KEY')
+result = {'processesRead': 0, 'tokenRead': False, 'credentialRead': False, 'bridge': 'not tried'}
+try:
+    found = {}
+    for pid in dict.fromkeys([int(value) for value in sys.argv[1:]] + ancestors()):
+        data = environment(pid)
+        if data is None:
+            continue
+        result['processesRead'] += 1
+        for entry in data.split(b'\0'):
+            for name in NAMES:
+                if entry.startswith(name.encode() + b'='):
+                    found[name] = entry[len(name) + 1 :].decode('utf8', 'replace')
+    result['tokenRead'] = 'AGENT_ORCH_BRIDGE_TOKEN' in found
+    result['credentialRead'] = found.get('OPENAI_API_KEY') == 'sk-synthetic-offline'
+    if 'AGENT_ORCH_BRIDGE_SOCKET' in found:
+        try:
+            bridge = socket.socket(socket.AF_UNIX)
+            bridge.settimeout(5)
+            bridge.connect(found['AGENT_ORCH_BRIDGE_SOCKET'])
+            request = {'token': found.get('AGENT_ORCH_BRIDGE_TOKEN', ''), 'name': 'work_read', 'request': {}}
+            bridge.sendall((json.dumps(request) + '\n').encode())
+            result['bridge'] = 'answered' if bridge.recv(4096) else 'closed'
+        except OSError as error:
+            result['bridge'] = 'refused: %s' % (error.strerror or type(error).__name__)
+except Exception as error:
+    result['error'] = type(error).__name__
+print(json.dumps(result))
+`;
 
 // Every check is recorded, so one run shows each case's outcome.
 const failures = [];
@@ -269,6 +357,51 @@ try {
   check(() => assert.match(seen, /token=unset/), 'the command saw the bridge token');
   check(() => assert.match(seen, /key=unset/), 'the command saw a credential from the environment');
   check(() => assert.equal(calls, 0), 'a command called an orchestration tool directly');
+
+  // 0061-E02: the variables that are kept out of a command's own environment are still in the
+  // environment of the Codex process and of the servers it starts. A command looks there, and
+  // tries the bridge with what it found. Whether it can read them is recorded (macOS: yes); with
+  // the network off it must not reach the bridge. The command runs in the sandbox only: the host
+  // refuses every request, so a refused command is not run again outside it.
+  const processEnvironment = async (name, networkAccess) => {
+    const before = calls;
+    const run = await runCase(
+      name,
+      () => [{ cmd: () => `python3 probe.py ${startedByThisProcess().join(' ')} > environ.json` }],
+      {
+        env: { OPENAI_API_KEY: 'sk-synthetic-offline' },
+        config: { networkAccess },
+      },
+      {
+        orchestrationTools: tools,
+        async requestPermission(request) {
+          evidence.cases[name].asked.push({ tool: request.toolName });
+          return false;
+        },
+      },
+      (workspace) => writeFile(join(workspace, 'probe.py'), ENVIRONMENT_PROBE),
+    );
+    let seen = null;
+    try {
+      seen = JSON.parse(readFileSync(join(run.workspace, 'environ.json'), 'utf8'));
+    } catch {
+      /* The command did not run, or wrote nothing. */
+    }
+    Object.assign(run.record, { networkAccess, command: seen, toolCalls: calls - before });
+    check(() => assert.ok(seen, 'no output'), `${name}: the command did not run`);
+    check(() => assert.deepEqual(run.record.asked, []), `${name}: the command left the sandbox`);
+    return run.record;
+  };
+  const offline = await processEnvironment('process-environment', false);
+  evidence.environReadable = offline.command?.tokenRead ?? null;
+  check(
+    () => assert.doesNotMatch(offline.command?.bridge ?? '', /^answered/),
+    'with the network off, a command reached the bridge with a token of the Codex process',
+  );
+  check(
+    () => assert.equal(offline.toolCalls, 0),
+    'with the network off, a command called an orchestration tool',
+  );
   evidence.failures = failures;
   assert.deepEqual(failures, [], failures.join('; '));
   evidence.passed = true;

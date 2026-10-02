@@ -1,7 +1,11 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, sep } from 'node:path';
 import type { EngineConfig, RuntimeAdapter } from '../../engine/src/types.ts';
-import { normalizeRules, workspacePath } from '../../engine/src/verification.ts';
+import {
+  normalizeRules,
+  verificationEnvironment,
+  workspacePath,
+} from '../../engine/src/verification.ts';
 import { MAX_QUEUE_WAIT_MS } from '../../engine/src/validation.ts';
 
 export interface HostConfig {
@@ -27,6 +31,8 @@ export interface HostConfig {
   contextLimits?: EngineConfig['contextLimits'];
   shutdown?: { mode?: 'drain' | 'interrupt' | 'pause'; timeoutMs?: number };
   verificationRules?: EngineConfig['verificationRules'];
+  verificationEnvironment?: EngineConfig['verificationEnvironment'];
+  verificationInheritEnv?: EngineConfig['verificationInheritEnv'];
   writeScopes?: EngineConfig['writeScopes'];
   allowCrossRootReuse?: boolean;
   tools?: EngineConfig['tools'];
@@ -69,6 +75,8 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
       'contextLimits',
       'shutdown',
       'verificationRules',
+      'verificationEnvironment',
+      'verificationInheritEnv',
       'writeScopes',
       'allowCrossRootReuse',
       'tools',
@@ -253,6 +261,8 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
       parsed.verificationRules as EngineConfig['verificationRules'],
       { checkPaths: false },
     );
+    // SPEC-0061 V01, V02.
+    verificationEnvironment(parsed.verificationEnvironment, parsed.verificationInheritEnv);
     if (parsed.writeScopes !== undefined) {
       if (!object(parsed.writeScopes)) invalid('writeScopes must be an object');
       for (const paths of Object.values(parsed.writeScopes)) {
@@ -452,6 +462,8 @@ export async function engineConfig(config: HostConfig): Promise<EngineConfig> {
     budget: config.budget,
     contextLimits: config.contextLimits,
     verificationRules: config.verificationRules,
+    verificationEnvironment: config.verificationEnvironment,
+    verificationInheritEnv: config.verificationInheritEnv,
     writeScopes: config.writeScopes,
     allowCrossRootReuse: config.allowCrossRootReuse,
     tools: config.tools,

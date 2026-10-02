@@ -988,6 +988,15 @@ export interface EngineConfig {
   timeouts?: LifecycleTimeouts;
   clock?: EngineClock;
   verificationRules?: VerificationRule[];
+  /**
+   * What a check's command gets of the host's environment (SPEC-0061 V01): `'inherit'`, the
+   * default, all of it; `'minimal'`, only `PATH`, `HOME`, `TMPDIR`, the locale, `TZ`, `USER`,
+   * `LOGNAME`, `SHELL` and `verificationInheritEnv`. A check runs outside every sandbox on what a
+   * member changed. The default becomes `'minimal'` with the next minor version.
+   */
+  verificationEnvironment?: 'inherit' | 'minimal';
+  /** Names of host variables that a check's command also gets with `'minimal'` (SPEC-0061 V02). */
+  verificationInheritEnv?: string[];
   /** Named canonical in-workspace paths; task input can select but never register a scope. */
   writeScopes?: Record<string, string[]>;
   allowCrossRootReuse?: boolean;

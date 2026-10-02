@@ -1,6 +1,7 @@
 import { insidePath, rebasePath } from './paths.ts';
 import { createHash } from 'node:crypto';
-import { lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
+import { lstat, open, readdir } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fail, OrchestrationError } from './errors.ts';
@@ -148,12 +149,23 @@ export function effectiveRules(
   return { rules, runtime, retired };
 }
 
-/** A bounded content baseline. Excludes Git internals; source/untracked files remain included. */
-export function workspaceBaseline(workspace: string, paths: string[]): string {
+/** The largest part of a file that is read and hashed at once (SPEC-0061 B01). */
+const BASELINE_PART_BYTES = 1024 * 1024;
+/**
+ * A bounded content baseline. Excludes Git internals; source/untracked files remain included.
+ * SPEC-0061 B: computed with asynchronous file calls, a file at a time in sorted order and a large
+ * file in parts, so that the engine's thread is not held; a `signal` that is aborted stops it
+ * between two entries.
+ */
+export async function workspaceBaseline(
+  workspace: string,
+  paths: string[],
+  signal?: AbortSignal,
+): Promise<string> {
   const hash = createHash('sha256');
   const seen = new Set<string>();
   let bytes = 0;
-  const visit = (path: string) => {
+  const visit = async (path: string): Promise<void> => {
     if (seen.has(path)) return;
     seen.add(path);
     if (seen.size > 20000)
@@ -161,15 +173,17 @@ export function workspaceBaseline(workspace: string, paths: string[]): string {
         'BASELINE_LIMIT',
         'Verification baseline exceeds 20000 entries; register narrower baselinePaths',
       );
-    const stat = lstatSync(path);
+    // Never leaves verifyRule, which reports a cancelled verification itself: no error code.
+    if (signal?.aborted) throw new Error('Verification cancelled during its baseline');
+    const stat = await lstat(path);
     if (stat.isSymbolicLink()) {
       const target = workspacePath(workspace, path);
       hash.update(`link:${relative(workspace, path)}:${target}\n`);
-      visit(target);
+      await visit(target);
     } else if (stat.isDirectory()) {
       hash.update(`directory:${relative(workspace, path)}\n`);
-      for (const child of readdirSync(path).sort()) {
-        if (child !== '.git') visit(resolve(path, child));
+      for (const child of (await readdir(path)).sort()) {
+        if (child !== '.git') await visit(resolve(path, child));
       }
     } else if (stat.isFile()) {
       bytes += stat.size;
@@ -179,11 +193,62 @@ export function workspaceBaseline(workspace: string, paths: string[]): string {
           'Verification baseline exceeds 64 MiB; register narrower baselinePaths',
         );
       hash.update(`file:${relative(workspace, path)}:${stat.mode}:`);
-      hash.update(readFileSync(path));
+      const file = await open(path, 'r');
+      try {
+        const part = Buffer.allocUnsafe(Math.max(1, Math.min(BASELINE_PART_BYTES, stat.size)));
+        for (;;) {
+          const { bytesRead } = await file.read(part, 0, part.length, null);
+          if (!bytesRead) break;
+          hash.update(part.subarray(0, bytesRead));
+        }
+      } finally {
+        await file.close();
+      }
     } else fail('INVALID_WORKSPACE_SCOPE', 'Verification baseline contains a special file');
   };
-  for (const path of [...paths].sort()) visit(workspacePath(workspace, path));
+  for (const path of [...paths].sort()) await visit(workspacePath(workspace, path));
   return hash.digest('hex');
+}
+
+/** What every check's command gets of the host's environment with `'minimal'` (SPEC-0061 V01). */
+const MINIMAL_ENVIRONMENT = [
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TZ',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+];
+const MINIMAL_ENVIRONMENT_WINDOWS = ['SystemRoot', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE'];
+/**
+ * SPEC-0061 V01, V02: the environment of a check's command, or undefined for the host's own. A
+ * check runs outside every sandbox on what a member changed, so with `'minimal'` it gets only the
+ * variables above and the ones the host names. Throws VALIDATION_ERROR for another mode or name.
+ */
+export function verificationEnvironment(
+  mode: unknown,
+  names: unknown,
+  host: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv | undefined {
+  if (mode !== undefined && mode !== 'inherit' && mode !== 'minimal')
+    fail('VALIDATION_ERROR', "verificationEnvironment must be 'inherit' or 'minimal'");
+  const named = names === undefined ? [] : strings(names, 'verificationInheritEnv', 0, 64);
+  if (named.some((name) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)))
+    fail('VALIDATION_ERROR', 'verificationInheritEnv takes the names of environment variables');
+  if (mode !== 'minimal') return undefined;
+  const environment: NodeJS.ProcessEnv = {};
+  for (const name of [
+    ...MINIMAL_ENVIRONMENT,
+    ...(platform === 'win32' ? MINIMAL_ENVIRONMENT_WINDOWS : []),
+    ...named,
+  ])
+    if (host[name] !== undefined) environment[name] = host[name];
+  return environment;
 }
 
 export interface VerificationEvidence {
@@ -208,6 +273,8 @@ export async function verifyRule(
   workspace: string,
   rule: FrozenVerificationRule,
   signal: AbortSignal,
+  /** The command's environment; left out, the host's own (SPEC-0061 V01). */
+  environment?: NodeJS.ProcessEnv,
 ): Promise<VerificationEvidence> {
   const result: VerificationEvidence = {
     ruleId: rule.id,
@@ -230,7 +297,12 @@ export async function verifyRule(
     if (digest(normalized) !== frozen)
       fail('VERIFICATION_RULE_CHANGED', 'Frozen rule digest does not match');
     result.cwd = workspacePath(workspace, rule.cwdRelative);
-    result.before = workspaceBaseline(workspace, rule.baselinePaths!);
+    try {
+      result.before = await workspaceBaseline(workspace, rule.baselinePaths!, signal);
+    } catch (error) {
+      // SPEC-0061 B03: a cancellation stops the baseline between two entries.
+      if (!signal.aborted) throw error;
+    }
     if (signal.aborted) return { ...result, error: 'Verification cancelled before submission' };
     await new Promise<void>((resolveDone) => {
       const child = spawn(rule.argv[0], rule.argv.slice(1), {
@@ -239,6 +311,7 @@ export async function verifyRule(
         detached: process.platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
+        ...(environment ? { env: environment } : {}),
       });
       result.resourcesStopped = false;
       const chunks: Buffer[] = [];
@@ -314,7 +387,8 @@ export async function verifyRule(
         poll();
       });
     });
-    result.after = workspaceBaseline(workspace, rule.baselinePaths!);
+    // Not cancelled: the evidence says what the command left, also for a cancelled verification.
+    result.after = await workspaceBaseline(workspace, rule.baselinePaths!);
     result.passed =
       result.resourcesStopped &&
       !result.error &&

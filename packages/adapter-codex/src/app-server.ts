@@ -288,7 +288,7 @@ export class AppServerConnection {
   private async stop(): Promise<boolean> {
     // SPEC-0034 A03: the commands the app-server started run in groups of their own and outlive
     // it, so they are listed before it exits and ended after.
-    const started = this.child.pid === undefined ? [] : descendantsOf(this.child.pid);
+    const started = this.child.pid === undefined ? [] : await descendantsOf(this.child.pid);
     const exited = await this.stopServer();
     await endProcesses(started, this.closeTimeoutMs);
     return exited;

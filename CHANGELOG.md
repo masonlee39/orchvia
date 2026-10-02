@@ -2,6 +2,24 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+Corrections from a review of 0.1.31, second part (SPEC-0061).
+
+### Added
+
+- `verificationEnvironment: 'minimal'` gives a check's command only `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `USER`, `LOGNAME` and `SHELL` of the host, and `verificationInheritEnv` names up to 64 more variables to pass. A check runs outside every sandbox on a workspace that a member has just changed, and by default its command still inherits the host's whole environment. **The default becomes `'minimal'` with the next minor version**: a host whose checks need a variable should name it now.
+
+### Fixed
+
+- An artifact's journal stayed in `file-commits/` until the next start, which read and hashed every such artifact first: a host that had written 30,000 artifacts took 6.3 seconds to start. A journal is now removed once the transaction that registered its artifact has committed, and that start takes 0.1 seconds.
+- Listing processes held the engine's thread for 36 to 40 ms each time: at each stop marker observation, at the end of each Codex dispatch, and every 25 ms while a Codex dispatch's leftover commands ended. These now list without holding it. `endStopMarkersSync` and `acknowledgeStopMarkers` still list synchronously.
+- A verification's baselines held the engine's thread while every file was read. They are now read without holding it, a large file in parts, with the same hash and limits, and a cancelled verification stops between two files.
+
+### Changed
+
+- The documentation says what holds for a Codex member's command: the bridge's, the hook's and a host MCP server's variables are kept out of the command's own environment, but on macOS a command can read the Codex process's environment, so nothing given to Codex through the environment is a secret from the member. With the network off a command cannot connect to the bridge's socket, which the native security check now requires.
+
 ## [0.1.32] - 2026-10-02
 
 Corrections from a review of 0.1.31 (SPEC-0060). Upgrade if a host runs members that write commands: the first correction ends a way to stop the engine.

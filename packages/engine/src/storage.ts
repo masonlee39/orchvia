@@ -139,6 +139,8 @@ export class StorageGovernance {
     this.recoverGarbage();
     // Invariant 1: the store reports each file it writes before the record that refers to it.
     store.onFileWritten = (bytes) => this.noteWrite(bytes);
+    // SPEC-0061 J01: a journal the store removed no longer counts.
+    store.onFileRemoved = (bytes) => this.noteWrite(-bytes);
     this.walkedAt = this.monotonicNow();
     const found = this.walkSync();
     this.fileBytes = found.bytes;
