@@ -846,6 +846,14 @@ interface DispatchRecord {
 }
 /** The longest a sweep waits for strays to exit, over all its dispatches (SPEC-0059 T02). */
 const STRAY_WAIT_MS = 3000;
+/**
+ * SPEC-0063 O01: the least time a marker's waits last. They list processes with `lsof`, which
+ * takes seconds on a loaded machine, and each returns once it is done.
+ */
+export const STOP_MARKER_MIN_MS = 5000;
+/** SPEC-0063 O01: the time of a marker's wait, given the adapter's configured time. */
+export const stopMarkerTime = (configuredMs: number): number =>
+  Math.max(configuredMs, STOP_MARKER_MIN_MS);
 /** SPEC-0062 S02: the time between two looks of a dispatch's observation for its strays. */
 const STRAY_LOOK_MS = 200;
 const readJson = (path: string): unknown => {

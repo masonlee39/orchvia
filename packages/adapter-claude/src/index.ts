@@ -14,6 +14,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { observeRuntimeStop, requireStopProof } from '../../engine/src/stop-observation.ts';
 import {
   StopMarkers,
+  stopMarkerTime,
   type StopMarkerObservation,
   type StopMarkerAcknowledgeOptions,
   type StopMarkerAcknowledgement,
@@ -827,7 +828,7 @@ export function createClaudeAdapter<Extra extends object = object>(
     async close(): Promise<void> {
       closed = true;
       const results = await Promise.all([...active].map(cleanup));
-      if (markers && !(await markers.endAll(cleanupTimeoutMs))) results.push(false);
+      if (markers && !(await markers.endAll(stopMarkerTime(cleanupTimeoutMs)))) results.push(false);
       if (results.some((result) => !result) || [...active].some((handle) => !handle.cleaned))
         throw new Error('Claude SDK cleanup unconfirmed; adapter resources may still be active');
     },
@@ -1043,7 +1044,8 @@ export function createClaudeAdapter<Extra extends object = object>(
             terminal: matchedTerminal,
             ...(started.length ? { processes: started } : {}),
           },
-          cleanupTimeoutMs,
+          // SPEC-0063 O01, O03: the markers' time; a host's observer keeps its own.
+          markers ? stopMarkerTime(cleanupTimeoutMs) : cleanupTimeoutMs,
           () => {
             hostStopped = true;
             report(
@@ -1552,7 +1554,7 @@ export function createClaudeAdapter<Extra extends object = object>(
           handle.observationEnded = true;
         }
         // SPEC-0034 A03: whatever a dispatch left behind ends with it, proven stopped or not.
-        if (markers) await markers.end(input.dispatchId, () => cleanupTimeoutMs);
+        if (markers) await markers.end(input.dispatchId, () => stopMarkerTime(cleanupTimeoutMs));
       }
       // Usage is an observation, independent of business success and resource-stop certainty.
       if (receivedUsage) yield receivedUsage;

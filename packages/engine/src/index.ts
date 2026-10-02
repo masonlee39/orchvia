@@ -2318,6 +2318,25 @@ class LocalEngine implements Engine {
     this.retiredRules = new Map(
       loaded.retired.map((rule) => [ruleKey(rule.id, rule.version), rule]),
     );
+    this.warnVerificationDefault();
+  }
+  private warnedVerificationDefault = false;
+  /**
+   * SPEC-0063 W: a host with checks that does not say what their commands inherit is told, once,
+   * that the default changes. It changes nothing else.
+   */
+  private warnVerificationDefault(): void {
+    if (
+      this.warnedVerificationDefault ||
+      !this.verificationRules.length ||
+      this.config.verificationEnvironment !== undefined
+    )
+      return;
+    this.warnedVerificationDefault = true;
+    process.emitWarning(
+      "verificationEnvironment is not set: the commands of verification rules inherit the host's whole environment. With the next minor version the default becomes 'minimal'. Set verificationEnvironment to 'inherit' or 'minimal' (and verificationInheritEnv for the variables the checks need).",
+      { code: 'ORCHVIA_VERIFICATION_ENVIRONMENT_DEFAULT' },
+    );
   }
   private recover(): void {
     this.store.transaction(() => {
@@ -3107,6 +3126,7 @@ class LocalEngine implements Engine {
         // Admission sees the rule only after its registration committed.
         if (registered) {
           this.verificationRules.push(registered);
+          this.warnVerificationDefault();
           this.runtimeRuleKeys.add(key);
           this.retiredRules.delete(key);
         }

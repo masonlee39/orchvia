@@ -24,6 +24,7 @@ import type {
 import { observeRuntimeStop, requireStopProof } from '../../engine/src/stop-observation.ts';
 import {
   StopMarkers,
+  stopMarkerTime,
   type StopMarkerObservation,
   type StopMarkerAcknowledgeOptions,
   type StopMarkerAcknowledgement,
@@ -740,7 +741,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
       );
       for (const sessionId of owned.keys()) prune(sessionId);
       const markersEnded = markers
-        ? await markers.endAll(timeout(config.closeTimeoutMs, 1000))
+        ? await markers.endAll(stopMarkerTime(timeout(config.closeTimeoutMs, 1000)))
         : true;
       if (!markersEnded || owned.size || results.some((result) => result.status === 'rejected')) {
         throw Object.assign(new Error('Codex owned app-server resources have not all exited'), {
@@ -1036,7 +1037,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
         releaseStart();
         await bridge?.close();
         await hookChannel?.close();
-        if (markers) await markers.end(input.dispatchId, () => 1000).catch(() => false);
+        if (markers)
+          await markers.end(input.dispatchId, () => stopMarkerTime(1000)).catch(() => false);
         yield preSubmission({ type: 'error', message: errorMessage(error), outcome: 'failed' });
         return;
       }
@@ -1554,7 +1556,10 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
                       },
                       terminal: observedTerminal,
                     },
-                    timeout(config.closeTimeoutMs, 1000),
+                    // SPEC-0063 O01, O03: the markers' time; a host's observer keeps its own.
+                    markers
+                      ? stopMarkerTime(timeout(config.closeTimeoutMs, 1000))
+                      : timeout(config.closeTimeoutMs, 1000),
                     () => {
                       hostStopped = true;
                       report(
@@ -1658,7 +1663,9 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
         await connection.close();
         // SPEC-0034 A03: whatever a dispatch left behind ends with it, proven stopped or not.
         if (markers)
-          await markers.end(input.dispatchId, () => timeout(config.closeTimeoutMs, 1000));
+          await markers.end(input.dispatchId, () =>
+            stopMarkerTime(timeout(config.closeTimeoutMs, 1000)),
+          );
         prune(input.sessionId);
       }
     },
