@@ -460,7 +460,9 @@ try {
   await new Promise((ready) => docker.listen(dockerSock, ready));
   const TOKEN = 'synthetic-host-tool-token-91ad';
   let toolCalls = 0;
+  let toolRequests = 0;
   const tools = createServer(async (request, response) => {
+    toolRequests++;
     let body = '';
     for await (const chunk of request) body += chunk;
     if (request.headers.authorization !== `Bearer ${TOKEN}`) return response.writeHead(401).end();
@@ -530,6 +532,50 @@ try {
         `${name}: a direct connection outside the proxy`,
       );
     }
+  }
+  // 0062-N01: under 'remote' a command reaches no address of this machine, where 'direct' reaches
+  // the host's tool port; the internet is reached through the proxy as under 'direct'.
+  {
+    const name = 'network-remote';
+    const adapter = member(home, {
+      config: { policy: () => ({ mode: 'auto', network: 'remote' }) },
+    });
+    const requestsBefore = toolRequests;
+    const { record, seen: out } = await dispatch(name, adapter, () => [
+      {
+        cmd: `echo tool=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST -d '{}' ${toolsUrl})`,
+        yield: 15000,
+      },
+      {
+        cmd: `echo plain=$(curl --noproxy '*' -s -m 3 -o /dev/null -w '%{http_code}' -X POST -d '{}' ${toolsUrl})`,
+        yield: 15000,
+      },
+      ...(internet
+        ? [
+            {
+              cmd: "echo https=$(curl -s -m 20 -o /dev/null -w '%{http_code}' https://example.com)",
+              yield: 30000,
+            },
+          ]
+        : []),
+    ]);
+    // Codex 0.157.1 refuses the command itself and says that local addresses are blocked; a
+    // version that runs it gets 403 from the proxy, and no connection without the proxy.
+    record.localRequests = toolRequests - requestsBefore;
+    record.blocked = /local\/private network addresses are blocked/.test(out);
+    check(
+      () => assert.equal(record.events.at(-1), 'result'),
+      `${name} ended: ${record.events.at(-1)}`,
+    );
+    check(
+      () => assert.equal(record.localRequests, 0),
+      `${name}: ${record.localRequests} requests reached the host's tool port`,
+    );
+    check(
+      () => assert.ok(record.blocked || /tool=(403|000)\b/.test(out)),
+      `${name}: the request to a local address was not refused: ${out.slice(0, 200)}`,
+    );
+    if (internet) check(() => assert.match(out, /https=200/), `${name}: an https request`);
   }
   if (agentPid) process.kill(agentPid);
   docker.close();
@@ -1096,6 +1142,57 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     check(
       () => assert.equal(record.remoteExecution, 'stopped'),
       `marker: not proven stopped (${record.remoteExecution})`,
+    );
+  }
+
+  // 0062-S01: an MCP server behind a wrapper, as `npx` starts one, that ends 700 ms after its input
+  // closed. Codex ends the wrapper, and the server is left to process 1 for that time; the
+  // dispatch is proven stopped all the same.
+  {
+    const server = join(root, 'mcp-late.mjs');
+    writeFileSync(
+      server,
+      `import { createInterface } from 'node:readline';
+const send = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
+const lines = createInterface({ input: process.stdin });
+lines.on('line', (line) => {
+  const m = JSON.parse(line);
+  if (m.method === 'initialize') send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: m.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'late', version: '0' } } });
+  else if (m.method === 'tools/list') send({ jsonrpc: '2.0', id: m.id, result: { tools: [] } });
+  else if (m.id !== undefined) send({ jsonrpc: '2.0', id: m.id, result: {} });
+});
+setInterval(() => {}, 1000);
+const end = () => setTimeout(() => process.exit(0), 700);
+lines.on('close', end);
+process.on('SIGTERM', end);
+`,
+    );
+    const seen = [];
+    const { record } = await dispatch(
+      'marker-late-server',
+      member(home, {
+        config: {
+          executionStop: undefined,
+          stopMarker: { directory: markerRoot, onObservation: (item) => seen.push(item) },
+          policy: () => ({ mode: 'auto' }),
+          hostMcpServers: {
+            late: {
+              command: '/bin/sh',
+              args: ['-c', `${JSON.stringify(process.execPath)} ${JSON.stringify(server)}; true`],
+            },
+          },
+        },
+      }),
+      () => [{ cmd: 'echo late > late.txt' }],
+    );
+    record.observation = seen.find((item) => item.kind === 'dispatch') ?? null;
+    check(
+      () => assert.equal(record.events.at(-1), 'result'),
+      `marker-late-server ended: ${record.events.at(-1)}`,
+    );
+    check(
+      () => assert.equal(record.remoteExecution, 'stopped'),
+      `marker-late-server: not proven stopped (${JSON.stringify(record.observation)})`,
     );
   }
 

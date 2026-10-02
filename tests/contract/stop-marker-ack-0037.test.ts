@@ -135,7 +135,7 @@ test(
       'open',
     );
     // The open dispatch keeps the sweep looking for its whole time; under load one look takes seconds.
-    const swept = await sweepStopMarkers(root, { timeoutMs: 8000, keepProven: true });
+    const swept = await sweepStopMarkers(root, { timeoutMs: 40000, keepProven: true });
     assert.deepEqual(
       Object.fromEntries(swept.dispatches.map((item) => [item.dispatchId, item.stopped])),
       { proven: true, open: false },

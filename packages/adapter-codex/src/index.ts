@@ -1537,7 +1537,8 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
                 connection.hasActiveResources() ? 'unknown' : 'stopped',
                 'Matching native terminal; execution still requires the host stop observer',
               );
-            const stopObservation =
+            const observedTurn = turnId;
+            const observeStop = (): Promise<boolean> =>
               !coversExecution && observedTerminal && !bypassed
                 ? observeRuntimeStop(
                     observeExecutionStop,
@@ -1549,7 +1550,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
                         generation: input.generation ?? 1,
                         provider: providerName,
                         providerSessionId: threadId,
-                        providerTurnId: turnId,
+                        providerTurnId: observedTurn,
                       },
                       terminal: observedTerminal,
                     },
@@ -1572,7 +1573,14 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): CodexRuntim
               input.reportUsage?.(last);
               yield last;
             }
-            const [exited] = await Promise.all([connection.close(), stopObservation]);
+            // SPEC-0062 S01: the markers look once the app-server and what it started have ended,
+            // or a process of its own that ends a moment later counts as a stray (invariant 1).
+            // S03: a host's observer is called as before, while the app-server is closed.
+            let exited: boolean;
+            if (markers) {
+              exited = await connection.close();
+              await observeStop();
+            } else [exited] = await Promise.all([connection.close(), observeStop()]);
             if (!exited) {
               yield {
                 type: 'error',

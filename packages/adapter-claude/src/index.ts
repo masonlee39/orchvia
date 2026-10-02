@@ -1015,8 +1015,13 @@ export function createClaudeAdapter<Extra extends object = object>(
       let cleanupConfirmed = true;
       let hostStopped = false;
       let stopObservation: Promise<boolean> | undefined;
+      // SPEC-0062 S01: the markers look once the cleanup of the dispatch's Claude processes has
+      // finished, or a process of theirs that ends a moment later counts as a stray. S03: a host's
+      // observer is called at the terminal, as before.
+      let cleanupEnded = false;
       const observeStop = (): void => {
         if (coversExecution || !matchedTerminal || stopObservation) return;
+        if (markers && !cleanupEnded) return;
         // SPEC-0023 P02: every Claude process this dispatch started, each leading its own group.
         const started =
           process.platform === 'win32'
@@ -1538,7 +1543,12 @@ export function createClaudeAdapter<Extra extends object = object>(
         closeInput();
         input.signal.removeEventListener('abort', onAbort);
         if (handle) {
-          [cleanupConfirmed] = await Promise.all([cleanup(handle), stopObservation]);
+          if (markers) {
+            cleanupConfirmed = await cleanup(handle);
+            cleanupEnded = true;
+            observeStop();
+            await stopObservation;
+          } else [cleanupConfirmed] = await Promise.all([cleanup(handle), stopObservation]);
           handle.observationEnded = true;
         }
         // SPEC-0034 A03: whatever a dispatch left behind ends with it, proven stopped or not.

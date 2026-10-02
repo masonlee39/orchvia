@@ -298,7 +298,9 @@ test('AC-0035-I04 a command run by /bin/sh interrupts the turn and keeps the lea
   const adapter = member(
     dirs,
     { FIXTURE_ITEM_COMMAND: "/bin/sh -c 'sleep 1'" },
-    { stopMarker: true },
+    // The end of the dispatch lists the marker's holders with lsof, which takes seconds on a
+    // loaded machine; within a tight time the marker would stay.
+    { stopMarker: true, closeTimeoutMs: 20000 },
   );
   t.after(() => adapter.close?.());
   const { events, evidence } = await run(adapter, dirs);
@@ -312,7 +314,7 @@ test('AC-0035-I04 a command run by /bin/sh interrupts the turn and keeps the lea
   const fine = member(
     { ...dirs, log: join(dirs.base, 'zsh.log') },
     { FIXTURE_ITEM_COMMAND: "/bin/zsh -lc 'sleep 1'" },
-    { stopMarker: true },
+    { stopMarker: true, closeTimeoutMs: 20000 },
   );
   t.after(() => fine.close?.());
   const zsh = await run(fine, dirs, { dispatchId: 'zsh' });

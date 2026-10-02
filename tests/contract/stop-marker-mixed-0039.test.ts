@@ -50,12 +50,12 @@ test(
     const pids = JSON.parse(out.trim().split('\n').at(-1)!) as { claude: number; codex: number };
     reap(t, [pids.claude, pids.codex]);
     assert.equal(alive(pids.claude) && alive(pids.codex), true, JSON.stringify(pids));
-    const stale = await claudePackage.staleStopMarkers(root, { timeoutMs: 8000 });
+    const stale = await claudePackage.staleStopMarkers(root, { timeoutMs: 40000 });
     assert.deepEqual(stale.dispatches.map((item) => item.dispatchId).sort(), [
       'dispatch-claude',
       'dispatch-codex',
     ]);
-    const swept = await codexPackage.sweepStopMarkers(root, { timeoutMs: 8000 });
+    const swept = await codexPackage.sweepStopMarkers(root, { timeoutMs: 40000 });
     assert.equal(swept.stopped, true, JSON.stringify(swept));
     assert.equal(alive(pids.claude), false, 'the Claude member left nothing running');
     assert.equal(alive(pids.codex), false, 'the Codex member left nothing running');

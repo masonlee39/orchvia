@@ -1,5 +1,5 @@
 import { appendFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
 // SPEC-0035: an owned app-server standing in for the user's Codex CLI. It logs what it was given
@@ -29,6 +29,8 @@ import { createInterface } from 'node:readline';
 //   whose output (a background process's PID) is logged; the turn then waits for an interrupt;
 // - FIXTURE_NOTIFICATIONS: JSON [{ method, params }] sent when the turn starts, each with the thread
 //   and turn added to its params.
+// - FIXTURE_SERVER_CHILD: a Node program started with the app-server and in its directory, as
+//   Codex starts an MCP server, and left to itself when the app-server exits; its PID is logged.
 const send = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
 const log = (entry: Record<string, unknown>) => {
   if (process.env.FIXTURE_LOG)
@@ -72,6 +74,12 @@ if (process.env.ORCHVIA_STOP_MARKER)
       }),
     ),
   });
+if (process.env.FIXTURE_SERVER_CHILD) {
+  const child = spawn(process.execPath, ['-e', process.env.FIXTURE_SERVER_CHILD], {
+    stdio: 'ignore',
+  });
+  log({ event: 'server-child', pid: child.pid });
+}
 let failedOnce = false;
 const requests = JSON.parse(process.env.FIXTURE_REQUESTS ?? '[]') as {
   method: string;

@@ -2,23 +2,27 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.1.33] - 2026-10-02
 
-Corrections from a review of 0.1.31, second part (SPEC-0061).
+A stop marker that looks after the runtime has ended (SPEC-0062), and corrections from a review of 0.1.31, second part (SPEC-0061). Upgrade if a host uses `stopMarker` and its members have MCP servers started through a wrapper such as `npx`.
 
 ### Added
+
+- `policy().network: 'remote'` for a Codex member: every domain through Codex's proxy, as `'direct'`, and no address of this machine.
+- A dispatch's stop marker observation says `waited: true` when it looked more than once for strays to end.
 
 - `verificationEnvironment: 'minimal'` gives a check's command only `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `USER`, `LOGNAME` and `SHELL` of the host, and `verificationInheritEnv` names up to 64 more variables to pass. A check runs outside every sandbox on a workspace that a member has just changed, and by default its command still inherits the host's whole environment. **The default becomes `'minimal'` with the next minor version**: a host whose checks need a variable should name it now.
 
 ### Fixed
 
+- With `stopMarker`, a dispatch could end with `outcome_unknown: Execution stop or local cleanup is unconfirmed` although everything had stopped: the look for stray processes ran while the runtime was being closed, and a process of the runtime's own that ended a moment later, such as an MCP server started through `npx`, was counted as a stray. The look now starts when the runtime has ended, on Claude and on Codex, and is repeated while its time lasts. A dispatch with `stopMarker` ends about 0.13 seconds later.
 - An artifact's journal stayed in `file-commits/` until the next start, which read and hashed every such artifact first: a host that had written 30,000 artifacts took 6.3 seconds to start. A journal is now removed once the transaction that registered its artifact has committed, and that start takes 0.1 seconds.
 - Listing processes held the engine's thread for 36 to 40 ms each time: at each stop marker observation, at the end of each Codex dispatch, and every 25 ms while a Codex dispatch's leftover commands ended. These now list without holding it. `endStopMarkersSync` and `acknowledgeStopMarkers` still list synchronously.
 - A verification's baselines held the engine's thread while every file was read. They are now read without holding it, a large file in parts, with the same hash and limits, and a cancelled verification stops between two files.
 
 ### Changed
 
-- The documentation says what holds for a Codex member's command: the bridge's, the hook's and a host MCP server's variables are kept out of the command's own environment, but on macOS a command can read the Codex process's environment, so nothing given to Codex through the environment is a secret from the member. With the network off a command cannot connect to the bridge's socket, which the native security check now requires.
+- The documentation says what holds for a Codex member's command: the bridge's, the hook's and a host MCP server's variables are kept out of the command's own environment, but on macOS a command can read the Codex process's environment, so nothing given to Codex through the environment is a secret from the member. With the network off a command cannot connect to the bridge's socket, which the native security check now requires. **Under `network: 'direct'` a command reaches a server on 127.0.0.1, so a host MCP server's `token` and `approval: 'ask'` are not a boundary there**: give such a server as a `command`, or set the network to `'remote'`, `{ domains }` or `'off'`. Without `connection`, `networkAccess: true` lets a command call the member's own orchestration tools through the bridge.
 
 ## [0.1.32] - 2026-10-02
 
