@@ -1,5 +1,5 @@
 {
-  "version": "0.1.31",
+  "version": "0.1.32",
   "surface": {
     "exports": [
       "@orchvia/adapter-claude",
@@ -1141,6 +1141,7 @@
       "@orchvia/adapter-claude StopMarkerSweep.liveInstances",
       "@orchvia/adapter-claude StopMarkerSweep.stopped",
       "@orchvia/adapter-claude StopMarkerSweepOptions.keepProven?",
+      "@orchvia/adapter-claude StopMarkerSweepOptions.listHolders?",
       "@orchvia/adapter-claude StopMarkerSweepOptions.onObservation?",
       "@orchvia/adapter-claude StopMarkerSweepOptions.timeoutMs?",
       "@orchvia/adapter-claude StopMarkerSyncResult.ended",
@@ -1278,6 +1279,7 @@
       "@orchvia/adapter-codex StopMarkerSweep.liveInstances",
       "@orchvia/adapter-codex StopMarkerSweep.stopped",
       "@orchvia/adapter-codex StopMarkerSweepOptions.keepProven?",
+      "@orchvia/adapter-codex StopMarkerSweepOptions.listHolders?",
       "@orchvia/adapter-codex StopMarkerSweepOptions.onObservation?",
       "@orchvia/adapter-codex StopMarkerSweepOptions.timeoutMs?",
       "@orchvia/adapter-codex StopMarkerSyncResult.ended",
@@ -6768,6 +6770,7 @@
       "CODEX_POLICY_INVALID",
       "CODEX_REQUEST_FAILED",
       "CODEX_START_LOCK_TIMEOUT",
+      "CODEX_START_LOCK_UNUSABLE",
       "CODEX_TOOL_BRIDGE_UNAVAILABLE",
       "CODEX_VERSION_UNSUPPORTED",
       "CONNECTION_CLOSED",

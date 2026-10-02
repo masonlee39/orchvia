@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   openSync,
   closeSync,
   fsyncSync,
@@ -12,6 +13,21 @@ import { open, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { fail } from './errors.ts';
+
+/**
+ * SPEC-0060 P01: a database and the files SQLite keeps beside it are private. SQLite gives `-wal`,
+ * `-shm` and `-journal` the mode its database has when it creates them, which for a database it
+ * has just created is the process's default; they are set here once they exist, and so are those
+ * that an earlier version left.
+ */
+export function privateDatabaseFiles(path: string): void {
+  for (const suffix of ['', '-wal', '-shm', '-journal'])
+    try {
+      chmodSync(path + suffix, 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+}
 
 export function syncDirectory(path: string): void {
   const fd = openSync(path, 'r');

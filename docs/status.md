@@ -104,6 +104,7 @@ Each specification has a matching TDD record of observed failures before the cha
 | [SPEC-0057](specs/0057-async-artifact-writes.md)                     | A turn's artifact files are written off the event loop before the transaction that registers them (0.1.30)                                                                                                                                            |
 | [SPEC-0058](specs/0058-steer-outcomes-and-evidence-order.md)         | Every steer to a Claude member ends delivered or undelivered with an event, also after a close or a crash; evidence takes effect before its terminal (0.1.31)                                                                                         |
 | [SPEC-0059](specs/0059-sweep-time-and-retirement.md)                 | A start's sweep looks at every dispatch once and waits at most 3 seconds, once; an application's processes are its own; a host retires a dispatch its user confirmed (0.1.31)                                                                         |
+| [SPEC-0060](specs/0060-review-corrections.md)                        | Corrections from a review: masking in time proportional to the text, a Codex start lock that always ends, private files beside the databases, and two counts through indexes (0.1.32)                                                                 |
 
 ## Claude and Codex baselines
 
