@@ -66,12 +66,12 @@ A host wants to run the Codex CLI that the user installed and signed in to as a 
 | `auto`        | write   | `on-request`          | inside the profile without asking | inside the write paths without asking                   |
 
 - **F02** A `plan` dispatch must be read-only and the others writable; anything else, or a mode not listed (full access, D-35-2), fails with `CODEX_POLICY_INVALID` before submission.
-- **F03** `network`: `'off'` (default), `'direct'`, or `{ domains: string[] }`. `plan` allows only `'off'`.
+- **F03** `network`: `'off'` (default), `'direct'`, `'remote'` ([SPEC-0062](0062-stop-look-order-and-remote-network.md) N01: `'direct'` without local addresses), or `{ domains: string[] }`. `plan` allows only `'off'`.
   - `'direct'` is Codex's network proxy (`features.network_proxy = true`, `network = { enabled = true, mode = "full", allow_local_binding = true, domains = { "*" = "allow" } }`), never `network = { enabled = true }` without the proxy, which lets commands reach any Unix socket.
   - `{ domains }` is the same proxy with only those domains and without local addresses.
 - **F04** Before a dispatch with network opens its thread, the adapter checks the proxy with Codex's `command/exec` (which, without a sandbox parameter, runs under the dispatch's profile), running this Node on a short script: `HTTPS_PROXY` is set, a connection to a Unix socket the adapter listens on is refused, and a direct connection to TEST-NET-1 (192.0.2.1:80) is refused, with `EPERM` or `EACCES`. With Codex 0.153.4 and 0.157.1 the three states differ: the proxy gives set, refused, refused; network without the proxy gives unset, connected, a timeout; no network gives unset, refused, refused. If the check cannot run or any part differs, the dispatch fails before submission with `CODEX_NETWORK_PROXY_UNAVAILABLE`; the adapter never falls back to network without the proxy.
 - **F05** Under `'direct'`, programs that ignore the proxy variables, such as `git` over ssh, cannot connect; this is documented.
-- **F06** Local ports differ by platform under `'direct'`: on macOS a command reaches a port on 127.0.0.1 (the host's tool port answers 401 without its token); in CI's Linux sandbox it reaches none, so local services such as a development server or a database are out of reach there. Either way a host tool without its token is never called.
+- **F06** Local ports differ by platform under `'direct'`: on macOS a command reaches a port on 127.0.0.1 (the host's tool port answers 401 without its token); in CI's Linux sandbox it reaches none, so local services such as a development server or a database are out of reach there. Either way a host tool without its token is never called. [SPEC-0062](0062-stop-look-order-and-remote-network.md) corrects the last sentence: a command can read the token from the Codex process on macOS, and then call the tool on a local port under `'direct'`.
 
 ## G. Approvals
 

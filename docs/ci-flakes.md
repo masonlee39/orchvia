@@ -25,6 +25,7 @@ From 2026-09-20 to 2026-09-29 the contract workflow ran 308 times, and 8 runs ne
 - **`0024-E02 after the collector removed every event`**: one `collect()` is a batch of 50 ms and may remove nothing on a loaded machine. The test now collects until no event is left.
 - **`AC11 large Unicode output`**: two seconds for 1.2 MB written and synced; now twenty.
 - **`0036-Y01 the synchronous cleanup`**: ten seconds for its fixture's command to start; now sixty.
+- **`0037-K03` and `AC-0039-M01`, sweeps of a marker root** (found under load before 0.1.33, not in CI): eight seconds for a sweep whose `lsof` takes seconds on a loaded machine, so the dispatches came back `unlisted`; now forty. **`AC-0035-I04`**: the adapter's default second to end a marker's holders; now twenty. **`AC-0061-T02`**: two seconds for the synchronous cleanup; now twenty.
 
 ## What they have in common
 

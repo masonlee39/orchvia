@@ -67,6 +67,8 @@ export interface StopMarkerObservation {
   /** SPEC-0045 K01: processes left out because they belong to something already running. */
   foreignProcesses?: StrayProcess[];
   stopped: boolean;
+  /** SPEC-0062 S02: a dispatch's observation looked more than once for its strays to end. */
+  waited?: true;
   reason?: StopMarkerReason;
 }
 
@@ -140,6 +142,15 @@ export interface StopMarkersOptions {
    * `since`, within `timeoutMs`, or null when that cannot be shown. Hosts leave it out.
    */
   listHolders?: (paths: string[], since: number, timeoutMs: number) => number[] | null;
+  /**
+   * Test seam for an observation: the processes in `workspace` that count as strays of a dispatch
+   * started at `startedAt`, within `timeoutMs`, or null when that cannot be shown. Hosts leave it
+   * out.
+   */
+  listStrays?: (
+    marker: { workspace: string; startedAt: number },
+    timeoutMs: number,
+  ) => Promise<{ counted: StrayProcess[]; foreign: StrayProcess[] } | null>;
 }
 
 export interface StopMarkerSweepOptions {
@@ -516,6 +527,7 @@ export class StopMarkers {
   readonly #root: string | undefined;
   readonly #notify: StopMarkersOptions['onObservation'];
   readonly #listHolders: NonNullable<StopMarkersOptions['listHolders']>;
+  readonly #listStrays: NonNullable<StopMarkersOptions['listStrays']>;
   #directory: string | undefined;
   #startedAt = 0;
   readonly #markers = new Map<string, StopMarker>();
@@ -526,6 +538,7 @@ export class StopMarkers {
     this.#root = options.root === undefined ? undefined : checkStopMarkerRoot(options.root);
     this.#notify = options.onObservation;
     this.#listHolders = options.listHolders ?? listHoldersSync;
+    this.#listStrays = options.listStrays ?? strays;
   }
 
   /** The directory that holds the markers; commands must be able to read it. */
@@ -642,7 +655,23 @@ export class StopMarkers {
     const marker = this.#markers.get(dispatchId);
     if (!marker) return false;
     const held = await endHolders(marker.path, context.remainingMs, true);
-    const looked = held.stopped ? await strays(marker, context.remainingMs()) : null;
+    let looked = held.stopped ? await this.#listStrays(marker, context.remainingMs()) : null;
+    // SPEC-0062 S02: a process that is ending is no stray. Only a look that finds none vouches
+    // (invariant 2), so the last look's strays stand when the time ends.
+    // A process that stays is a stray: the looks end after STRAY_WAIT_MS, as a sweep's wait does.
+    let waited = false;
+    const until = performance.now() + STRAY_WAIT_MS;
+    while (
+      looked?.counted.length &&
+      performance.now() < until &&
+      context.remainingMs() > STRAY_LOOK_MS
+    ) {
+      await wait(STRAY_LOOK_MS);
+      const again = await this.#listStrays(marker, context.remainingMs());
+      if (again === null) break; // The time ended during the look: the earlier strays stand.
+      looked = again;
+      waited = true;
+    }
     const left = held.stopped ? (looked?.counted ?? null) : [];
     const stopped = held.stopped && left !== null && !left.length;
     const reason: StopMarkerReason | undefined = stopped
@@ -661,6 +690,7 @@ export class StopMarkers {
       ...detail(left ?? [], 'strayProcesses'),
       ...detail(looked?.foreign ?? [], 'foreignProcesses'),
       stopped,
+      ...(waited ? { waited } : {}),
       ...(reason ? { reason } : {}),
     });
     // Otherwise the marker stays, so that a later observation of the dispatch can look again.
@@ -816,6 +846,8 @@ interface DispatchRecord {
 }
 /** The longest a sweep waits for strays to exit, over all its dispatches (SPEC-0059 T02). */
 const STRAY_WAIT_MS = 3000;
+/** SPEC-0062 S02: the time between two looks of a dispatch's observation for its strays. */
+const STRAY_LOOK_MS = 200;
 const readJson = (path: string): unknown => {
   try {
     return JSON.parse(readFileSync(path, 'utf8'));

@@ -28,7 +28,11 @@ import { contains } from '../../engine/src/verification.ts';
 // that carry them, and the network proxy check.
 
 export type CodexMode = 'plan' | 'default' | 'acceptEdits' | 'auto';
-export type CodexNetwork = 'off' | 'direct' | { domains: string[] };
+/**
+ * `'direct'`: every domain through Codex's proxy, and this machine's addresses. `'remote'`: every
+ * domain through the proxy and no local address (SPEC-0062 N01).
+ */
+export type CodexNetwork = 'off' | 'direct' | 'remote' | { domains: string[] };
 export interface CodexDispatchPolicy {
   mode: CodexMode;
   network?: CodexNetwork;
@@ -288,7 +292,7 @@ export function checkPolicy(
     return `mode ${mode} does not fit the ${input.permissionProfile} profile`;
   if ((mode === 'default' || mode === 'acceptEdits') && !input.requestPermission)
     return `mode ${mode} asks the host, and the dispatch has no approval callback`;
-  if (network !== 'off' && network !== 'direct') {
+  if (network !== 'off' && network !== 'direct' && network !== 'remote') {
     const domains = (network as { domains?: unknown })?.domains;
     if (
       !Array.isArray(domains) ||
@@ -298,7 +302,7 @@ export function checkPolicy(
         (domain) => typeof domain !== 'string' || domain.length > 253 || !DOMAIN.test(domain),
       )
     )
-      return 'network must be off, direct or { domains } with valid domain names';
+      return 'network must be off, direct, remote or { domains } with valid domain names';
   }
   if (mode === 'plan' && network !== 'off') return 'mode plan has no network';
   const { effort } = policy;
@@ -371,6 +375,8 @@ export function profileSettings(options: {
   let network = '';
   if (options.network === 'direct')
     network = ',network={enabled=true,mode="full",allow_local_binding=true,domains={"*"="allow"}}';
+  else if (options.network === 'remote')
+    network = ',network={enabled=true,mode="full",domains={"*"="allow"}}';
   else if (options.network !== 'off')
     network = `,network={enabled=true,mode="full",domains={${options.network.domains.map((domain) => `${toml(domain)}="allow"`).join(',')}}}`;
   return [

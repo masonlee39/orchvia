@@ -126,7 +126,7 @@ test(
     markers.prepare('held', '/bin/sh', workspace);
     let result: unknown;
     const listings = await synchronousListings(t, () => {
-      result = markers.endAllSync(2000);
+      result = markers.endAllSync(20_000);
     });
     assert.ok(listings >= 1, 'a synchronous exit path cannot wait');
     assert.deepEqual(result, { stopped: true, holders: 0, ended: 0 });
