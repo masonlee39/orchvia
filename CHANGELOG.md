@@ -2,6 +2,18 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [Unreleased]
+
+A stop marker's waits last at least five seconds, and a warning before the default environment of checks changes (SPEC-0063).
+
+### Fixed
+
+- With `stopMarker`, a dispatch on a busy machine could end with `outcome_unknown: Execution stop or local cleanup is unconfirmed` and an observation of `reason: 'unlisted'`: the observation had the adapter's `closeTimeoutMs` or `cleanupTimeoutMs`, one second by default, and `lsof` took longer. The observation, the end of a dispatch's marker holders and the end of all markers at close now last the larger of that time and 5 seconds. They return once done, so nothing takes longer unless a listing does.
+
+### Added
+
+- An engine that has verification rules and no `verificationEnvironment` emits one process warning, `ORCHVIA_VERIFICATION_ENVIRONMENT_DEFAULT`: with the next minor version the default becomes `'minimal'`. Set `'inherit'` or `'minimal'` to say which the checks need.
+
 ## [0.1.33] - 2026-10-02
 
 A stop marker that looks after the runtime has ended (SPEC-0062), and corrections from a review of 0.1.31, second part (SPEC-0061). Upgrade if a host uses `stopMarker` and its members have MCP servers started through a wrapper such as `npx`.
