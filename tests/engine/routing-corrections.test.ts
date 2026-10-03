@@ -151,7 +151,7 @@ async function groups(options: { allowCrossRootReuse?: boolean } = {}) {
     auth,
     payments,
     review,
-    members: [auth.sessionId, payments.sessionId, review.sessionId],
+    members: [auth.sessionId!, payments.sessionId!, review.sessionId!],
   };
 }
 
@@ -357,8 +357,8 @@ test('0019-C02 notifications stay in the source root and refuse another group be
     await assert.rejects(
       router.notifications({
         text: 'Refunds are now rounded half-even.',
-        fromSessionId: g.auth.sessionId,
-        members: [g.auth.sessionId, g.rootB.sessionId],
+        fromSessionId: g.auth.sessionId!,
+        members: [g.auth.sessionId!, g.rootB.sessionId!],
         rootTaskId: g.rootB.id,
       }),
       { code: 'ROUTING_ROOT_MISMATCH' },
@@ -366,8 +366,8 @@ test('0019-C02 notifications stay in the source root and refuse another group be
     await assert.rejects(
       router.notifications({
         text: 'Refunds are now rounded half-even.',
-        fromSessionId: g.auth.sessionId,
-        members: [g.payments.sessionId, g.review.sessionId],
+        fromSessionId: g.auth.sessionId!,
+        members: [g.payments.sessionId!, g.review.sessionId!],
         rootTaskId: g.rootA.id,
       }),
       { code: 'ROUTING_SOURCE_NOT_MEMBER' },
@@ -379,8 +379,8 @@ test('0019-C02 notifications stay in the source root and refuse another group be
     for (const rootTaskId of [undefined, g.rootA.id]) {
       const plan = await router.notifications({
         text: 'Refunds are now rounded half-even.',
-        fromSessionId: g.auth.sessionId,
-        members: [g.auth.sessionId, g.payments.sessionId, g.rootB.sessionId],
+        fromSessionId: g.auth.sessionId!,
+        members: [g.auth.sessionId!, g.payments.sessionId!, g.rootB.sessionId!],
         ...(rootTaskId ? { rootTaskId } : {}),
       });
       assert.deepEqual(
@@ -391,7 +391,7 @@ test('0019-C02 notifications stay in the source root and refuse another group be
     assert.ok(!JSON.stringify(judge.requests).includes('marketing'));
     const plan = await router.notifications({
       text: 'Refunds are now rounded half-even.',
-      fromSessionId: g.auth.sessionId,
+      fromSessionId: g.auth.sessionId!,
       members: g.members,
     });
     const sent = await router.notify(plan);
@@ -412,8 +412,8 @@ test('0019-C02 engine scope still notifies members of other roots and needs a me
     const router = createRouter({ orchestrator: g.orch, judge, runtimes, scope: 'engine' });
     const plan = await router.notifications({
       text: 'The login page now links to the marketing site.',
-      fromSessionId: g.auth.sessionId,
-      members: [g.auth.sessionId, g.rootB.sessionId],
+      fromSessionId: g.auth.sessionId!,
+      members: [g.auth.sessionId!, g.rootB.sessionId!],
     });
     assert.deepEqual(
       plan.notify.map((target) => target.sessionId),
@@ -428,8 +428,8 @@ test('0019-C02 engine scope still notifies members of other roots and needs a me
     await assert.rejects(
       router.notifications({
         text: 'The login page now links to the marketing site.',
-        fromSessionId: g.auth.sessionId,
-        members: [g.rootB.sessionId],
+        fromSessionId: g.auth.sessionId!,
+        members: [g.rootB.sessionId!],
       }),
       { code: 'ROUTING_SOURCE_NOT_MEMBER' },
     );
@@ -472,7 +472,7 @@ test('0019-C03 results over the 32 KiB inline limit are left out with a reason a
         'precondition: the fake result has the intended size',
       );
     assert.ok(wideOver.result!.length < 32768, 'precondition: fewer characters than bytes');
-    const members = [over, small, wideOver, exact, wideExact].map((task) => task.sessionId);
+    const members = [over, small, wideOver, exact, wideExact].map((task) => task.sessionId!);
     const route = (maxContextRefs?: number) =>
       createRouter({
         orchestrator: e.orch,
@@ -555,7 +555,7 @@ test('0019-C03 a busy agent whose own result is too large still yields a submitt
     const proposal = await router.route({
       goal: 'Add a CSV export',
       acceptance,
-      members: [busy.sessionId, notes.sessionId],
+      members: [busy.sessionId!, notes.sessionId!],
       rootTaskId: r.id,
       needsWrites: true,
     });
@@ -592,7 +592,7 @@ test('0019-C03 a result that becomes unreadable after routing fails the submissi
     const proposal = await router.route({
       goal: 'Summarize the notes',
       acceptance,
-      members: [kept.sessionId, broken.sessionId],
+      members: [kept.sessionId!, broken.sessionId!],
       rootTaskId: r.id,
       needsWrites: false,
     });
@@ -634,7 +634,7 @@ test('0019-C03 a result collected after routing fails the submission explicitly'
     const proposal = await router.route({
       goal: 'Summarize the notes',
       acceptance,
-      members: [notes.sessionId],
+      members: [notes.sessionId!],
       rootTaskId: r.id,
       needsWrites: false,
     });

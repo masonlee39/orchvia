@@ -274,20 +274,20 @@ async function unobservedFixture(t: TestContext, clock?: EngineClock) {
 test('AC-R04.1 owner reconciliation releases only the attested unknown handle and restores scheduling', async (t) => {
   const f = await unobservedFixture(t);
   assert.equal((await f.scheduler()).executionOccupied, 2);
-  assert.equal(f.adapter.hasActiveResources(f.first.sessionId), true);
-  assert.equal(f.adapter.hasActiveResources(f.second.sessionId), true);
+  assert.equal(f.adapter.hasActiveResources(f.first.sessionId!), true);
+  assert.equal(f.adapter.hasActiveResources(f.second.sessionId!), true);
   const queued = await f.read<TaskSnapshot>('tasks.create', {
     spec: { ...spec, runtime: { provider: 'fake', model: 'fixture' } },
     idempotencyKey: 'queued',
   });
   assert.equal((await f.task(queued.id)).status, 'queued');
-  const originalTarget = target(await f.session(f.first.sessionId));
-  const op = await f.reconcile(f.first.sessionId, 'owner-first');
+  const originalTarget = target(await f.session(f.first.sessionId!));
+  const op = await f.reconcile(f.first.sessionId!, 'owner-first');
   assert.equal(result(op).executionReleased, true);
   assert.equal(result(op).resolved, false);
   assert.equal(result(op).unobservedResourcesReconciled, true);
-  assert.equal(f.adapter.hasActiveResources(f.first.sessionId), false);
-  assert.equal(f.adapter.hasActiveResources(f.second.sessionId), true);
+  assert.equal(f.adapter.hasActiveResources(f.first.sessionId!), false);
+  assert.equal(f.adapter.hasActiveResources(f.second.sessionId!), true);
   await until(
     () => f.task(queued.id),
     (value) => value.status === 'waiting_approval',
@@ -317,14 +317,14 @@ test('AC-R04.1 owner reconciliation releases only the attested unknown handle an
   assert.deepEqual(audit.target, originalTarget);
   assert.deepEqual(audit.evidence, proof);
   assert.equal(audit.resourceReconciliation, 'owner_attested_unobserved');
-  await f.reconcile(f.second.sessionId, 'owner-second');
+  await f.reconcile(f.second.sessionId!, 'owner-second');
   await f.adapter.close();
 });
 
 test('AC-R04.1 unauthorized, stale, conflicting and incomplete declarations retain unknown records', async (t) => {
   const f = await unobservedFixture(t);
   const params = {
-    target: target(await f.session(f.first.sessionId)),
+    target: target(await f.session(f.first.sessionId!)),
     evidence: proof,
     idempotencyKey: 'guarded',
   };
@@ -346,32 +346,32 @@ test('AC-R04.1 unauthorized, stale, conflicting and incomplete declarations reta
     );
   }
   await assert.rejects(
-    f.reconcile(f.first.sessionId, 'conflict', {
+    f.reconcile(f.first.sessionId!, 'conflict', {
       ...proof,
       outcome: 'failed',
       sideEffects: 'resolved',
     }),
     { code: 'EVIDENCE_CONFLICT' },
   );
-  const unknown = await f.reconcile(f.first.sessionId, 'still-unknown', {
+  const unknown = await f.reconcile(f.first.sessionId!, 'still-unknown', {
     ...proof,
     localResources: 'unknown',
   });
   assert.equal(result(unknown).executionReleased, false);
-  assert.equal(f.adapter.hasActiveResources(f.first.sessionId), true);
+  assert.equal(f.adapter.hasActiveResources(f.first.sessionId!), true);
   assert.equal((await f.scheduler()).executionOccupied, 2);
   assert.equal(
     (await f.events()).events.filter((item) => item.type === 'session.resources_reconciled').length,
     0,
   );
-  const localOnly = await f.reconcile(f.first.sessionId, 'local-only', {
+  const localOnly = await f.reconcile(f.first.sessionId!, 'local-only', {
     ...proof,
     remoteExecution: 'unknown',
   });
   assert.equal(result(localOnly).executionReleased, false);
-  assert.equal(f.adapter.hasActiveResources(f.first.sessionId), false);
+  assert.equal(f.adapter.hasActiveResources(f.first.sessionId!), false);
   assert.equal((await f.scheduler()).executionOccupied, 2);
-  const complete = await f.reconcile(f.first.sessionId, 'complete', {
+  const complete = await f.reconcile(f.first.sessionId!, 'complete', {
     ...proof,
     outcome: 'completed',
     sideEffects: 'resolved',
@@ -391,8 +391,8 @@ test('AC-R04.2 failed durable reconciliation does not retire the adapter handle 
   t.after(() => db.close());
   db.exec(`CREATE TRIGGER fail_owner_reconcile BEFORE INSERT ON operations
     WHEN NEW.method = 'sessions.reconcile' BEGIN SELECT RAISE(ABORT, 'fixture commit failure'); END`);
-  await assert.rejects(f.reconcile(f.first.sessionId, 'commit-retry'), /fixture commit failure/);
-  assert.equal(f.adapter.hasActiveResources(f.first.sessionId), true);
+  await assert.rejects(f.reconcile(f.first.sessionId!, 'commit-retry'), /fixture commit failure/);
+  assert.equal(f.adapter.hasActiveResources(f.first.sessionId!), true);
   assert.equal((await f.scheduler()).executionOccupied, 2);
   assert.equal(
     (await f.events()).events.filter((item) => item.type === 'session.resources_reconciled').length,
@@ -404,7 +404,7 @@ test('AC-R04.2 failed durable reconciliation does not retire the adapter handle 
     JSON.stringify({
       id: 'fixture-conflict',
       revision: 1,
-      dispatchId: (await f.session(f.first.sessionId)).activeDispatchId,
+      dispatchId: (await f.session(f.first.sessionId!)).activeDispatchId,
       sessionId: f.first.sessionId,
       taskId: f.first.id,
       generation: 1,
@@ -414,14 +414,14 @@ test('AC-R04.2 failed durable reconciliation does not retire the adapter handle 
       createdAt: new Date().toISOString(),
     }),
   );
-  await assert.rejects(f.reconcile(f.first.sessionId, 'commit-retry'), {
+  await assert.rejects(f.reconcile(f.first.sessionId!, 'commit-retry'), {
     code: 'EXECUTION_EVIDENCE_CONFLICT',
   });
-  assert.equal(f.adapter.hasActiveResources(f.first.sessionId), true);
+  assert.equal(f.adapter.hasActiveResources(f.first.sessionId!), true);
   db.prepare('DELETE FROM execution_conflicts WHERE id = ?').run('fixture-conflict');
-  const op = await f.reconcile(f.first.sessionId, 'commit-retry');
+  const op = await f.reconcile(f.first.sessionId!, 'commit-retry');
   assert.equal(result(op).executionReleased, true);
-  assert.equal(f.adapter.hasActiveResources(f.first.sessionId), false);
+  assert.equal(f.adapter.hasActiveResources(f.first.sessionId!), false);
   assert.equal(
     (await f.events()).events.filter((item) => item.type === 'session.resources_reconciled').length,
     1,
@@ -440,25 +440,25 @@ test('AC-R04.2 an expired reconciliation transaction retains the original record
     },
   });
   advancing = true;
-  await assert.rejects(f.reconcile(f.first.sessionId, 'deadline-retry'), { code: 'TIMEOUT' });
+  await assert.rejects(f.reconcile(f.first.sessionId!, 'deadline-retry'), { code: 'TIMEOUT' });
   advancing = false;
-  assert.equal(f.adapter.hasActiveResources(f.first.sessionId), true);
+  assert.equal(f.adapter.hasActiveResources(f.first.sessionId!), true);
   assert.equal((await f.scheduler()).executionOccupied, 2);
   assert.equal(
     (await f.events()).events.filter((item) => item.type === 'session.resources_reconciled').length,
     0,
   );
-  await f.reconcile(f.first.sessionId, 'deadline-retry');
-  assert.equal(f.adapter.hasActiveResources(f.first.sessionId), false);
+  await f.reconcile(f.first.sessionId!, 'deadline-retry');
+  assert.equal(f.adapter.hasActiveResources(f.first.sessionId!), false);
 });
 
 test('AC-R04.1 adapters without the narrow reconciliation hook keep their original resource guard', async (t) => {
   const f = await unobservedFixture(t);
   f.adapter.prepareUnobservedCleanup = undefined;
-  await assert.rejects(f.reconcile(f.first.sessionId, 'unsupported'), {
+  await assert.rejects(f.reconcile(f.first.sessionId!, 'unsupported'), {
     code: 'RUNTIME_STILL_ACTIVE',
   });
-  assert.equal(f.adapter.hasActiveResources(f.first.sessionId), true);
+  assert.equal(f.adapter.hasActiveResources(f.first.sessionId!), true);
 });
 
 test('AC-R04.2 cleanup preparation fences observers and target identity without reporting exit', async () => {
@@ -556,15 +556,15 @@ test('AC-R04.4 a real Unix SDK client cannot attest an unobserved Claude record'
   const host = await startUnixHost(f.engine, { socketPath: join(f.dir, 'host.sock') });
   const client = await connectOrchestrator({ socketPath: join(f.dir, 'host.sock') });
   try {
-    const session = await client.sessions.get(f.first.sessionId);
+    const session = await client.sessions.get(f.first.sessionId!);
     await assert.rejects(
       client.sessions.reconcile(target(session), proof, { idempotencyKey: 'socket-owner' }),
       { code: 'UNAUTHORIZED' },
     );
     assert.equal(f.adapter.hasActiveResources(session.id), true);
     assert.equal((await client.scheduler.get()).executionOccupied, 2);
-    await f.reconcile(f.first.sessionId, 'real-owner-first');
-    await f.reconcile(f.second.sessionId, 'real-owner-second');
+    await f.reconcile(f.first.sessionId!, 'real-owner-first');
+    await f.reconcile(f.second.sessionId!, 'real-owner-second');
   } finally {
     await client.close();
     await host.close({ timeoutMs: 500 });
@@ -601,7 +601,7 @@ test('AC-R04.4 the embedded TypeScript SDK reconciles an unknown record and clos
     () => client.tasks.get(task.id),
     (value) => value.status === 'blocked',
   );
-  const session = await client.sessions.get(task.initial.sessionId);
+  const session = await client.sessions.get(task.initial.sessionId!);
   const op = await client.sessions.reconcile(
     target(session),
     { ...proof, outcome: 'completed', sideEffects: 'resolved', result: 'done' },

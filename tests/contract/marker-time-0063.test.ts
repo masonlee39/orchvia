@@ -201,11 +201,8 @@ async function started(t: any, config: Record<string, unknown>) {
   return { engine, warnings, settle };
 }
 
-test('AC-0063-W01 a host with checks and no verificationEnvironment is warned once at start', async (t) => {
-  const { warnings } = await started(t, { verificationRules: [rule] });
-  assert.equal(warnings.length, 1, JSON.stringify(warnings));
-  assert.match(warnings[0]!, /verificationEnvironment/);
-  assert.match(warnings[0]!, /'minimal'/);
+test('0065-B02 the default changed, so a host with checks is no longer warned at start', async (t) => {
+  assert.deepEqual((await started(t, { verificationRules: [rule] })).warnings, []);
   for (const value of ['inherit', 'minimal'])
     assert.deepEqual(
       (await started(t, { verificationRules: [rule], verificationEnvironment: value })).warnings,
@@ -215,7 +212,7 @@ test('AC-0063-W01 a host with checks and no verificationEnvironment is warned on
   assert.deepEqual((await started(t, {})).warnings, [], 'no checks');
 });
 
-test('AC-0063-W02 a host without checks is warned at its first registered rule, once', async (t) => {
+test('0065-B02 a host is not warned at a registered rule either', async (t) => {
   const { engine, warnings, settle } = await started(t, {});
   assert.deepEqual(warnings, []);
   for (const version of ['1', '2']) {
@@ -225,6 +222,6 @@ test('AC-0063-W02 a host without checks is warned at its first registered rule, 
       { owner: true },
     );
     await settle();
-    assert.equal(warnings.length, 1, `after version ${version}`);
+    assert.deepEqual(warnings, [], `after version ${version}`);
   }
 });

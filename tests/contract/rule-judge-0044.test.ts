@@ -144,7 +144,7 @@ test('AC-0044-E04 with the default policy, a route by the rule judge asks for co
   const proposal = await router.route({
     goal: 'Fix the login redirect after OAuth2 sign-in',
     acceptance,
-    members: [done.task.sessionId],
+    members: [done.task.sessionId!],
   });
   assert.deepEqual(proposal.decision, { mode: 'reuse', sessionId: done.task.sessionId });
   assert.ok(proposal.judgeConfidence! <= 0.6);

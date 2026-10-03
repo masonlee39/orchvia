@@ -27,8 +27,9 @@ class CheckAcceptanceSpec:
 @dataclass(frozen=True)
 class TaskSpec:
     goal: str
-    runtime: RuntimeSpec
-    acceptance: AcceptanceSpec | CheckAcceptanceSpec
+    # Absent only on a host task (executor="host"), which no runtime runs (SPEC-0065 H01).
+    runtime: RuntimeSpec | None = None
+    acceptance: AcceptanceSpec | CheckAcceptanceSpec | None = None
     dependency_task_ids: list[str] = field(default_factory=list)
     parent_task_id: str | None = None
     write_scope: str | None = None
@@ -39,6 +40,9 @@ class TaskSpec:
     # The host's own filterable label and JSON object (SPEC-0027 L01); metadata keys are sent as written.
     label: str | None = None
     metadata: dict[str, Any] | None = None
+    # "host": the host ends the task with tasks.complete; expires_at is an ISO 8601 time (SPEC-0065).
+    executor: Literal["host"] | None = None
+    expires_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,7 +98,8 @@ _WIRE_TO_PYTHON = {
     "fallbackModes": "fallback_modes", "maxQueueWaitMs": "max_queue_wait_ms", "enqueuedAt": "enqueued_at",
     "reasonCode": "reason_code", "submittedAt": "submitted_at", "taskIds": "task_ids",
     "permissionProfile": "permission_profile",
-    "dependencyTaskIds": "dependency_task_ids", "parentTaskId": "parent_task_id",
+    "dependencyTaskIds": "dependency_task_ids", "parentTaskId": "parent_task_id", "expiresAt": "expires_at",
+    "hostTasks": "host_tasks",
     "rootTaskId": "root_task_id", "writeScope": "write_scope", "writePaths": "write_paths",
     "ruleRefs": "rule_refs", "maxRepairs": "max_repairs", "verificationRules": "verification_rules",
     "verificationAttempts": "verification_attempts", "cwdRelative": "cwd_relative",
@@ -209,6 +214,9 @@ def to_wire(value: Any) -> Any:
         value = {key: item for key, item in asdict(value).items() if key != "result" or item is not None}
     elif isinstance(value, TaskSpec):
         value = {key: item for key, item in asdict(value).items() if item is not None}
+        # A host task has no dependency list unless it names one (SPEC-0065 H01).
+        if value.get("executor") == "host" and not value["dependency_task_ids"]:
+            del value["dependency_task_ids"]
     elif is_dataclass(value) and not isinstance(value, type):
         value = asdict(value)
     if isinstance(value, Mapping):

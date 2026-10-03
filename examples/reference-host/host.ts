@@ -475,7 +475,7 @@ export class ReferenceHost {
       if (!step.taskId) continue;
       const task = await this.orch.tasks.get(step.taskId);
       if (task.status !== 'blocked' || !task.reason?.startsWith('outcome_unknown')) continue;
-      const session = await this.orch.sessions.get(task.sessionId);
+      const session = await this.orch.sessions.get(task.sessionId!);
       await this.command(
         runId,
         `refhost/${runId}/reconcile-${step.stepId}-${session.activeDispatchId}`,

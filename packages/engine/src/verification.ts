@@ -226,8 +226,8 @@ const MINIMAL_ENVIRONMENT = [
 const MINIMAL_ENVIRONMENT_WINDOWS = ['SystemRoot', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE'];
 /**
  * SPEC-0061 V01, V02: the environment of a check's command, or undefined for the host's own. A
- * check runs outside every sandbox on what a member changed, so with `'minimal'` it gets only the
- * variables above and the ones the host names. Throws VALIDATION_ERROR for another mode or name.
+ * check runs outside every sandbox on what a member changed, so with `'minimal'`, the default, it
+ * gets only the variables above and the ones the host names. Throws VALIDATION_ERROR for another mode or name.
  */
 export function verificationEnvironment(
   mode: unknown,
@@ -240,7 +240,8 @@ export function verificationEnvironment(
   const named = names === undefined ? [] : strings(names, 'verificationInheritEnv', 0, 64);
   if (named.some((name) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)))
     fail('VALIDATION_ERROR', 'verificationInheritEnv takes the names of environment variables');
-  if (mode !== 'minimal') return undefined;
+  // SPEC-0065 B02: minimal is the default, as SPEC-0061 V03 announced.
+  if (mode === 'inherit') return undefined;
   const environment: NodeJS.ProcessEnv = {};
   for (const name of [
     ...MINIMAL_ENVIRONMENT,

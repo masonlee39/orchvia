@@ -394,7 +394,7 @@ test('AC09 paused mailbox is persistent and duplicates do not start two turns', 
   try {
     const t = await create(f.engine);
     const s = await until(
-      () => session(f.engine, t.sessionId),
+      () => session(f.engine, t.sessionId!),
       (s) => s.status === 'running',
     );
     const target = {
@@ -474,7 +474,7 @@ test('AC10 stale control cannot interrupt a newer state', async () => {
       () => task(f.engine, t.id),
       (s) => s.status === 'waiting_approval',
     );
-    const s = await session(f.engine, t.sessionId);
+    const s = await session(f.engine, t.sessionId!);
     const target = {
       sessionId: s.id,
       expectedGeneration: s.generation,
@@ -626,7 +626,7 @@ test('AC09 final-result-only acceptance preserves the native session identity', 
       () => task(f.engine, t.id),
       (t) => t.status === 'waiting_approval',
     );
-    assert.equal((await session(f.engine, t.sessionId)).providerSessionId, 'native-result-only');
+    assert.equal((await session(f.engine, t.sessionId!)).providerSessionId, 'native-result-only');
   } finally {
     await f.cleanup();
   }
@@ -637,7 +637,7 @@ test('AC10 pause operation cannot be replaced silently by concurrent cancel inte
   try {
     const t = await create(f.engine);
     const s = await until(
-      () => session(f.engine, t.sessionId),
+      () => session(f.engine, t.sessionId!),
       (s) => s.status === 'running',
     );
     const target = {
@@ -709,7 +709,7 @@ test('AC09 acceptance cannot bypass an explicit paused session to deliver queued
       () => task(f.engine, t.id),
       (s) => s.status === 'waiting_approval',
     );
-    const s = await session(f.engine, t.sessionId);
+    const s = await session(f.engine, t.sessionId!);
     const target = {
       sessionId: s.id,
       expectedGeneration: s.generation,
@@ -780,7 +780,7 @@ test('AC04 session resume reissues expired acceptance without rerunning complete
       (t) => t.status === 'waiting_approval',
     );
     clock.advance(70);
-    const s = await session(f.engine, t.sessionId);
+    const s = await session(f.engine, t.sessionId!);
     assert.equal(s.status, 'paused');
     const target = {
       sessionId: s.id,
@@ -820,7 +820,7 @@ test('AC10 terminal identity failure resolves pending control as outcome_unknown
   try {
     const t = await create(f.engine);
     const s = await until(
-      () => session(f.engine, t.sessionId),
+      () => session(f.engine, t.sessionId!),
       (s) => s.providerSessionId === 'native-a',
     );
     const target = {

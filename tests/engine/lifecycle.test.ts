@@ -203,7 +203,7 @@ async function fixture(accepted = true) {
   const task = (id: string) => read<TaskSnapshot>(engine, 'tasks.get', { taskId: id });
   const pause = async (t: TaskSnapshot, mode = 'drain') =>
     engine.call('sessions.control', {
-      target: target(await session(t.sessionId)),
+      target: target(await session(t.sessionId!)),
       command: { action: 'pause', mode },
       idempotencyKey: 'pause',
     }) as Promise<OperationSnapshot>;
@@ -233,7 +233,7 @@ test('0011-R01 control deadline uses one wall-clock sample and retry preserves i
   try {
     const t = await f.create();
     const params = {
-      target: target(await f.session(t.sessionId)),
+      target: target(await f.session(t.sessionId!)),
       command: { action: 'pause', mode: 'drain' },
       idempotencyKey: 'exact-deadline',
     };
@@ -256,10 +256,10 @@ test('0012-R01 a client pause retains its origin while an active dispatch drains
   try {
     const task = await f.create();
     await f.pause(task);
-    assert.equal((await f.session(task.sessionId)).pauseOrigin, 'client');
+    assert.equal((await f.session(task.sessionId!)).pauseOrigin, 'client');
     f.gates[0]({ type: 'result', text: 'stopped at pause', providerSessionId: 'native-lifecycle' });
     await flush();
-    const paused = await f.session(task.sessionId);
+    const paused = await f.session(task.sessionId!);
     assert.equal(paused.status, 'paused');
     assert.equal(paused.pauseOrigin, 'client');
   } finally {
@@ -271,7 +271,7 @@ test('0003-A01/A03 drain deadline is durable, independent of wall-clock rollback
   const f = await fixture();
   try {
     const t = await f.create();
-    const s = await f.session(t.sessionId);
+    const s = await f.session(t.sessionId!);
     const p = {
       target: target(s),
       command: { action: 'pause', mode: 'drain' },
@@ -314,7 +314,7 @@ test('0003-A02 acceptance timeout and ended unknown still reserve the only dispa
     await flush();
     assert.equal((await f.task(queued.id)).status, 'queued');
     assert.equal(f.calls(), 1);
-    assert.ok((await f.session(t.sessionId)).activeDispatchId);
+    assert.ok((await f.session(t.sessionId!)).activeDispatchId);
   } finally {
     await f.cleanup();
   }
@@ -335,7 +335,7 @@ test('0003-A04/A05 late result needs explicit owner reconciliation and resume ne
       'late terminal is evidence, not implicit resolution',
     );
     const p = {
-      target: target(await f.session(t.sessionId)),
+      target: target(await f.session(t.sessionId!)),
       evidence: proof(),
       idempotencyKey: 'reconcile',
     };
@@ -374,11 +374,11 @@ test('0003-A05 process-stopped alone cannot resolve business uncertainty or rele
     const evidence = { ...proof('unknown'), remoteExecution: 'unknown', sideEffects: 'unknown' };
     await f.engine.call(
       'sessions.reconcile',
-      { target: target(await f.session(t.sessionId)), evidence, idempotencyKey: 'partial' },
+      { target: target(await f.session(t.sessionId!)), evidence, idempotencyKey: 'partial' },
       { owner: true },
     );
     assert.equal((await f.task(t.id)).status, 'blocked');
-    assert.ok((await f.session(t.sessionId)).activeDispatchId);
+    assert.ok((await f.session(t.sessionId!)).activeDispatchId);
     const next = await f.create('next');
     assert.equal((await f.task(next.id)).status, 'queued');
     assert.equal(f.calls(), 1);
@@ -399,7 +399,7 @@ test('0003-A03 interrupt timeout cannot masquerade as observed interruption', as
       (await read<OperationSnapshot>(f.engine, 'operations.get', { operationId: op.id })).status,
       'outcome_unknown',
     );
-    assert.equal((await f.session(t.sessionId)).status, 'outcome_unknown');
+    assert.equal((await f.session(t.sessionId!)).status, 'outcome_unknown');
   } finally {
     await f.cleanup();
   }
@@ -415,7 +415,7 @@ test('0003-A05 still-held runtime and conflicting late evidence reject a resolvi
       f.engine.call(
         'sessions.reconcile',
         {
-          target: target(await f.session(t.sessionId)),
+          target: target(await f.session(t.sessionId!)),
           evidence: proof('not_executed'),
           idempotencyKey: 'held',
         },
@@ -429,7 +429,7 @@ test('0003-A05 still-held runtime and conflicting late evidence reject a resolvi
       f.engine.call(
         'sessions.reconcile',
         {
-          target: target(await f.session(t.sessionId)),
+          target: target(await f.session(t.sessionId!)),
           evidence: proof('not_executed'),
           idempotencyKey: 'conflict',
         },
@@ -497,7 +497,7 @@ test('0003-A02 known pre-submission failure releases capacity without misclassif
     });
     await flush();
     assert.equal((await f.task(first.id)).status, 'failed');
-    assert.equal((await f.session(first.sessionId)).activeDispatchId, null);
+    assert.equal((await f.session(first.sessionId!)).activeDispatchId, null);
     assert.equal((await f.task(second.id)).status, 'running');
     assert.equal(f.calls(), 2);
   } finally {
@@ -552,7 +552,7 @@ test('0003-A02 deadline updates message/outbox atomically and reconciliation nev
     await f.engine.call(
       'sessions.reconcile',
       {
-        target: target(await f.session(t.sessionId)),
+        target: target(await f.session(t.sessionId!)),
         evidence: proof(),
         idempotencyKey: 'second-reconcile',
       },

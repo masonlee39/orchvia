@@ -6,13 +6,13 @@ Detailed usage of the engine and both SDKs. Start with the [README](../README.md
 
 Choose packages for the process that will own or connect to the engine:
 
-| Package | Role | When needed |
-| --- | --- | --- |
-| `@orchvia/sdk` | TypeScript application API | TypeScript consumers |
-| `@orchvia/engine` | Shared scheduler, storage and runtime contracts | Engine owners; also an SDK dependency |
-| `@orchvia/adapter-claude` | Claude runtime adapter | Claude execution |
-| `@orchvia/adapter-codex` | Codex App Server adapter | Codex execution |
-| `@orchvia/cli` | Standalone/managed Node host and commands | CLI or Python-owned host operation |
+| Package                   | Role                                            | When needed                           |
+| ------------------------- | ----------------------------------------------- | ------------------------------------- |
+| `@orchvia/sdk`            | TypeScript application API                      | TypeScript consumers                  |
+| `@orchvia/engine`         | Shared scheduler, storage and runtime contracts | Engine owners; also an SDK dependency |
+| `@orchvia/adapter-claude` | Claude runtime adapter                          | Claude execution                      |
+| `@orchvia/adapter-codex`  | Codex App Server adapter                        | Codex execution                       |
+| `@orchvia/cli`            | Standalone/managed Node host and commands       | CLI or Python-owned host operation    |
 
 The npm packages are published. Install the three Claude packages together in the consuming project:
 
@@ -40,25 +40,25 @@ Package exports are ESM-only. The package smoke verifies CJS and ESM single-file
 
 ## Implemented scope
 
-| Component | Current capability |
-| --- | --- |
-| Single engine | SQLite WAL, exclusive writer, durable task/session/operation/message/approval/event/usage state; schema 3 |
-| Scheduling | Dependencies, finite reuse queues, per-session single flight, overlapping write-scope exclusion, A/Q/R isolation, turn/delegation/message limits |
-| Sessions | Logical open, serial reuse, checkpoint-bound native fork, observed compaction, generation rotation, pause/resume/stop and owner reconciliation |
-| Model tools | Owner-enabled work_delegate, work_send, work_read, work_control; private Claude MCP and Codex stdio bridge with dispatch-bound authorization |
-| Acceptance | Human result review or frozen registered verification commands; separate expiring runtime-permission approval |
-| Accounting | Exact registered-price estimates, direct/tree/overhead cost views, dispatch reservations, late usage and explicit unknown coverage |
-| Storage | Protected bounded GC, lifetime tombstones, leased paged snapshots, backpressure, settlement reserve, verified backups and phased archive/namespace rollover |
-| TypeScript | Embedded owner or Unix-socket client; generated wire types and bounded schema validator |
-| Python | Standard-library async client; owned Node stdio host or Unix connection; equivalent methods, generated wire types and validator |
-| Local protocol | Wire 2.0, immutable expectedStoreId on mutations, JSON-RPC 2.0, 1 MiB frames; per-connection and host-wide resource limits |
-| CLI | host, doctor, submit, run, attach, status, approve, control; `host --read-only` for offline reads; private tool-bridge |
-| Offline reads | `openOrchestratorReadOnly` and `host --read-only` read tasks, usage, events and operations of a store whose engine is not running, without a lock, recovery or writes |
-| Host labels | `label` and `metadata` on tasks and sessions, inherited by what the engine creates, filterable with `tasks.list({ label })` and passed to runtimes with the task chain |
-| Host queries | `tasks.list` by status and newest first, `tasks.getMany` for up to 100 tasks, `usage.summary` of a root task's tree and `usage.byTask` of up to 100 tasks per model, with cache writes split by duration where the runtime splits them, all through indexes; `blockedBy` says why a waiting task waits, and `deliveredAt` when a task last delivered |
-| Host lifecycle | `close({ mode: 'pause' })` pauses what it interrupts as `owner_shutdown`, and `pausedByClose` says which paused tasks were running; `rules.retire` retires a runtime rule, which the same content reactivates; `createEngine` writes its reserve without blocking the event loop |
-| Delivery | Five local npm tarballs, Python wheel/sdist, clean-install smoke script, configured macOS/Linux version matrix |
-| Routing layer | Optional SDK layer, `@orchvia/sdk/routing` and `orchvia.routing`: a judge you choose, such as the built-in TypeSafe Jev adapter, proposes which agent in a group takes a request and which results it carries; the engine validates and executes the declaration |
+| Component      | Current capability                                                                                                                                                                                                                                                                                                                                   |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Single engine  | SQLite WAL, exclusive writer, durable task/session/operation/message/approval/event/usage state; schema 3                                                                                                                                                                                                                                            |
+| Scheduling     | Dependencies, finite reuse queues, per-session single flight, overlapping write-scope exclusion, A/Q/R isolation, turn/delegation/message limits                                                                                                                                                                                                     |
+| Sessions       | Logical open, serial reuse, checkpoint-bound native fork, observed compaction, generation rotation, pause/resume/stop and owner reconciliation                                                                                                                                                                                                       |
+| Model tools    | Owner-enabled work_delegate, work_send, work_read, work_control; private Claude MCP and Codex stdio bridge with dispatch-bound authorization                                                                                                                                                                                                         |
+| Acceptance     | Human result review or frozen registered verification commands; separate expiring runtime-permission approval                                                                                                                                                                                                                                        |
+| Accounting     | Exact registered-price estimates, direct/tree/overhead cost views, dispatch reservations, late usage and explicit unknown coverage                                                                                                                                                                                                                   |
+| Storage        | Protected bounded GC, lifetime tombstones, leased paged snapshots, backpressure, settlement reserve, verified backups and phased archive/namespace rollover                                                                                                                                                                                          |
+| TypeScript     | Embedded owner or Unix-socket client; generated wire types and bounded schema validator                                                                                                                                                                                                                                                              |
+| Python         | Standard-library async client; owned Node stdio host or Unix connection; equivalent methods, generated wire types and validator                                                                                                                                                                                                                      |
+| Local protocol | Wire 2.0, immutable expectedStoreId on mutations, JSON-RPC 2.0, 1 MiB frames; per-connection and host-wide resource limits                                                                                                                                                                                                                           |
+| CLI            | host, doctor, submit, run, attach, status, approve, control; `host --read-only` for offline reads; private tool-bridge                                                                                                                                                                                                                               |
+| Offline reads  | `openOrchestratorReadOnly` and `host --read-only` read tasks, usage, events and operations of a store whose engine is not running, without a lock, recovery or writes                                                                                                                                                                                |
+| Host labels    | `label` and `metadata` on tasks and sessions, inherited by what the engine creates, filterable with `tasks.list({ label })` and passed to runtimes with the task chain                                                                                                                                                                               |
+| Host queries   | `tasks.list` by status and newest first, `tasks.getMany` for up to 100 tasks, `usage.summary` of a root task's tree and `usage.byTask` of up to 100 tasks per model, with cache writes split by duration where the runtime splits them, all through indexes; `blockedBy` says why a waiting task waits, and `deliveredAt` when a task last delivered |
+| Host lifecycle | `close({ mode: 'pause' })` pauses what it interrupts as `owner_shutdown`, and `pausedByClose` says which paused tasks were running; `rules.retire` retires a runtime rule, which the same content reactivates; `createEngine` writes its reserve without blocking the event loop                                                                     |
+| Delivery       | Five local npm tarballs, Python wheel/sdist, clean-install smoke script, configured macOS/Linux version matrix                                                                                                                                                                                                                                       |
+| Routing layer  | Optional SDK layer, `@orchvia/sdk/routing` and `orchvia.routing`: a judge you choose, such as the built-in TypeSafe Jev adapter, proposes which agent in a group takes a request and which results it carries; the engine validates and executes the declaration                                                                                     |
 
 The owner enables model tools with `tools: { enabled: true }` and runtime permission requests with `runtimeApprovals: { enabled: true }`. Defaults preserve the smaller tool surface. The engine does not infer task independence from prose or select an economic routing strategy automatically; the optional [routing layer](#routing-layer-optional) can propose declarations with a judge the application chooses. `contextPlan` declares fresh/reuse/fork or in-turn continuation intent. Fork preparation returns a logical receipt; native forking happens on first use and must produce a distinct native ID. Checks execute trusted owner-registered commands and detect changed baselines; this is not an OS isolation boundary for arbitrary executables.
 
@@ -178,9 +178,17 @@ The following fake configuration is **currently supported**. Replace the three a
   "workspace": "/absolute/workspace",
   "stateDir": "/absolute/private-state",
   "transport": { "mode": "unix", "socketPath": "/absolute/private-state/host.sock" },
-  "providers": { "fake": { "model": "fake-model", "permissionProfile": "read-only", "delayMs": 20 } },
+  "providers": {
+    "fake": { "model": "fake-model", "permissionProfile": "read-only", "delayMs": 20 }
+  },
   "limits": { "maxActiveSessions": 2, "maxTurnsPerTask": 20, "maxQuarantinedDispatches": 32 },
-  "timeouts": { "acceptanceMs": 30000, "turnMs": 1800000, "drainMs": 300000, "interruptMs": 30000, "reconcileMs": 60000 }
+  "timeouts": {
+    "acceptanceMs": 30000,
+    "turnMs": 1800000,
+    "drainMs": 300000,
+    "interruptMs": 30000,
+    "reconcileMs": 60000
+  }
 }
 ```
 
@@ -295,16 +303,21 @@ It routes only inside one group of agents. With `scope: 'root'`, the default, a 
 
 ### Your own judge, or your own router
 
-A judge is any object with `evaluate({ state, questions })` that answers with probabilities. It can wrap another model or plain rules. The answers are `{ type: 'choice', choice, probabilities, confidence }`, `{ type: 'yesno', probability }` or `{ type: 'score', probabilities, confidence }`. The question ids and the state shape are listed in the [wiring guide](guide.md#83-optional-routing-layer). You can also skip the layer and declare `contextPlan` yourself.
+A judge is any object with `evaluate({ state, questions })` that answers with probabilities. It can wrap another model or plain rules. The answers are `{ type: 'choice', choice, probabilities, confidence }`, `{ type: 'yesno', probability }` or `{ type: 'score', probabilities, confidence }`. The question ids and the state shape are listed in the [wiring guide](guide.md#84-optional-routing-layer). You can also skip the layer and declare `contextPlan` yourself.
 
 ### A rule judge, to try the layer
 
-`createRuleJudge()`, or `RuleJudge()` in Python, answers without a model or a key: relevance from the words a request shares with each agent, whether files change from verbs such as fix or add, and size from the request's length. Its confidence stays at or below 0.6, so every proposal among existing agents asks for confirmation. It is a baseline, not a judge of quality; `answer(id, question, state)` may answer any question instead ([guide §8.3](guide.md#83-optional-routing-layer)).
+`createRuleJudge()`, or `RuleJudge()` in Python, answers without a model or a key: relevance from the words a request shares with each agent, whether files change from verbs such as fix or add, and size from the request's length. Its confidence stays at or below 0.6, so every proposal among existing agents asks for confirmation. It is a baseline, not a judge of quality; `answer(id, question, state)` may answer any question instead ([guide §8.3](guide.md#84-optional-routing-layer)).
 
 ```ts
 import { createRouter, createRuleJudge } from '@orchvia/sdk/routing';
 
-const router = createRouter({ orchestrator: orch, judge: createRuleJudge(), runtimes, scope: 'engine' });
+const router = createRouter({
+  orchestrator: orch,
+  judge: createRuleJudge(),
+  runtimes,
+  scope: 'engine',
+});
 ```
 
 ### TypeSafe Jev, a hosted judge (optional)

@@ -50,7 +50,7 @@ async function wait(engine: Engine, id: string, status: string) {
 }
 /** A task that reuses the session runs on it and keeps its native identity. */
 async function continuesOn(engine: Engine, ended: TaskSnapshot) {
-  const before = await session(engine, ended.sessionId);
+  const before = await session(engine, ended.sessionId!);
   assert.ok(before.providerSessionId, 'the session has native history to continue');
   const next = (await engine.call('tasks.create', {
     spec: spec('continue', {
@@ -97,7 +97,7 @@ test('0016-S01 a crashed dispatch reconciled as interrupted leaves a session tha
     await exit;
     engine = await createEngine({ workspace, stateDir, adapters: [createFakeAdapter()] });
     assert.equal((await task(engine, crashed.id)).status, 'blocked');
-    const unknown = await session(engine, crashed.sessionId);
+    const unknown = await session(engine, crashed.sessionId!);
     assert.equal(unknown.status, 'outcome_unknown');
     await assert.rejects(resume(engine, unknown, 'too-early'), { code: 'OUTCOME_UNKNOWN' });
     await engine.call(
@@ -118,11 +118,11 @@ test('0016-S01 a crashed dispatch reconciled as interrupted leaves a session tha
     );
     const failed = await task(engine, crashed.id);
     assert.deepEqual([failed.status, failed.reason], ['failed', 'reconciled_interrupted']);
-    const paused = await session(engine, crashed.sessionId);
+    const paused = await session(engine, crashed.sessionId!);
     assert.equal(paused.status, 'paused');
     const resumed = await resume(engine, paused, 'resume');
     assert.equal(resumed.status, 'completed');
-    const idle = await session(engine, crashed.sessionId);
+    const idle = await session(engine, crashed.sessionId!);
     assert.deepEqual([idle.status, idle.pauseOrigin], ['idle', undefined]);
     assert.equal((await resume(engine, paused, 'resume')).id, resumed.id);
     assert.equal((await resume(engine, idle, 'again')).status, 'noop');
@@ -156,7 +156,7 @@ for (const choice of ['approve', 'deny'] as const)
       })) as TaskSnapshot;
       const pending = await wait(engine, agent.id, 'waiting_approval');
       await engine.call('sessions.control', {
-        target: target(await session(engine, agent.sessionId)),
+        target: target(await session(engine, agent.sessionId!)),
         command: { action: 'pause' },
         idempotencyKey: 'pause',
       });
@@ -169,7 +169,7 @@ for (const choice of ['approve', 'deny'] as const)
         idempotencyKey: 'decide',
       });
       const ended = await wait(engine, agent.id, choice === 'approve' ? 'completed' : 'failed');
-      const paused = await session(engine, agent.sessionId);
+      const paused = await session(engine, agent.sessionId!);
       assert.deepEqual([paused.status, paused.pauseOrigin], ['paused', 'client']);
       await assert.rejects(
         engine.call('sessions.control', {
@@ -196,7 +196,7 @@ for (const choice of ['approve', 'deny'] as const)
       });
       active = false;
       await resume(engine, paused, 'resume');
-      assert.equal((await session(engine, agent.sessionId)).status, 'idle');
+      assert.equal((await session(engine, agent.sessionId!)).status, 'idle');
       await continuesOn(engine, ended);
     } finally {
       await engine.close({ mode: 'interrupt', timeoutMs: 1000 });

@@ -2,6 +2,8 @@
 
 Date: 2026-10-02. Status: approved by the owner on 2026-10-02 (D-obs-1 option 1, D-warn-1 option 1, D-obs-2 option 1: 15 seconds, not 5). Release: the next one; it is not released on its own. Environments: macOS and Linux. Storage schema 3 and wire 2.0 are unchanged. Evidence: [TDD-0063](../tdd/0063-marker-time-and-environment-warning.md). Follows [SPEC-0062](0062-stop-look-order-and-remote-network.md) and [SPEC-0061](0061-review-second-batch.md) V03.
 
+> Section W was removed before any release contained it: [SPEC-0065](0065-host-tasks.md) B02 changes the default in 0.2.0, the first release after this specification.
+
 ## Why
 
 - **A dispatch ended unproven on a busy machine.** A stop marker's observation lists processes with `lsof`, and its time was the adapter's `closeTimeoutMs` (Codex) or `cleanupTimeoutMs` (Claude), one second by default. A host that ran its whole test suite at once saw a dispatch end with `outcome_unknown: Execution stop or local cleanup is unconfirmed`; the observation's record was `reason: 'unlisted'` with no holder and no stray: `lsof` had not answered within the second. With 5,000 ms it happened less, and under full load a Claude dispatch's stop was still unproven in 2 runs of 4; with 15,000 ms, in none of 4. This project's own tests had long given such observations 15 to 20 seconds.

@@ -29,7 +29,7 @@ try {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
   const input = host.submissions()[0];
-  const beforeNativeAcceptance = await client.sessions.get(task.initial.sessionId);
+  const beforeNativeAcceptance = await client.sessions.get(task.initial.sessionId!);
   host.act(input.dispatchId, 'accept');
   host.act(input.dispatchId, 'finish');
   let beforeApproval: string | undefined;
