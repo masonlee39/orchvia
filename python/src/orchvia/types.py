@@ -99,7 +99,7 @@ _WIRE_TO_PYTHON = {
     "reasonCode": "reason_code", "submittedAt": "submitted_at", "taskIds": "task_ids",
     "permissionProfile": "permission_profile",
     "dependencyTaskIds": "dependency_task_ids", "parentTaskId": "parent_task_id", "expiresAt": "expires_at",
-    "hostTasks": "host_tasks",
+    "hostTasks": "host_tasks", "budgetRaise": "budget_raise",
     "rootTaskId": "root_task_id", "writeScope": "write_scope", "writePaths": "write_paths",
     "ruleRefs": "rule_refs", "maxRepairs": "max_repairs", "verificationRules": "verification_rules",
     "verificationAttempts": "verification_attempts", "cwdRelative": "cwd_relative",

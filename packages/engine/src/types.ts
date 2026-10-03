@@ -241,6 +241,14 @@ export interface TaskCompletion {
   /** The host's result, at most 262144 UTF-8 bytes; later tasks read it as a dependency result. */
   result?: string;
 }
+/** The result of a `tasks.raiseBudget` operation (SPEC-0066 B05). */
+export interface TaskRaiseBudgetResult {
+  taskId: string;
+  previousMaxCost: string;
+  maxCost: string;
+  /** The tasks of the tree that are paused with TASK_BUDGET_EXHAUSTED; the host resumes them. */
+  pausedTaskIds: string[];
+}
 /** The command of `sessions.control`; the engine accepts no other action (SPEC-0027 T02). */
 export interface SessionControlCommand {
   action: 'pause' | 'resume' | 'stop';
@@ -419,6 +427,8 @@ export type WorkflowFeature =
   | 'reconcileRecordedResult'
   /** SPEC-0065: host tasks (`executor: 'host'`) and `tasks.complete`. */
   | 'hostTasks'
+  /** SPEC-0066: `tasks.raiseBudget`. */
+  | 'budgetRaise'
   /** SPEC-0048 S01: `sessions.steer`. */
   | 'steer';
 /** A model's request that the host hand work to a session outside its subtree (SPEC-0014 H). */

@@ -186,6 +186,14 @@ class _Tasks:
     async def cancel(self, task_id: str, *, idempotency_key: str | None = None) -> OperationHandle:
         return OperationHandle(self._client, await self._client._mutate("tasks.cancel", {"taskId": task_id}, idempotency_key))
 
+    async def raise_budget(self, task_id: str, max_cost: str, *, idempotency_key: str | None = None) -> OperationHandle:
+        """Raises the max cost of a root task's budget, and of the copies its unfinished children took
+        (SPEC-0066). It only raises. The operation's result names, in pausedTaskIds, the tasks of the
+        tree that are paused with TASK_BUDGET_EXHAUSTED; resume the ones that should go on."""
+        await self._client._require_workflow("budget_raise")
+        return OperationHandle(self._client, await self._client._mutate(
+            "tasks.raiseBudget", {"taskId": task_id, "maxCost": max_cost}, idempotency_key))
+
     async def complete(self, task_id: str, *, outcome: str, result: str | None = None,
                        idempotency_key: str | None = None) -> OperationHandle:
         """Ends a host task (executor="host") that waits for the host, with the host's result
@@ -715,7 +723,7 @@ class Orchestrator:
             raise OrchestrationError("VALIDATION_ERROR", "idempotency_key must be a nonempty string")
         key = key or str(uuid4())
         scope = "local"
-        if method in {"tasks.resume", "tasks.cancel", "tasks.complete"}:
+        if method in {"tasks.resume", "tasks.cancel", "tasks.complete", "tasks.raiseBudget"}:
             scope = params.get("taskId")
         elif method in {"sessions.control", "sessions.reconcile", "sessions.fork", "sessions.compact", "sessions.rotate"}:
             target = params.get("target")

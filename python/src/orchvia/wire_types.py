@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 c2cc7235c644e0319266c1e63ace0887678270d212eabf2f2230f46d4f4917d6. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 e4251695863d637b5816057187bb33b58c44d74d8117fc09f86c78ecf0804d98. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -657,6 +657,19 @@ class TaskCompleteResult(TypedDict):
     taskId: str
     status: Literal["completed", "failed"]
 
+class TaskRaiseBudgetParams(TypedDict):
+    taskId: str
+    maxCost: str
+    expectedStoreId: NotRequired[str]
+    idempotencyKey: str
+    requestDigest: NotRequired[str]
+
+class TaskRaiseBudgetResult(TypedDict):
+    taskId: str
+    previousMaxCost: str
+    maxCost: str
+    pausedTaskIds: list[str]
+
 class SessionSteerParamsTarget(TypedDict):
     sessionId: str
     expectedGeneration: int
@@ -847,6 +860,7 @@ class WorkflowCapability(TypedDict):
     reconcileRecordedResult: NotRequired[Literal[True]]
     steer: NotRequired[Literal[True]]
     hostTasks: NotRequired[Literal[True]]
+    budgetRaise: NotRequired[Literal[True]]
 
 class SteerTurnEndedData(TypedDict):
     dispatchId: str

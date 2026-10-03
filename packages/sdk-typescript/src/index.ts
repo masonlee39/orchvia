@@ -598,6 +598,15 @@ export class Orchestrator {
      * host's result. Fails with TASK_NOT_READY while its dependencies are unfinished, with
      * TASK_EXPIRED after its `expiresAt`, and with STALE_TARGET once it ended.
      */
+    /**
+     * SPEC-0066: raises the `maxCost` of a root task's budget, and of the copies its unfinished
+     * children took. It only raises. The operation's result names the tasks of the tree that are
+     * paused with TASK_BUDGET_EXHAUSTED; resume the ones that should go on.
+     */
+    raiseBudget: async (taskId: string, maxCost: string, options?: MutationOptions) => {
+      this.requireWorkflow('budgetRaise');
+      return this.operation('tasks.raiseBudget', taskId, { taskId, maxCost }, options);
+    },
     complete: async (taskId: string, completion: TaskCompletion, options?: MutationOptions) => {
       this.requireWorkflow('hostTasks');
       return this.operation('tasks.complete', taskId, { taskId, ...completion }, options);

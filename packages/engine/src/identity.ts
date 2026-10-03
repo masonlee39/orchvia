@@ -5,6 +5,7 @@ export const MUTATIONS = new Set([
   'tasks.resume',
   'tasks.cancel',
   'tasks.complete',
+  'tasks.raiseBudget',
   'messages.send',
   'sessions.open',
   'sessions.fork',

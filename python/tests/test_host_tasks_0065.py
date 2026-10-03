@@ -68,6 +68,36 @@ class HostTaskTests(unittest.IsolatedAsyncioTestCase):
                 failed = await failing.get()
                 self.assertEqual((failed.status, failed.reason), ("failed", "host_reported_failure"))
 
+    async def test_0066_b06_without_the_flag_the_sdk_refuses_before_sending(self):
+        fixture = Path(__file__).with_name("fake_protocol_server.py")
+        async with Orchestrator.local(engine_command=[sys.executable, str(fixture), "--mode", "normal"],
+                                      poll_interval=0.005) as orch:
+            with self.assertRaises(OrchestrationError) as raised:
+                await orch.tasks.raise_budget("task", "2")
+            self.assertEqual(raised.exception.code, "UNSUPPORTED_CAPABILITY")
+
+    @unittest.skipUnless(NODE and HOST.is_file(), "requires Node.js 22.18+ and the local host source")
+    async def test_0066_b06_a_root_budget_is_raised_with_the_copies_its_children_took(self):
+        with tempfile.TemporaryDirectory(prefix="orch-py-raise-", dir=str(Path("/tmp").resolve())) as directory:
+            base = Path(directory).resolve()
+            (base / "workspace").mkdir()
+            (base / "state").mkdir()
+            async with Orchestrator.local(engine_command=[NODE, str(HOST), str(base / "workspace"), str(base / "state")],
+                                          poll_interval=0.005, request_timeout=5) as orch:
+                budget = {"currency": "USD", "maxCost": "5", "reservePerDispatch": "1"}
+                run = await orch.tasks.create(TaskSpec("one run", executor="host", budget=budget))
+                step = await orch.tasks.create(TaskSpec("a step", executor="host", parent_task_id=run.id))
+                done = await (await orch.tasks.raise_budget(run.id, "8", idempotency_key="raise")).wait(timeout=5)
+                self.assertEqual(done.status, "completed")
+                # Raw JSON keeps the wire's names.
+                self.assertEqual(done.result, {"taskId": run.id, "previousMaxCost": "5", "maxCost": "8",
+                                               "pausedTaskIds": []})
+                self.assertEqual((await run.get()).spec.budget.max_cost, "8")
+                self.assertEqual((await step.get()).spec.budget.max_cost, "8")
+                with self.assertRaises(OrchestrationError) as raised:
+                    await orch.tasks.raise_budget(run.id, "7")
+                self.assertEqual(raised.exception.code, "VALIDATION_ERROR")
+
 
 if __name__ == "__main__":
     unittest.main()
