@@ -607,7 +607,7 @@ await orch.tasks.complete(gate.id, outcome="completed", result="Approved by Alex
 - `settle()` returns `{ reason: 'waiting_host' }` for a host task that waits for the host.
 - `limits.maxHostTasks` (default 1000) bounds the host tasks that are `waiting_host`.
 
-**One budget for one run.** Create a host task with a `budget` as the run's root and each step with `parentTaskId` set to it. The steps inherit the budget, which counts the whole tree, and `costs.get` with `scope: 'tree'`, `usage.summary` and `tasks.list({ parentTaskId })` read the run. Cancelling or completing the root does not change its children: cancel each step that should stop.
+**One budget for one run.** Create a host task with a `budget` as the run's root and each step with `parentTaskId` set to it. The steps inherit the budget, which counts the whole tree, and `costs.get` with `scope: 'tree'`, `usage.summary` and `tasks.list({ parentTaskId })` read the run. Cancelling or completing the root does not change its children: cancel each step that should stop. A root that ended still takes new steps. A host task above a step is not a level of the delegation depth (`tools.maxDepth`).
 
 **Older engines.** A store that holds a host task records the feature `hostTasks`, and engines from 0.1.26 to 0.1.33 refuse to open it with `STORE_TOO_NEW`.
 

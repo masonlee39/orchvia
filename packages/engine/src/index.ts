@@ -1577,13 +1577,19 @@ class LocalEngine implements Engine {
                 callId,
               );
             } else {
+              // Depth counts the runtime tasks above; a host task in the chain, such as the
+              // root of a run, is not a level of delegation (SPEC-0065 H12).
               let depth = 0;
               for (
-                let current: TaskSnapshot | undefined = parent;
-                current?.spec.parentTaskId;
-                current = this.store.get<TaskSnapshot>('tasks', current.spec.parentTaskId)
+                let above = parent.spec.parentTaskId
+                  ? this.store.get<TaskSnapshot>('tasks', parent.spec.parentTaskId)
+                  : undefined;
+                above;
+                above = above.spec.parentTaskId
+                  ? this.store.get<TaskSnapshot>('tasks', above.spec.parentTaskId)
+                  : undefined
               )
-                if (++depth >= (this.config.tools?.maxDepth ?? 4))
+                if (above.spec.executor !== 'host' && ++depth >= (this.config.tools?.maxDepth ?? 4))
                   this.toolLimit(flight, 'DELEGATION_DEPTH_LIMIT');
               if (
                 descendants.filter((task) => task.spec.parentTaskId === parent.id).length >=
