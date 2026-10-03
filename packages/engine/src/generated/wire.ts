@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 c2cc7235c644e0319266c1e63ace0887678270d212eabf2f2230f46d4f4917d6. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 e4251695863d637b5816057187bb33b58c44d74d8117fc09f86c78ecf0804d98. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
@@ -661,6 +661,20 @@ export type TaskCompleteResult = {
   status: 'completed' | 'failed';
   [key: string]: unknown;
 };
+export type TaskRaiseBudgetParams = {
+  taskId: string;
+  maxCost: string;
+  expectedStoreId?: string;
+  idempotencyKey: string;
+  requestDigest?: string;
+};
+export type TaskRaiseBudgetResult = {
+  taskId: string;
+  previousMaxCost: string;
+  maxCost: string;
+  pausedTaskIds: Array<string>;
+  [key: string]: unknown;
+};
 export type SessionSteerParams = {
   target: {
     sessionId: string;
@@ -824,6 +838,7 @@ export type WorkflowCapability = {
   reconcileRecordedResult?: true;
   steer?: true;
   hostTasks?: true;
+  budgetRaise?: true;
   [key: string]: unknown;
 };
 export type SteerTurnEndedData = {

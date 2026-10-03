@@ -2934,6 +2934,63 @@
       },
       "required": ["taskId", "status"]
     },
+    "TaskRaiseBudgetParams": {
+      "description": "SPEC-0066 B01: raises the maxCost of a root task's budget.",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "maxCost": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "A decimal amount greater than the current maxCost."
+        },
+        "expectedStoreId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "requestDigest": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": ["taskId", "maxCost", "idempotencyKey"],
+      "additionalProperties": false
+    },
+    "TaskRaiseBudgetResult": {
+      "description": "The result of a tasks.raiseBudget operation (SPEC-0066 B05).",
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "previousMaxCost": {
+          "type": "string"
+        },
+        "maxCost": {
+          "type": "string"
+        },
+        "pausedTaskIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tasks of the tree paused with TASK_BUDGET_EXHAUSTED, in creation order."
+        }
+      },
+      "required": ["taskId", "previousMaxCost", "maxCost", "pausedTaskIds"]
+    },
     "SessionSteerParams": {
       "description": "SPEC-0048 S01: adds text to the running turn of one dispatch.",
       "type": "object",
@@ -3811,6 +3868,9 @@
           "const": true
         },
         "hostTasks": {
+          "const": true
+        },
+        "budgetRaise": {
           "const": true
         }
       },

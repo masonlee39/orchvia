@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 c2cc7235c644e0319266c1e63ace0887678270d212eabf2f2230f46d4f4917d6. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 e4251695863d637b5816057187bb33b58c44d74d8117fc09f86c78ecf0804d98. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -2957,6 +2957,63 @@ export const protocolSchema = {
       },
       required: ['taskId', 'status'],
     },
+    TaskRaiseBudgetParams: {
+      description: "SPEC-0066 B01: raises the maxCost of a root task's budget.",
+      type: 'object',
+      properties: {
+        taskId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        maxCost: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 64,
+          description: 'A decimal amount greater than the current maxCost.',
+        },
+        expectedStoreId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        idempotencyKey: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 256,
+        },
+        requestDigest: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 64,
+        },
+      },
+      required: ['taskId', 'maxCost', 'idempotencyKey'],
+      additionalProperties: false,
+    },
+    TaskRaiseBudgetResult: {
+      description: 'The result of a tasks.raiseBudget operation (SPEC-0066 B05).',
+      type: 'object',
+      properties: {
+        taskId: {
+          type: 'string',
+        },
+        previousMaxCost: {
+          type: 'string',
+        },
+        maxCost: {
+          type: 'string',
+        },
+        pausedTaskIds: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Tasks of the tree paused with TASK_BUDGET_EXHAUSTED, in creation order.',
+        },
+      },
+      required: ['taskId', 'previousMaxCost', 'maxCost', 'pausedTaskIds'],
+    },
     SessionSteerParams: {
       description: 'SPEC-0048 S01: adds text to the running turn of one dispatch.',
       type: 'object',
@@ -3841,6 +3898,9 @@ export const protocolSchema = {
           const: true,
         },
         hostTasks: {
+          const: true,
+        },
+        budgetRaise: {
           const: true,
         },
       },

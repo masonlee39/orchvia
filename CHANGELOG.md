@@ -2,6 +2,14 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
+## [0.2.1] - 2026-10-04
+
+Raising a run's budget (SPEC-0066).
+
+### Added
+
+- `tasks.raiseBudget(taskId, maxCost)` (Python: `tasks.raise_budget(task_id, max_cost)`) raises the `maxCost` of a root task's budget, for a run that reached it. In the same transaction it raises the copies that the root's unfinished children took, which bound each child's own costs. It only raises, keeps the currency and the reserve, and resumes nothing: the operation's result has `previousMaxCost`, `maxCost` and `pausedTaskIds`, the tasks of the tree that are paused with `TASK_BUDGET_EXHAUSTED`, for the host to resume. The root gets the event `task.budget_raised`. `initialize` announces `workflow.budgetRaise`.
+
 ## [0.2.0] - 2026-10-04
 
 Tasks that the host completes (SPEC-0065), and a stop marker's waits that last at least fifteen seconds (SPEC-0063). This is a minor release: it changes the type of three task fields and the default environment of checks. Read "Breaking" before upgrading.

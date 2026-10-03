@@ -3078,6 +3078,7 @@ class LocalEngine implements Engine {
               reconcileRecordedResult: true,
               steer: true,
               hostTasks: true,
+              budgetRaise: true,
             },
             providers: [...this.adapters.keys()],
             lifecycle: { version: 1, reconcile: 'owner-attestation', durableDeadlines: true },
@@ -3656,6 +3657,63 @@ class LocalEngine implements Engine {
             );
             this.taskEvent(task, op.id);
             op.result = { taskId: id, status: outcome };
+          },
+        );
+        this.kick();
+        return op;
+      }
+      case 'tasks.raiseBudget': {
+        fields(p, ['taskId', 'maxCost', 'idempotencyKey']);
+        const id = string(p.taskId, 'taskId', 128);
+        const maxCost = string(p.maxCost, 'maxCost', 64);
+        const units = moneyUnits(maxCost);
+        const op = this.operation(
+          method,
+          id,
+          string(p.idempotencyKey, 'idempotencyKey'),
+          { taskId: id, maxCost },
+          (op) => {
+            const root = this.task(id);
+            op.targetId = id;
+            if (root.spec.parentTaskId !== undefined || !root.spec.budget)
+              fail('VALIDATION_ERROR', 'Only a root task with a budget has its budget raised');
+            const previousMaxCost = root.spec.budget.maxCost,
+              previous = moneyUnits(previousMaxCost);
+            if (units <= previous)
+              fail('VALIDATION_ERROR', 'maxCost must be greater than the current one', {
+                maxCost: previousMaxCost,
+              });
+            const raisedTaskIds: string[] = [],
+              pausedTaskIds: string[] = [];
+            // The root's tree in creation order, through tasks_root. Invariant 3: the root and the
+            // copies its children took (SPEC-0066 B03) change in this one transaction.
+            for (const row of this.store.db
+              .prepare(
+                "SELECT data FROM tasks WHERE json_extract(data,'$.rootTaskId')=? ORDER BY rowid",
+              )
+              .all(id) as { data: string }[]) {
+              const task = JSON.parse(row.data) as TaskSnapshot;
+              if (task.status === 'paused' && task.reason === 'TASK_BUDGET_EXHAUSTED')
+                pausedTaskIds.push(task.id);
+              if (
+                task.id === id ||
+                terminalTasks.has(task.status) ||
+                !task.spec.budget ||
+                moneyUnits(task.spec.budget.maxCost) !== previous
+              )
+                continue;
+              task.spec.budget.maxCost = maxCost;
+              this.saveTask(task);
+              raisedTaskIds.push(task.id);
+            }
+            root.spec.budget.maxCost = maxCost;
+            this.saveTask(root);
+            this.store.event(
+              'task.budget_raised',
+              { previousMaxCost, maxCost, currency: root.spec.budget.currency, raisedTaskIds },
+              { taskId: id, sessionId: root.sessionId, operationId: op.id },
+            );
+            op.result = { taskId: id, previousMaxCost, maxCost, pausedTaskIds };
           },
         );
         this.kick();
