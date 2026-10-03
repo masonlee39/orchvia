@@ -20,7 +20,7 @@ import type {
   RuntimeInput,
 } from '../../packages/engine/src/types.ts';
 
-// SPEC-0063: a stop marker's waits last at least 5 seconds, whatever closeTimeoutMs or
+// SPEC-0063: a stop marker's waits last at least 15 seconds, whatever closeTimeoutMs or
 // cleanupTimeoutMs is; a host with checks and no verificationEnvironment is warned once.
 
 const fixture = fileURLToPath(new URL('../fixtures/codex-local.ts', import.meta.url));
@@ -74,8 +74,9 @@ test(
   { skip: !posix },
   async (t) => {
     const dirs = await directories(t);
-    // Two listings of 0.7 seconds each: more than the configured second, far less than five.
-    await slowLsof(t, dirs.base, 700);
+    // Two listings of 3 seconds each: more than the 5 seconds 0.1.33's successor first gave, far
+    // less than 15.
+    await slowLsof(t, dirs.base, 3000);
     const observations: any[] = [];
     const adapter = createCodexAdapter({
       command: process.execPath,
@@ -106,7 +107,7 @@ test(
   { skip: !posix },
   async (t) => {
     const dirs = await directories(t);
-    await slowLsof(t, dirs.base, 700);
+    await slowLsof(t, dirs.base, 3000);
     const observations: any[] = [];
     const adapter = createClaudeAdapter({
       permissionProfile: 'workspace-write',

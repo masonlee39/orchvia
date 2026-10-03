@@ -1,4 +1,4 @@
-# TDD-0063: A stop marker's waits last at least five seconds; a warning before the default environment of checks changes
+# TDD-0063: A stop marker's waits last at least fifteen seconds; a warning before the default environment of checks changes
 
 Specification: [SPEC-0063](../specs/0063-marker-time-and-environment-warning.md).
 
@@ -13,6 +13,10 @@ A host sent the record of a dispatch that had ended unproven while its whole tes
 ## GREEN
 
 The file passes, 5 of 5. The two dispatches took 4.2 and 4.7 seconds with 1.2 seconds for each listing, close to the 5 they now have; the tests use 0.7 seconds, which is still more than the configured second for two listings.
+
+## Fifteen seconds, not five
+
+The first version gave these waits 5 seconds. The host then reported that, under full load, a Claude dispatch's stop was unproven in 2 runs of 4 with 5,000 ms and in none of 4 with 15,000 ms. With the tests' `lsof` taking 3 seconds, both O01 tests failed with `reason: 'unlisted'` after 8 seconds; with 15 seconds they pass.
 
 ## Mutations, each restored from a copy
 

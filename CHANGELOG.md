@@ -4,7 +4,7 @@ All notable changes to Orchvia are recorded here. Versions follow [Semantic Vers
 
 ## [0.2.0] - 2026-10-04
 
-Tasks that the host completes (SPEC-0065), and a stop marker's waits that last at least five seconds (SPEC-0063). This is a minor release: it changes the type of three task fields and the default environment of checks. Read "Breaking" before upgrading.
+Tasks that the host completes (SPEC-0065), and a stop marker's waits that last at least fifteen seconds (SPEC-0063). This is a minor release: it changes the type of three task fields and the default environment of checks. Read "Breaking" before upgrading.
 
 ### Breaking
 
@@ -15,7 +15,7 @@ Tasks that the host completes (SPEC-0065), and a stop marker's waits that last a
 
 ### Fixed
 
-- With `stopMarker`, a dispatch on a busy machine could end with `outcome_unknown: Execution stop or local cleanup is unconfirmed` and an observation of `reason: 'unlisted'`: the observation had the adapter's `closeTimeoutMs` or `cleanupTimeoutMs`, one second by default, and `lsof` took longer. The observation, the end of a dispatch's marker holders and the end of all markers at close now last the larger of that time and 5 seconds. They return once done, so nothing takes longer unless a listing does.
+- With `stopMarker`, a dispatch on a busy machine could end with `outcome_unknown: Execution stop or local cleanup is unconfirmed` and an observation of `reason: 'unlisted'`: the observation had the adapter's `closeTimeoutMs` or `cleanupTimeoutMs`, one second by default, and `lsof` took longer. The observation, the end of a dispatch's marker holders and the end of all markers at close now last the larger of that time and 15 seconds: a host under full load found 5 too few. They return once done, so nothing takes longer unless a listing does.
 
 - A stop marker's record said `reason: 'holders_left'` with `ended: 0` when the holders had been signalled and could not be listed again within the time. It now says `unlisted`, as when the first listing fails. A synchronous cleanup that cannot list returns `unlisted: true` (SPEC-0064).
 

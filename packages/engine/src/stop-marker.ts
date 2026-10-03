@@ -857,9 +857,10 @@ interface DispatchRecord {
 const STRAY_WAIT_MS = 3000;
 /**
  * SPEC-0063 O01: the least time a marker's waits last. They list processes with `lsof`, which
- * takes seconds on a loaded machine, and each returns once it is done.
+ * takes seconds on a loaded machine, and each returns once it is done. A host under full load
+ * found 5 seconds too few and 15 enough.
  */
-export const STOP_MARKER_MIN_MS = 5000;
+export const STOP_MARKER_MIN_MS = 15_000;
 /** SPEC-0063 O01: the time of a marker's wait, given the adapter's configured time. */
 export const stopMarkerTime = (configuredMs: number): number =>
   Math.max(configuredMs, STOP_MARKER_MIN_MS);
