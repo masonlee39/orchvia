@@ -336,7 +336,7 @@ test('0027-R05 0027-R07 info describes the store; a clean store needs no recover
     assert.equal((await orch.tasks.list({ label: 'group:alpha' })).tasks.length, 1);
     assert.equal((await orch.usage.get(f.finished.id)).records.length, 1);
     assert.ok((await orch.events.read({ limit: 10 })).events.length > 0);
-    assert.equal((await orch.sessions.get(f.review.sessionId)).id, f.review.sessionId);
+    assert.equal((await orch.sessions.get(f.review.sessionId!)).id, f.review.sessionId);
     assert.equal(
       (
         await orch.operations.lookup({

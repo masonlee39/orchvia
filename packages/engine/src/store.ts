@@ -85,9 +85,9 @@ export interface StoreOptions {
 /**
  * SPEC-0051 R02: the data features this engine can read. A store records a feature when it first
  * holds data an engine without it would read wrongly; an engine refuses a store with a feature it
- * does not know. The list is empty until a release adds data an older engine would misread.
+ * does not know. `hostTasks`: tasks without a session (SPEC-0065 R01).
  */
-export const STORE_FEATURES: readonly string[] = Object.freeze([]);
+export const STORE_FEATURES: readonly string[] = Object.freeze(['hostTasks']);
 
 /** Refuses a store that recorded a feature this engine does not know (SPEC-0051 R02). */
 function checkFeatures(recorded: string | undefined, known: readonly string[]): void {
@@ -355,6 +355,10 @@ export class Store {
         );
         this.db.exec(
           "CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(json_extract(data, '$.spec.parentTaskId'))",
+        );
+        // Host tasks that can still expire (SPEC-0065 E03).
+        this.db.exec(
+          "CREATE INDEX IF NOT EXISTS tasks_host_expiry ON tasks(json_extract(data,'$.spec.expiresAt')) WHERE json_extract(data,'$.spec.expiresAt') IS NOT NULL AND json_extract(data,'$.status') NOT IN ('completed','failed','cancelled')",
         );
         this.db.exec(
           "CREATE INDEX IF NOT EXISTS tasks_session ON tasks(json_extract(data, '$.sessionId'))",
@@ -961,7 +965,7 @@ export class Store {
   event(
     type: string,
     data: Record<string, Json>,
-    refs: { taskId?: string; sessionId?: string; operationId?: string } = {},
+    refs: { taskId?: string; sessionId?: string | null; operationId?: string } = {},
   ): EventEnvelope {
     return this.write(() => {
       const event: EventEnvelope = {

@@ -147,7 +147,7 @@ test('0013-M01 engine providers accept an allowed model list and reject invalid 
   const f = await setup();
   try {
     for (const model of ['alpha', 'beta'])
-      assert.equal((await create(f.engine, spec(model))).spec.runtime.model, model);
+      assert.equal((await create(f.engine, spec(model))).spec.runtime!.model, model);
     await assert.rejects(create(f.engine, spec('gamma')), { code: 'VALIDATION_ERROR' });
   } finally {
     await f.close();
@@ -586,7 +586,7 @@ test('0013-M06 fork parameters are negotiated, schema-valid and exposed by the T
       })
     ).wait({ timeoutMs: 2000 });
     const done = await orch.tasks.get(handle.id);
-    const from = await orch.sessions.get(done.sessionId);
+    const from = await orch.sessions.get(done.sessionId!);
     const forked = await orch.sessions.fork(target(from), done.artifactRefs[0], {
       model: 'beta',
       acknowledgeCacheLoss: true,

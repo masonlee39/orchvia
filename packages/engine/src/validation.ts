@@ -119,6 +119,50 @@ export function contextPlan(value: unknown, defaultQueueWaitMs = 30000): Context
     ),
   };
 }
+/** SPEC-0065 H01, E01: a task that the host completes has no runtime fields. */
+function hostTaskSpec(s: Record<string, unknown>): TaskSpec {
+  if (s.executor !== 'host') fail('VALIDATION_ERROR', "executor must be 'host'");
+  for (const field of [
+    'runtime',
+    'acceptance',
+    'writeScope',
+    'writePath',
+    'contextPlan',
+    'contextEstimate',
+  ])
+    if (s[field] !== undefined) fail('VALIDATION_ERROR', `A host task has no ${field}`);
+  const dependencies =
+    s.dependencyTaskIds === undefined
+      ? undefined
+      : strings(s.dependencyTaskIds, 'dependencyTaskIds');
+  if (dependencies && new Set(dependencies).size !== dependencies.length)
+    fail('VALIDATION_ERROR', 'Dependencies must be unique');
+  let expiresAt: string | undefined;
+  if (s.expiresAt !== undefined) {
+    const at = typeof s.expiresAt === 'string' ? Date.parse(s.expiresAt) : NaN;
+    if (
+      typeof s.expiresAt !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})$/.test(
+        s.expiresAt,
+      ) ||
+      Number.isNaN(at)
+    )
+      fail('VALIDATION_ERROR', 'expiresAt must be an ISO 8601 time with a time zone');
+    expiresAt = new Date(at).toISOString();
+  }
+  return {
+    goal: string(s.goal, 'goal'),
+    executor: 'host',
+    ...(dependencies?.length ? { dependencyTaskIds: dependencies } : {}),
+    ...(s.parentTaskId !== undefined
+      ? { parentTaskId: string(s.parentTaskId, 'parentTaskId', 128) }
+      : {}),
+    ...(s.label !== undefined ? { label: label(s.label) } : {}),
+    ...(s.metadata !== undefined ? { metadata: metadata(s.metadata) } : {}),
+    ...(s.budget !== undefined ? { budget: validateBudget(s.budget) } : {}),
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
+  };
+}
 export function taskSpec(value: unknown, defaultQueueWaitMs?: number): TaskSpec {
   const s = object(value, 'spec');
   fields(s, [
@@ -134,7 +178,11 @@ export function taskSpec(value: unknown, defaultQueueWaitMs?: number): TaskSpec 
     'contextEstimate',
     'label',
     'metadata',
+    'executor',
+    'expiresAt',
   ]);
+  if (s.executor !== undefined) return hostTaskSpec(s);
+  if (s.expiresAt !== undefined) fail('VALIDATION_ERROR', 'Only a host task has expiresAt');
   const runtime = object(s.runtime, 'runtime');
   fields(runtime, ['provider', 'model']);
   const acceptance = object(s.acceptance, 'acceptance');

@@ -80,7 +80,7 @@ async function scenario(t: any, reuse: boolean) {
           contextPlan: {
             requestedMode: 'reuse' as const,
             independent: true,
-            candidateSessionId: done.sessionId,
+            candidateSessionId: done.sessionId!,
           },
         }
       : {}),

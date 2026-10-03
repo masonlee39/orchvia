@@ -68,7 +68,7 @@ test(
       assert.deepEqual(await restarted.next(), { kind: 'ready', submissions: 0 });
       client = await connectOrchestrator({ socketPath });
       const task = await client.tasks.get(original.taskId as string);
-      const session = await client.sessions.get(task.sessionId);
+      const session = await client.sessions.get(task.sessionId!);
       const scheduler = await client.scheduler.get();
       assert.equal(task.status, 'blocked');
       assert.equal(session.status, 'outcome_unknown');

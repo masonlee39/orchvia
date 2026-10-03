@@ -96,7 +96,7 @@ test(
   { timeout: 10000 },
   async (t) => {
     const h = await host(t);
-    const initial = await h.client.sessions.get(h.task.initial.sessionId);
+    const initial = await h.client.sessions.get(h.task.initial.sessionId!);
     const pause = await h.client.sessions.control(pauseTarget(initial), {
       action: 'pause',
       mode: 'interrupt',
@@ -205,7 +205,7 @@ test(
   { timeout: 10000 },
   async (t) => {
     const h = await host(t, 'late');
-    const session = await h.client.sessions.get(h.task.initial.sessionId);
+    const session = await h.client.sessions.get(h.task.initial.sessionId!);
     const op = await h.client.sessions.control(pauseTarget(session), {
       action: 'pause',
       mode: 'interrupt',

@@ -273,7 +273,7 @@ test(
     assert.deepEqual(client.info.capabilities.lifecycle, lifecycleCapability);
     const task = await client.tasks.create(spec, { idempotencyKey: 'socket-task' });
     const session = await eventually(
-      () => client.sessions.get(task.initial.sessionId),
+      () => client.sessions.get(task.initial.sessionId!),
       (value) => value.status === 'running' && value.providerSessionId !== null,
     );
     const operation = await client.sessions.control(target(session), {

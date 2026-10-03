@@ -1490,18 +1490,18 @@ test('0014-H01 a model can request a handoff that grants nothing by itself', asy
   const { f, a, b } = await agents(async (tools, target) => {
     const request = {
       goal: 'please review',
-      contextPlan: reuse(target.sessionId),
+      contextPlan: reuse(target.sessionId!),
       idempotencyKey: 'h1',
     };
     receipt = (await tools.call('work_delegate', request)) as typeof receipt;
     assert.deepEqual(await tools.call('work_delegate', request), receipt);
     for (const [extra, code] of [
-      [{ contextPlan: { ...reuse(target.sessionId), requestedMode: 'fork' } }, 'UNAUTHORIZED'],
+      [{ contextPlan: { ...reuse(target.sessionId!), requestedMode: 'fork' } }, 'UNAUTHORIZED'],
       [{ dependencyTaskIds: [target.id] }, 'VALIDATION_ERROR'],
       [
         {
           contextPlan: {
-            ...reuse(target.sessionId),
+            ...reuse(target.sessionId!),
             contextRefs: [{ artifactRef: target.artifactRefs[0], version: 1 }],
           },
         },
@@ -1541,7 +1541,7 @@ test('0014-H01 a model can request a handoff that grants nothing by itself', asy
       await assert.rejects(
         tools.call('work_delegate', {
           goal: 'review',
-          contextPlan: reuse(target.sessionId),
+          contextPlan: reuse(target.sessionId!),
           idempotencyKey: 'off',
         }),
         { code: 'UNAUTHORIZED' },
@@ -1568,7 +1568,7 @@ test('0030-B01 a handoff request records the time of its transaction', async () 
     async (tools, target) => {
       receipt = (await tools.call('work_delegate', {
         goal: 'please review',
-        contextPlan: reuse(target.sessionId),
+        contextPlan: reuse(target.sessionId!),
         idempotencyKey: 'timed',
       })) as { handoffId: string };
     },
@@ -1594,7 +1594,7 @@ test('0014-H02/H03 hosts resolve handoffs and requesters can read their own', as
     for (const key of ['accept', 'reject']) {
       const receipt = (await tools.call('work_delegate', {
         goal: `please ${key}`,
-        contextPlan: reuse(target.sessionId),
+        contextPlan: reuse(target.sessionId!),
         idempotencyKey: key,
       })) as { handoffId: string };
       ids.push(receipt.handoffId);
@@ -1643,7 +1643,7 @@ test('0014-H02/H03 hosts resolve handoffs and requesters can read their own', as
     const task = await create(f.engine, {
       goal: 'handed-off review',
       parentTaskId: b.id,
-      contextPlan: reuse(b.sessionId),
+      contextPlan: reuse(b.sessionId!),
     });
     await f.engine.call('handoffs.resolve', {
       handoffId: acceptId,
@@ -1688,7 +1688,7 @@ test('0014-H03 pending handoffs expire and each root holds at most 100', async (
       for (let i = 0; i < 100; i++) {
         const receipt = (await tools.call('work_delegate', {
           goal: `request ${i}`,
-          contextPlan: reuse(target.sessionId),
+          contextPlan: reuse(target.sessionId!),
           idempotencyKey: `request-${i}`,
         })) as { handoffId: string };
         first ||= receipt.handoffId;
@@ -1696,7 +1696,7 @@ test('0014-H03 pending handoffs expire and each root holds at most 100', async (
       await assert.rejects(
         tools.call('work_delegate', {
           goal: 'one too many',
-          contextPlan: reuse(target.sessionId),
+          contextPlan: reuse(target.sessionId!),
           idempotencyKey: 'over',
         }),
         { code: 'HANDOFF_LIMIT' },
@@ -1741,7 +1741,7 @@ test('0014-H04 handoffs survive restart and a backup import invalidates pending 
     handoffId = (
       (await tools.call('work_delegate', {
         goal: 'restore me',
-        contextPlan: reuse(target.sessionId),
+        contextPlan: reuse(target.sessionId!),
         idempotencyKey: 'restore',
       })) as { handoffId: string }
     ).handoffId;
@@ -1797,7 +1797,7 @@ test('0014-H05 handoff context may cite direct dependency results only', async (
     const request = (artifactRef: string, key: string) =>
       tools.call('work_delegate', {
         goal: 'continue from the upstream result',
-        contextPlan: { ...reuse(ids.b.sessionId), contextRefs: [{ artifactRef, version: 1 }] },
+        contextPlan: { ...reuse(ids.b.sessionId!), contextRefs: [{ artifactRef, version: 1 }] },
         idempotencyKey: key,
       });
     receipt = (await request(ids.upstream.artifactRefs[0], 'direct')) as typeof receipt;

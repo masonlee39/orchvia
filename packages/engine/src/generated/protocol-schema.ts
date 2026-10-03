@@ -1,4 +1,4 @@
-// Generated from schemas/protocol.schema.json; SHA-256 c4a45635e60dce32d08b7f600e16f1d00cf7f3d1eacb97b099ee3bd858c90569. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 c2cc7235c644e0319266c1e63ace0887678270d212eabf2f2230f46d4f4917d6. Do not edit.
 export const protocolSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'urn:agent-orch:protocol:2.0',
@@ -26,12 +26,17 @@ export const protocolSchema = {
     TaskSpec: {
       type: 'object',
       additionalProperties: false,
-      required: ['goal', 'runtime', 'acceptance'],
+      required: ['goal'],
       properties: {
         goal: {
           type: 'string',
           minLength: 1,
           maxLength: 65536,
+        },
+        executor: {
+          const: 'host',
+          description:
+            'The host ends the task with tasks.complete; no runtime runs it (SPEC-0065 H01).',
         },
         runtime: {
           $ref: '#/$defs/RuntimeSpec',
@@ -141,7 +146,16 @@ export const protocolSchema = {
           description:
             "The host's own JSON object, at most 4096 bytes when encoded and 16 levels deep (SPEC-0027 L01).",
         },
+        expiresAt: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 64,
+          description:
+            'ISO 8601 time at which a host task that has not ended fails as host_task_expired (SPEC-0065 E).',
+        },
       },
+      description:
+        "A task for a runtime needs runtime and acceptance. A host task (executor: 'host') has neither, nor writeScope, writePath, contextPlan or contextEstimate (SPEC-0065 H01).",
     },
     TaskStatus: {
       enum: [
@@ -155,6 +169,7 @@ export const protocolSchema = {
         'cancelled',
         'waiting_dependency',
         'verifying',
+        'waiting_host',
       ],
     },
     TaskSnapshot: {
@@ -184,7 +199,8 @@ export const protocolSchema = {
           minimum: 1,
         },
         sessionId: {
-          type: 'string',
+          type: ['string', 'null'],
+          description: 'null on a host task, which has no session (SPEC-0065 H02).',
         },
         spec: {
           $ref: '#/$defs/TaskSpec',
@@ -1021,6 +1037,13 @@ export const protocolSchema = {
           type: 'integer',
           minimum: 1,
           maximum: 10000,
+        },
+        maxHostTasks: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 10000,
+          description:
+            'Host tasks that may wait for the host at once; default 1000 (SPEC-0065 H09).',
         },
         defaultMaxQueueWaitMs: {
           type: 'integer',
@@ -2885,6 +2908,55 @@ export const protocolSchema = {
       required: ['taskId', 'expectedStoreId', 'idempotencyKey'],
       additionalProperties: false,
     },
+    TaskCompleteParams: {
+      description: 'SPEC-0065 H04: ends a host task that waits for the host.',
+      type: 'object',
+      properties: {
+        taskId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        outcome: {
+          enum: ['completed', 'failed'],
+        },
+        result: {
+          type: 'string',
+          maxLength: 262144,
+          description: 'At most 262144 UTF-8 bytes.',
+        },
+        expectedStoreId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+        },
+        idempotencyKey: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 256,
+        },
+        requestDigest: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 64,
+        },
+      },
+      required: ['taskId', 'outcome', 'idempotencyKey'],
+      additionalProperties: false,
+    },
+    TaskCompleteResult: {
+      description: 'The result of a tasks.complete operation (SPEC-0065 H04).',
+      type: 'object',
+      properties: {
+        taskId: {
+          type: 'string',
+        },
+        status: {
+          enum: ['completed', 'failed'],
+        },
+      },
+      required: ['taskId', 'status'],
+    },
     SessionSteerParams: {
       description: 'SPEC-0048 S01: adds text to the running turn of one dispatch.',
       type: 'object',
@@ -3766,6 +3838,9 @@ export const protocolSchema = {
           const: true,
         },
         steer: {
+          const: true,
+        },
+        hostTasks: {
           const: true,
         },
       },

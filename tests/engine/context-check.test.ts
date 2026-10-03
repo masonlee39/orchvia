@@ -315,7 +315,7 @@ test('0020-K05 the router leaves out collected and damaged results, and the prop
     const proposal = await router.route({
       goal: 'Summarize the notes',
       acceptance,
-      members: [old, damaged, kept].map((task) => task.sessionId),
+      members: [old, damaged, kept].map((task) => task.sessionId!),
       rootTaskId: r.id,
       needsWrites: false,
     });
@@ -357,7 +357,7 @@ test('0020-K06 without the capability the router keeps checking sizes only and s
     const request = {
       goal: 'Summarize the notes',
       acceptance,
-      members: [kept.sessionId],
+      members: [kept.sessionId!],
       rootTaskId: r.id,
       needsWrites: false,
     };

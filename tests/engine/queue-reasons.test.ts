@@ -158,7 +158,7 @@ test('0028-B01 0028-B02 a task that reuses a session waits for the session, then
     });
     await held(f, child.id, {
       reason: 'session_busy',
-      sessionId: waiting.sessionId,
+      sessionId: waiting.sessionId!,
       taskIds: [parent.id],
     });
     const approval = (await f.engine.call('approvals.get', {
@@ -347,7 +347,7 @@ test('AC-0055-C01 cancelling a task that does not run lets the task queued behin
     });
     await held(f, child.id, {
       reason: 'session_busy',
-      sessionId: waiting.sessionId,
+      sessionId: waiting.sessionId!,
       taskIds: [parent.id],
     });
     await f.engine.call('tasks.cancel', { taskId: parent.id, idempotencyKey: 'cancel-parent' });

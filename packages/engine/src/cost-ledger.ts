@@ -78,11 +78,12 @@ export class CostLedger {
     reserve?: string;
     currency?: string;
   } {
+    // Only a task that a runtime runs is dispatched, so it has a runtime (SPEC-0065 H02).
+    const runtime = task.spec.runtime!;
     const pricing = this.pricing.find(
-      (p) => p.provider === task.spec.runtime.provider && p.model === task.spec.runtime.model,
+      (p) => p.provider === runtime.provider && p.model === runtime.model,
     );
-    const context =
-      this.config.contextLimits?.[`${task.spec.runtime.provider}/${task.spec.runtime.model}`];
+    const context = this.config.contextLimits?.[`${runtime.provider}/${runtime.model}`];
     if (context) {
       const estimate = task.spec.contextEstimate;
       if (!estimate) return { reason: 'CONTEXT_ESTIMATE_REQUIRED' };

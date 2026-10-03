@@ -485,7 +485,7 @@ branch = await orch.sessions.fork(target, snapshot_ref, model="claude-haiku-4-5"
                                   acknowledge_cache_loss=True)
 ```
 
-Checks use owner-registered verificationRules with ID/version/argv/canonical cwd/time/output/profile/success criteria. The task freezes their digest at admission. Checks run after runtime stop, capture baseline hashes and output, and require all checks and dependencies to pass. Failed checks consume a finite repair/turn budget. Unconfirmed verifier cleanup retains execution/write ownership until explicit owner evidence. Registered commands run as the local user; baseline checks detect mutation afterward and are not an OS sandbox. **A check runs outside every sandbox, on a workspace that a member has just changed**, so a rule that runs the workspace's own code (a test command, a build script) runs what the member wrote. By default its command inherits the host's whole environment, credentials included. With `verificationEnvironment: 'minimal'` it gets only `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `USER`, `LOGNAME` and `SHELL` (on Windows also `SystemRoot`, `PATHEXT`, `TEMP`, `TMP` and `USERPROFILE`), and the host variables that `verificationInheritEnv` names, up to 64; both are read when the command starts. The default becomes `'minimal'` with the next minor version, so a host whose checks need a variable should name it now. Until a host sets `verificationEnvironment`, an engine with rules emits the process warning `ORCHVIA_VERIFICATION_ENVIRONMENT_DEFAULT` once ([SPEC-0063](./specs/0063-marker-time-and-environment-warning.md) W). A rule's `permissionProfile` is recorded and has no effect ([SPEC-0061](./specs/0061-review-second-batch.md) V). The baselines are computed without holding the engine's thread, and a cancelled verification stops between two files ([SPEC-0061](./specs/0061-review-second-batch.md) B). Startup, store switches and configuration loading check only a rule's shape, including that its paths do not leave the workspace by name. Paths are resolved when a rule is registered and when a task that uses it is admitted: a path that cannot be resolved refuses the task with `INVALID_WORKSPACE_SCOPE`, and the message names the rule, the path and the system error code. A path removed after admission makes that check fail ([SPEC-0017](./specs/0017-audit-corrections.md) A01).
+Checks use owner-registered verificationRules with ID/version/argv/canonical cwd/time/output/profile/success criteria. The task freezes their digest at admission. Checks run after runtime stop, capture baseline hashes and output, and require all checks and dependencies to pass. Failed checks consume a finite repair/turn budget. Unconfirmed verifier cleanup retains execution/write ownership until explicit owner evidence. Registered commands run as the local user; baseline checks detect mutation afterward and are not an OS sandbox. **A check runs outside every sandbox, on a workspace that a member has just changed**, so a rule that runs the workspace's own code (a test command, a build script) runs what the member wrote. From 0.2.0 its command gets the minimal environment by default ([SPEC-0065](./specs/0065-host-tasks.md) B02); with `verificationEnvironment: 'inherit'` it inherits the host's whole environment, credentials included. With `'minimal'` it gets only `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `USER`, `LOGNAME` and `SHELL` (on Windows also `SystemRoot`, `PATHEXT`, `TEMP`, `TMP` and `USERPROFILE`), and the host variables that `verificationInheritEnv` names, up to 64; both are read when the command starts. A host whose checks need another variable names it. A rule's `permissionProfile` is recorded and has no effect ([SPEC-0061](./specs/0061-review-second-batch.md) V). The baselines are computed without holding the engine's thread, and a cancelled verification stops between two files ([SPEC-0061](./specs/0061-review-second-batch.md) B). Startup, store switches and configuration loading check only a rule's shape, including that its paths do not leave the workspace by name. Paths are resolved when a rule is registered and when a task that uses it is admitted: a path that cannot be resolved refuses the task with `INVALID_WORKSPACE_SCOPE`, and the message names the rule, the path and the system error code. A path removed after admission makes that check fail ([SPEC-0017](./specs/0017-audit-corrections.md) A01).
 
 Rules run in order, and a verification stops at its first failed rule. When a task is dispatched again after a failed verification, its prompt lists the failed rule as one line of JSON: `ruleId`, `argv`, `exitCode`, `signal`, `timedOut`, `error`, `outputBytes`, `outputTruncated`, and `outputTail`, the end of the captured output within 4 KiB after JSON encoding. The output is labeled untrusted, and the prompt still names the evidence artifacts. **The check's output reaches the model on retry: a rule must not print secrets.** The event `verification.completed` carries `rules`, a summary of every rule that ran with the same fields except `argv`, so a host can show why a check failed. A failed rule also holds `outputTail`, the tail that the retry prompt shows, or `outputOmitted: 'limit'` when the 16 KiB for the event's failed rules ran out; **the event therefore holds what a check printed** ([SPEC-0028](./specs/0028-host-queries-and-lifecycle.md) E03, which supersedes V04). The evidence artifacts themselves have no read method on the current store ([SPEC-0022](./specs/0022-close-interrupt-and-verification-feedback.md) V01 to V03).
 
@@ -575,7 +575,43 @@ request = (await orch.handoffs.list(status="pending")).handoffs[0]
 await orch.handoffs.resolve(request.handoff_id, expected_revision=request.revision, outcome="rejected")
 ```
 
-### 8.2 Queue waits
+### 8.2 Tasks that the host completes
+
+A workflow has steps that no model runs: waiting for a person, calling a connector, waiting for a ticket, waiting until a time. A host task gives such a step the engine's dependency order, idempotency keys, events and recovery, so the host keeps no second ledger ([SPEC-0065](./specs/0065-host-tasks.md)). The engine does not call connectors, send notifications or receive outside events: the host does the step and reports its result.
+
+```ts
+const gate = await orch.tasks.create({
+  goal: 'A person approves the plan',
+  executor: 'host',
+  dependencyTaskIds: [plan.id],
+  expiresAt: new Date(Date.now() + 86_400_000).toISOString(), // optional
+});
+const build = await orch.tasks.create({ ...buildSpec, dependencyTaskIds: [gate.id] });
+// Later, when the person has answered:
+await orch.tasks.complete(gate.id, {
+  outcome: 'completed',
+  result: 'Approved by Alex: keep the old API',
+});
+```
+
+```python
+gate = await orch.tasks.create(TaskSpec("A person approves the plan", executor="host", dependency_task_ids=[plan.id]))
+await orch.tasks.complete(gate.id, outcome="completed", result="Approved by Alex: keep the old API")
+```
+
+- A host task has `goal` and may have `dependencyTaskIds`, `parentTaskId`, `label`, `metadata`, `budget` and `expiresAt`. It has no `runtime`, `acceptance`, write scope or context plan, no session (`sessionId` is `null`) and no dispatch, and it takes no execution capacity.
+- It is `waiting_dependency` until its dependencies completed, then `waiting_host` until `tasks.complete`. `outcome: 'failed'` ends it as `failed` with `host_reported_failure`; what depends on a failed, cancelled or expired host task becomes `blocked`, as for any task.
+- `result` is at most 262144 UTF-8 bytes. It is stored as an artifact; tasks that depend on the host task get it in their prompt within the dependency bounds (32 KiB each), and `contextRefs` may name it.
+- `tasks.complete` fails with `TASK_NOT_READY` while a dependency is unfinished, `TASK_EXPIRED` at or after `expiresAt`, and `STALE_TARGET` once the task ended. The first result is kept; repeat a call with the same idempotency key to retry it safely.
+- `tasks.cancel` works in every state before the end. `tasks.resume` and `messages.send` do not apply.
+- `settle()` returns `{ reason: 'waiting_host' }` for a host task that waits for the host.
+- `limits.maxHostTasks` (default 1000) bounds the host tasks that are `waiting_host`.
+
+**One budget for one run.** Create a host task with a `budget` as the run's root and each step with `parentTaskId` set to it. The steps inherit the budget, which counts the whole tree, and `costs.get` with `scope: 'tree'`, `usage.summary` and `tasks.list({ parentTaskId })` read the run. Cancelling or completing the root does not change its children: cancel each step that should stop.
+
+**Older engines.** A store that holds a host task records the feature `hostTasks`, and engines from 0.1.26 to 0.1.33 refuse to open it with `STORE_TOO_NEW`.
+
+### 8.3 Queue waits
 
 [SPEC-0015](./specs/0015-queue-waits.md) defines how long a task may wait in the queue for its first dispatch. It applies to every caller and changes behavior on upgrade.
 
@@ -594,7 +630,7 @@ const orch = await createOrchestrator({
 });
 ```
 
-### 8.3 Optional routing layer
+### 8.4 Optional routing layer
 
 [SPEC-0018](./specs/0018-routing-layer.md) adds `@orchvia/sdk/routing` and `orchvia.routing`, and [SPEC-0019](./specs/0019-routing-corrections.md) corrects it; the published packages include both. A judge answers typed questions about a request and the agents of one group. Code turns the answers into an ordinary `TaskSpec` with `contextPlan`, and the host submits it or not. The router adds no engine rule or storage. Its one engine addition is the read-only `context.checkRefs` of [SPEC-0020](./specs/0020-context-check.md), after rc.13, and every engine rule still applies to what is submitted.
 

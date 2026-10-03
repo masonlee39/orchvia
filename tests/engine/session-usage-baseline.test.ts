@@ -136,13 +136,13 @@ test('0032-E01 a dispatch’s totals are kept and the next dispatch of the sessi
   try {
     const first = await run(f.engine, 'first');
     assert.equal(f.input(first.id).usageBaseline, null, 'a new native session has no baseline');
-    const second = await run(f.engine, 'second', first.sessionId);
+    const second = await run(f.engine, 'second', first.sessionId!);
     const firstDispatch = f.inputs[0].dispatchId;
     assert.deepEqual(f.input(second.id).usageBaseline, {
       dispatchId: firstDispatch,
       totals: totalsOf(firstDispatch, `fake-${first.sessionId}`),
     });
-    const third = await run(f.engine, 'third', first.sessionId);
+    const third = await run(f.engine, 'third', first.sessionId!);
     assert.equal(f.input(third.id).usageBaseline?.dispatchId, f.input(second.id).dispatchId);
   } finally {
     await f.close();
@@ -153,8 +153,8 @@ test('0032-E02 a previous dispatch without totals leaves no baseline, never an o
   const f = await setup();
   try {
     const first = await run(f.engine, 'first');
-    await run(f.engine, 'silent', first.sessionId);
-    const third = await run(f.engine, 'third', first.sessionId);
+    await run(f.engine, 'silent', first.sessionId!);
+    const third = await run(f.engine, 'third', first.sessionId!);
     assert.equal(f.input(third.id).usageBaseline, null);
   } finally {
     await f.close();
@@ -165,8 +165,8 @@ test('0032-E03 a fork’s first dispatch receives its source’s latest totals, 
   const f = await setup();
   try {
     const first = await run(f.engine, 'first');
-    const second = await run(f.engine, 'second', first.sessionId);
-    const source = await session(f.engine, first.sessionId);
+    const second = await run(f.engine, 'second', first.sessionId!);
+    const source = await session(f.engine, first.sessionId!);
     // A native fork continues from its source's latest totals, whatever its checkpoint.
     const forked = (await f.engine.call('sessions.fork', {
       target: target(source),
@@ -186,7 +186,7 @@ test('0032-E03 a fork’s first dispatch receives its source’s latest totals, 
   const g = await setup(hold);
   try {
     const first = await run(g.engine, 'first');
-    const source = await session(g.engine, first.sessionId);
+    const source = await session(g.engine, first.sessionId!);
     const forked = (await g.engine.call('sessions.fork', {
       target: target(source),
       snapshotRef: first.artifactRefs[0],
@@ -198,7 +198,7 @@ test('0032-E03 a fork’s first dispatch receives its source’s latest totals, 
         goal: 'held source',
         runtime: { provider: 'fake', model: 'small' },
         acceptance: { mode: 'human', criteria: ['Review'] },
-        contextPlan: reuse(first.sessionId),
+        contextPlan: reuse(first.sessionId!),
       },
       idempotencyKey: crypto.randomUUID(),
     }) as Promise<TaskSnapshot>;
@@ -220,11 +220,11 @@ test('0032-E04 the totals stay inside the engine: not in snapshots, events or us
   const f = await setup();
   try {
     const first = await run(f.engine, 'first');
-    const second = await run(f.engine, 'second', first.sessionId);
+    const second = await run(f.engine, 'second', first.sessionId!);
     const kept = f.dispatches().find((row) => row.id === f.input(second.id).dispatchId)!;
     assert.deepEqual(kept.usageTotals, totalsOf(String(kept.id), `fake-${first.sessionId}`));
     const visible = JSON.stringify([
-      await session(f.engine, first.sessionId),
+      await session(f.engine, first.sessionId!),
       await f.engine.call('tasks.get', { taskId: second.id }),
       await f.engine.call('usage.get', { taskId: second.id }),
       ((await f.engine.call('events.read', { afterCursor: '0', limit: 500 })) as EventPage).events,

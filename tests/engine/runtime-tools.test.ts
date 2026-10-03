@@ -206,7 +206,7 @@ test('0012-R01 a client pause cannot be resumed by a bound runtime tool', async 
       );
       assert.equal((await session()).status, 'paused');
       const store = (engine as unknown as { store: Store }).store;
-      const legacy = store.require<SessionSnapshot>('sessions', child.sessionId);
+      const legacy = store.require<SessionSnapshot>('sessions', child.sessionId!);
       delete legacy.pauseOrigin;
       store.put('sessions', legacy.id, legacy);
       await assert.rejects(

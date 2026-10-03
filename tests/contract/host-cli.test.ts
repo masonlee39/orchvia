@@ -260,7 +260,7 @@ test(
     const client = await connectOrchestrator({ socketPath });
     try {
       const task = await client.tasks.get(created.id),
-        session = await client.sessions.get(task.sessionId);
+        session = await client.sessions.get(task.sessionId!);
       const target = {
         sessionId: session.id,
         expectedGeneration: session.generation,
@@ -284,7 +284,7 @@ test(
         'pause-K',
       ]);
       assert.equal(control.code, 0, control.stderr);
-      assert.equal((await client.sessions.get(task.sessionId)).status, 'paused');
+      assert.equal((await client.sessions.get(task.sessionId!)).status, 'paused');
       assert.equal((await client.tasks.get(created.id)).status, 'waiting_approval');
       const stale = await command([
         'control',

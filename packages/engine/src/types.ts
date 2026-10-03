@@ -5,6 +5,8 @@ export type { RuntimeTools, OrchestrationToolDefinition, OrchestrationToolName }
 export type TaskStatus =
   | 'queued'
   | 'waiting_dependency'
+  /** A host task whose dependencies completed waits for `tasks.complete` (SPEC-0065 H03). */
+  | 'waiting_host'
   | 'running'
   | 'verifying'
   | 'waiting_approval'
@@ -34,10 +36,19 @@ export interface RuntimeSpec {
 }
 export interface TaskSpec {
   goal: string;
-  runtime: RuntimeSpec;
-  acceptance:
+  /**
+   * `'host'` for a task that no runtime runs: the engine orders and records it, and the host ends
+   * it with `tasks.complete`. Such a task has no `runtime` and no `acceptance` (SPEC-0065 H01).
+   */
+  executor?: 'host';
+  /** Absent only on a host task. */
+  runtime?: RuntimeSpec;
+  /** Absent only on a host task. */
+  acceptance?:
     | { mode: 'human'; criteria: string[] }
     | { mode: 'checks'; ruleRefs: RuleReference[]; maxRepairs?: number };
+  /** When a host task that has not ended fails as `host_task_expired` (SPEC-0065 E). */
+  expiresAt?: string;
   dependencyTaskIds?: string[];
   parentTaskId?: string;
   writeScope?: string;
@@ -136,7 +147,8 @@ export interface TaskSnapshot {
   id: string;
   status: TaskStatus;
   revision: number;
-  sessionId: string;
+  /** `null` on a host task, which has no session (SPEC-0065 H02). */
+  sessionId: string | null;
   spec: TaskSpec;
   artifactRefs: string[];
   result: string | null;
@@ -222,6 +234,12 @@ export interface RegisteredVerificationRule extends FrozenVerificationRule {
 /** What `tasks.create` accepts; task snapshots hold the completed `TaskSpec` (SPEC-0027 T01). */
 export interface TaskSpecInput extends Omit<TaskSpec, 'contextPlan'> {
   contextPlan?: ContextPlanInput;
+}
+/** What `tasks.complete` takes besides the task: how a host task ended (SPEC-0065 H04). */
+export interface TaskCompletion {
+  outcome: 'completed' | 'failed';
+  /** The host's result, at most 262144 UTF-8 bytes; later tasks read it as a dependency result. */
+  result?: string;
 }
 /** The command of `sessions.control`; the engine accepts no other action (SPEC-0027 T02). */
 export interface SessionControlCommand {
@@ -399,6 +417,8 @@ export type WorkflowFeature =
   | 'usageByTask'
   /** SPEC-0045 R02: a completed attestation without `result` takes the recorded one. */
   | 'reconcileRecordedResult'
+  /** SPEC-0065: host tasks (`executor: 'host'`) and `tasks.complete`. */
+  | 'hostTasks'
   /** SPEC-0048 S01: `sessions.steer`. */
   | 'steer';
 /** A model's request that the host hand work to a session outside its subtree (SPEC-0014 H). */
@@ -971,6 +991,8 @@ export interface EngineConfig {
     maxQuarantinedDispatches?: number;
     maxLogicalSessions?: number;
     maxQueuedTasks?: number;
+    /** Host tasks that may wait for the host at once; 1..10000, default 1000 (SPEC-0065 H09). */
+    maxHostTasks?: number;
     /** Queue wait of a task whose plan does not set one; 0..604800000, default 30000 (SPEC-0015 Q04). */
     defaultMaxQueueWaitMs?: number;
   };
@@ -989,10 +1011,10 @@ export interface EngineConfig {
   clock?: EngineClock;
   verificationRules?: VerificationRule[];
   /**
-   * What a check's command gets of the host's environment (SPEC-0061 V01): `'inherit'`, the
-   * default, all of it; `'minimal'`, only `PATH`, `HOME`, `TMPDIR`, the locale, `TZ`, `USER`,
-   * `LOGNAME`, `SHELL` and `verificationInheritEnv`. A check runs outside every sandbox on what a
-   * member changed. The default becomes `'minimal'` with the next minor version.
+   * What a check's command gets of the host's environment (SPEC-0061 V01): `'minimal'`, the
+   * default (SPEC-0065 B02), only `PATH`, `HOME`, `TMPDIR`, the locale, `TZ`, `USER`,
+   * `LOGNAME`, `SHELL` and `verificationInheritEnv`; `'inherit'`, all of it. A check runs outside
+   * every sandbox on what a member changed.
    */
   verificationEnvironment?: 'inherit' | 'minimal';
   /** Names of host variables that a check's command also gets with `'minimal'` (SPEC-0061 V02). */

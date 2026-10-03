@@ -60,7 +60,7 @@ async function typed(orch: Orchestrator) {
   const configured = await orch.storage.configure({ quotaBytes: policy.quotaBytes });
   const page: StateSnapshotPage = await orch.state.snapshot();
   const rollover: RolloverRecord = await orch.stores.rollover();
-  const session = await orch.sessions.get(created.initial.sessionId);
+  const session = await orch.sessions.get(created.initial.sessionId!);
   const command: SessionControlCommand = { action: 'pause', mode: 'interrupt' };
   const target = {
     sessionId: session.id,

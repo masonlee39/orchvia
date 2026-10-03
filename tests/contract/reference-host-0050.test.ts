@@ -173,7 +173,7 @@ for (const lang of LANGS) {
     )!.cursor;
     assert.ok(Number(reviewStarted) > Number(completedAt));
     assert.match(review.result ?? '', /Untrusted dependency result/);
-    if (lang === 'ts') assert.equal(review.spec.runtime.provider, 'reviewer');
+    if (lang === 'ts') assert.equal(review.spec.runtime!.provider, 'reviewer');
     assert.deepEqual([f.dispatches(change.id), f.dispatches(review.id)], [1, 1]);
     const done = await ok(lang, dir, ['decide', '--run', 'r1', '--choice', 'approve']);
     assert.equal(done.state, 'done');
