@@ -13,6 +13,8 @@ A host asked for workflow steps that no model runs, with the engine's dependency
 - `tests/engine/review-second-batch-0061.test.ts` and `tests/contract/marker-time-0063.test.ts`, the four tests named `0065-B02`: 4 of 4 failed. With no `verificationEnvironment` the command's environment was the host's own, and an engine with rules warned.
 - `tests/contract/host-tasks-sdk-0065.test.ts` and `python/tests/test_host_tasks_0065.py` were written after the engine change; they are the cross-language coverage of H10 and H11 and have no RED of their own beyond the SDK methods that did not exist.
 
+- H12, asked for by the host after it read the interface: with `maxDepth: 1`, a step under two host tasks was refused its first delegation with `DELEGATION_DEPTH_LIMIT`. The test failed, then passed; the step's child is still refused.
+
 ## GREEN
 
 - `tests/engine/host-tasks.test.ts`: 15 of 15.

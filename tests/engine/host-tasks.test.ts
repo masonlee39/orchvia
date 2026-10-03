@@ -600,3 +600,64 @@ test('0065 invariant 1: no committed state has a queued host task', async () => 
     await f.close();
   }
 });
+
+test('0065-H12 a host task in the chain is not a level of delegation depth', async () => {
+  type Tools = { call(name: string, args: unknown): Promise<unknown> };
+  const fake = createFakeAdapter();
+  const outcomes = new Map<string, unknown>();
+  const adapter: RuntimeAdapter = {
+    ...fake,
+    async *execute(input: RuntimeInput) {
+      const goal = input.prompt.split(/\s/)[0];
+      if (goal === 'step' || goal === 'child')
+        outcomes.set(
+          goal,
+          await (input.orchestrationTools as Tools)
+            .call('work_delegate', {
+              goal: goal === 'step' ? 'child of the step' : 'grandchild',
+              contextPlan: { requestedMode: 'fresh', independent: true },
+              idempotencyKey: `from-${goal}`,
+            })
+            .then(
+              () => 'delegated',
+              (error: { code?: string }) => error.code,
+            ),
+        );
+      yield* fake.execute(input);
+    },
+  };
+  const f = await setup({ adapters: [adapter], tools: { enabled: true, maxDepth: 1 } });
+  try {
+    const run = await host(f.engine, 'one run');
+    const nested = await host(f.engine, 'a stage of the run', { parentTaskId: run.id });
+    await agent(f.engine, 'step', { parentTaskId: nested.id });
+    for (let i = 0; i < 400 && outcomes.size < 2; i++)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    // The step is the first runtime task of its chain, as a root is: it may delegate once.
+    assert.equal(outcomes.get('step'), 'delegated');
+    // Its child is one level down, and maxDepth 1 still stops it.
+    assert.equal(outcomes.get('child'), 'DELEGATION_DEPTH_LIMIT');
+  } finally {
+    await f.close();
+  }
+});
+
+test('0065-H08 a host task that ended still takes new children', async () => {
+  const f = await setup();
+  try {
+    for (const end of ['complete', 'cancel', 'fail'] as const) {
+      const run = await host(f.engine, `run ${end}`, {
+        budget: { currency: 'USD', maxCost: '5', reservePerDispatch: '1' },
+      });
+      if (end === 'cancel')
+        await f.engine.call('tasks.cancel', { taskId: run.id, idempotencyKey: key() });
+      else await complete(f.engine, run.id, { outcome: end === 'fail' ? 'failed' : 'completed' });
+      const step = await host(f.engine, 'a later step', { parentTaskId: run.id });
+      assert.equal(step.status, 'waiting_host', end);
+      assert.equal(step.rootTaskId, run.id, end);
+      assert.deepEqual(step.spec.budget, run.spec.budget, end);
+    }
+  } finally {
+    await f.close();
+  }
+});
