@@ -1,10 +1,11 @@
-// Generated from schemas/protocol.schema.json; SHA-256 c4a45635e60dce32d08b7f600e16f1d00cf7f3d1eacb97b099ee3bd858c90569. Do not edit.
+// Generated from schemas/protocol.schema.json; SHA-256 c2cc7235c644e0319266c1e63ace0887678270d212eabf2f2230f46d4f4917d6. Do not edit.
 // Structural types; validateWire enforces numeric and conditional constraints.
 export type RuntimeSpec = { provider: string; model: string };
 export type TaskSpec = {
   goal: string;
-  runtime: RuntimeSpec;
-  acceptance:
+  executor?: 'host';
+  runtime?: RuntimeSpec;
+  acceptance?:
     | { mode: 'human'; criteria: Array<string> }
     | { mode: 'checks'; ruleRefs: Array<{ id: string; version: string }>; maxRepairs?: number };
   dependencyTaskIds?: Array<string>;
@@ -18,6 +19,7 @@ export type TaskSpec = {
   metadata?: {
     [key: string]: unknown;
   };
+  expiresAt?: string;
 };
 export type TaskStatus =
   | 'queued'
@@ -29,12 +31,13 @@ export type TaskStatus =
   | 'failed'
   | 'cancelled'
   | 'waiting_dependency'
-  | 'verifying';
+  | 'verifying'
+  | 'waiting_host';
 export type TaskSnapshot = {
   id: string;
   status: TaskStatus;
   revision: number;
-  sessionId: string;
+  sessionId: string | null;
   spec: TaskSpec;
   artifactRefs: Array<string>;
   result: string | null;
@@ -233,6 +236,7 @@ export type EngineLimits = unknown &
     maxTurnsPerTask?: number;
     maxLogicalSessions?: number;
     maxQueuedTasks?: number;
+    maxHostTasks?: number;
     defaultMaxQueueWaitMs?: number;
   };
 export type LifecycleTimeouts = {
@@ -644,6 +648,19 @@ export type TaskMutationParams = {
   idempotencyKey: string;
   requestDigest?: string;
 };
+export type TaskCompleteParams = {
+  taskId: string;
+  outcome: 'completed' | 'failed';
+  result?: string;
+  expectedStoreId?: string;
+  idempotencyKey: string;
+  requestDigest?: string;
+};
+export type TaskCompleteResult = {
+  taskId: string;
+  status: 'completed' | 'failed';
+  [key: string]: unknown;
+};
 export type SessionSteerParams = {
   target: {
     sessionId: string;
@@ -806,6 +823,7 @@ export type WorkflowCapability = {
   reasoningEfforts?: true;
   reconcileRecordedResult?: true;
   steer?: true;
+  hostTasks?: true;
   [key: string]: unknown;
 };
 export type SteerTurnEndedData = {

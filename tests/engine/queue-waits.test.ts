@@ -198,11 +198,11 @@ test('0015-Q01 pause time does not count, a resume restarts the wait and its ret
     await wait(f.engine, hold.id, 'running');
     const task = await create(f.engine, 'queued', { contextPlan: plan(2000) });
     assert.equal(task.status, 'queued');
-    await control(f.engine, task.sessionId, { action: 'pause', mode: 'interrupt' }, 'pause');
+    await control(f.engine, task.sessionId!, { action: 'pause', mode: 'interrupt' }, 'pause');
     assert.equal((await get(f.engine, task.id)).status, 'paused');
     f.time.advance(1500);
     const resumedAt = f.time.clock.wallNow();
-    const resume = await control(f.engine, task.sessionId, { action: 'resume' }, 'resume');
+    const resume = await control(f.engine, task.sessionId!, { action: 'resume' }, 'resume');
     const resumed = await get(f.engine, task.id);
     assert.equal(resumed.status, 'queued');
     restarted(resumed, resumedAt, 2000);

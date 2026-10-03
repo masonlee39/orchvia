@@ -114,7 +114,7 @@ async function setup(options: { allowCrossRootReuse?: boolean } = {}) {
     acceptance,
   });
   await approve(orch, other.id);
-  const session = async (id: string) => (await orch.tasks.get(id)).sessionId;
+  const session = async (id: string) => (await orch.tasks.get(id)).sessionId!;
   const ids = {
     root: root.id,
     auth: await session(auth.id),
@@ -260,7 +260,7 @@ test('0018-R02 root-scope proposals are accepted by the engine and never leave t
 
     const fresh = await route({ best: { fresh: 0.95 }, relevant: {} });
     const created = await router.submit(fresh);
-    assert.ok(![g.ids.auth, g.ids.payments, g.ids.review].includes(created.initial.sessionId));
+    assert.ok(![g.ids.auth, g.ids.payments, g.ids.review].includes(created.initial.sessionId!));
     assert.equal(created.initial.spec.parentTaskId, g.ids.root);
 
     const busy = await route({
@@ -289,7 +289,7 @@ test('0018-R02 root-scope proposals are accepted by the engine and never leave t
       },
     });
     await approve(g.orch, shell.id);
-    const shellSession = (await g.orch.tasks.get(shell.id)).sessionId;
+    const shellSession = (await g.orch.tasks.get(shell.id)).sessionId!;
     const kept = await route(
       { best: { 'app shell': 0.95, fresh: 0.05 }, relevant: { 'app shell': 0.9 } },
       { members: [shellSession] },

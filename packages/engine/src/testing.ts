@@ -173,7 +173,7 @@ export function registerRuntimeAdapterContract(
     { timeout: 30000 },
     async (t) => {
       const f = await harness(t, createFixture);
-      assert.equal((await session(f.engine, f.created.sessionId)).providerSessionId, null);
+      assert.equal((await session(f.engine, f.created.sessionId!)).providerSessionId, null);
       assert.ok(
         !(await events(f.engine, f.created.id)).some((e) => e.type === 'dispatch.runtime_accepted'),
       );
@@ -181,11 +181,11 @@ export function registerRuntimeAdapterContract(
       assert.equal(f.fixture.submissions().length, 1);
       await f.act('accept');
       await until(
-        async () => (await session(f.engine, f.created.sessionId)).providerSessionId !== null,
+        async () => (await session(f.engine, f.created.sessionId!)).providerSessionId !== null,
         'native acceptance',
       );
       assert.equal(
-        (await session(f.engine, f.created.sessionId)).providerSessionId,
+        (await session(f.engine, f.created.sessionId!)).providerSessionId,
         f.fixture.nativeIdentity(f.input.dispatchId).sessionId,
       );
       await f.act('confirm-tool');
@@ -227,7 +227,7 @@ export function registerRuntimeAdapterContract(
         'pre-submission rejection',
       );
       assert.equal((await scheduler(f.engine)).executionOccupied, 0);
-      assert.equal((await session(f.engine, f.created.sessionId)).providerSessionId, null);
+      assert.equal((await session(f.engine, f.created.sessionId!)).providerSessionId, null);
       assert.ok(
         !(await events(f.engine, f.created.id)).some((e) => e.type === 'dispatch.runtime_accepted'),
       );
@@ -247,7 +247,7 @@ export function registerRuntimeAdapterContract(
           async () => (await task(f.engine, f.created.id)).status === 'blocked',
           'unknown outcome',
         );
-        const current = await session(f.engine, f.created.sessionId);
+        const current = await session(f.engine, f.created.sessionId!);
         assert.equal(current.status, 'outcome_unknown');
         assert.equal(current.providerSessionId !== null, accepted);
         assert.equal((await scheduler(f.engine)).executionOccupied, 1);
@@ -327,7 +327,7 @@ export function registerRuntimeAdapterContract(
         'background exit observation',
       );
       assert.equal((await scheduler(f.engine)).quarantined, 1);
-      const current = await session(f.engine, f.created.sessionId);
+      const current = await session(f.engine, f.created.sessionId!);
       await f.engine.call(
         'sessions.reconcile',
         {
@@ -381,7 +381,7 @@ export function registerRuntimeAdapterContract(
       );
       assert.equal(budget.remainingAcceptanceMs(), 0);
       assert.equal((await scheduler(f.engine)).executionOccupied, 1);
-      assert.equal((await session(f.engine, f.created.sessionId)).providerSessionId, null);
+      assert.equal((await session(f.engine, f.created.sessionId!)).providerSessionId, null);
       assert.equal(f.fixture.submissions().length, 1);
     },
   );

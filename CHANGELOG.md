@@ -2,9 +2,16 @@
 
 All notable changes to Orchvia are recorded here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, a minor version may change the API.
 
-## [Unreleased]
+## [0.2.0] - 2026-10-04
 
-A stop marker's waits last at least five seconds, and a warning before the default environment of checks changes (SPEC-0063).
+Tasks that the host completes (SPEC-0065), and a stop marker's waits that last at least five seconds (SPEC-0063). This is a minor release: it changes the type of three task fields and the default environment of checks. Read "Breaking" before upgrading.
+
+### Breaking
+
+- `TaskSnapshot.sessionId` is `string | null`, and `TaskSpec.runtime` and `TaskSpec.acceptance` are optional, in the TypeScript types, the Python views and the wire schema. They are absent only on a host task (`spec.executor === 'host'`), which a store holds only once a host created one. Code that reads them from a task that may be a host task checks first; TypeScript code that reads them from a task it created for a runtime adds a check or `!`. In Python, `TaskSpec(goal, runtime, acceptance)` still takes them in that order.
+- `TaskStatus` has a new value, `waiting_host`, which only a host task takes.
+- A check's command gets the minimal environment by default: `verificationEnvironment` is `'minimal'` when not set, as 0.1.33 announced for this version. A host whose checks need more of its environment names the variables in `verificationInheritEnv`, or sets `verificationEnvironment: 'inherit'`.
+- A store that holds a host task records the feature `hostTasks`; engines from 0.1.26 to 0.1.33 refuse to open it (`STORE_TOO_NEW`). End or avoid host tasks before going back to an older engine with the same store.
 
 ### Fixed
 
@@ -14,7 +21,7 @@ A stop marker's waits last at least five seconds, and a warning before the defau
 
 ### Added
 
-- An engine that has verification rules and no `verificationEnvironment` emits one process warning, `ORCHVIA_VERIFICATION_ENVIRONMENT_DEFAULT`: with the next minor version the default becomes `'minimal'`. Set `'inherit'` or `'minimal'` to say which the checks need.
+- Host tasks: `tasks.create` with `spec.executor: 'host'` creates a task that no runtime runs. The engine orders it by its dependencies, records it and its events, and keeps it across restarts; it has no session, takes no execution capacity and is never dispatched. While its dependencies are unfinished it is `waiting_dependency`, then `waiting_host` until the host ends it with `tasks.complete(taskId, { outcome: 'completed' | 'failed', result? })` (Python: `tasks.complete(task_id, outcome=..., result=...)`). The result, at most 262144 bytes, is an artifact that later tasks receive as a dependency result. `spec.expiresAt` fails a host task that has not ended by then as `host_task_expired`. A host task may be the parent, and so the root and the budget, of the tasks of one run. `limits.maxHostTasks` (default 1000) bounds the host tasks that wait for the host. `initialize` announces `workflow.hostTasks`; `settle()` returns `waiting_host` for such a task. New error codes: `TASK_NOT_READY`, `TASK_EXPIRED`.
 
 ## [0.1.33] - 2026-10-02
 

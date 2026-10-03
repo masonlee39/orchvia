@@ -78,7 +78,7 @@ test('AC-0048-W01 a steer round trip returns schema-valid snapshots', async (t) 
     runtime: { provider: 'fake', model: 'fixture' },
     acceptance: { mode: 'human', criteria: ['Review'] },
   });
-  const { sessionId } = await task.get();
+  const sessionId = (await task.get()).sessionId!;
   let session = await orch.sessions.get(sessionId);
   for (let i = 0; i < 400 && !(session.activeDispatchId && session.providerSessionId); i++) {
     await new Promise((resolve) => setTimeout(resolve, 5));

@@ -289,6 +289,7 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
         'maxQuarantinedDispatches',
         'maxLogicalSessions',
         'maxQueuedTasks',
+        'maxHostTasks',
         'defaultMaxQueueWaitMs',
       ],
       'limits',
@@ -299,6 +300,7 @@ export async function loadConfig(configPath: string): Promise<HostConfig> {
       maxQuarantinedDispatches: 1024,
       maxLogicalSessions: 100000,
       maxQueuedTasks: 10000,
+      maxHostTasks: 10000,
       defaultMaxQueueWaitMs: MAX_QUEUE_WAIT_MS,
     };
     for (const [key, value] of Object.entries(parsed.limits)) {

@@ -276,7 +276,7 @@ test('AC-0061-B03 a verification cancelled during its baseline ends without runn
   assert.equal(existsSync(marker), false, 'the command did not run');
 });
 
-test('AC-0061-V01 AC-0061-V02 a minimal environment holds the listed variables, the named ones and no other', () => {
+test('AC-0061-V01 AC-0061-V02 0065-B02 a minimal environment, the default, holds the listed variables, the named ones and no other', () => {
   const environment = (verification as any).verificationEnvironment as (
     mode: unknown,
     names: unknown,
@@ -292,8 +292,14 @@ test('AC-0061-V01 AC-0061-V02 a minimal environment holds the listed variables, 
     NODE_OPTIONS: '--max-old-space-size=512',
     CI: '1',
   };
-  assert.equal(environment(undefined, undefined, host), undefined, 'inherit: the host’s own');
-  assert.equal(environment('inherit', ['CI'], host), undefined);
+  assert.equal(environment('inherit', ['CI'], host), undefined, 'inherit: the host’s own');
+  // SPEC-0065 B02: minimal is the default from 0.2.0 (SPEC-0061 V03).
+  assert.deepEqual(environment(undefined, ['CI'], host), {
+    PATH: '/usr/bin',
+    HOME: '/home/me',
+    LANG: 'C.UTF-8',
+    CI: '1',
+  });
   assert.deepEqual(environment('minimal', undefined, host), {
     PATH: '/usr/bin',
     HOME: '/home/me',
@@ -316,7 +322,7 @@ test('AC-0061-V01 AC-0061-V02 a minimal environment holds the listed variables, 
     assert.throws(() => environment(mode, names, host), { code: 'VALIDATION_ERROR' });
 });
 
-test('AC-0061-V01 a check’s command sees the host’s environment by default, and only the minimal one when asked', async (t) => {
+test('AC-0061-V01 0065-B02 a check’s command sees the minimal environment by default, and the host’s when asked', async (t) => {
   process.env.ORCH_0061_SECRET = 'from the host';
   process.env.ORCH_0061_NAMED = 'named';
   t.after(() => {
@@ -355,7 +361,16 @@ test('AC-0061-V01 a check’s command sees the host’s environment by default, 
     return 'still running';
   };
   // A check that fails with no repair left blocks its task.
-  assert.equal(await run({}), 'blocked', 'by default the command sees the secret');
+  assert.equal(
+    await run({ verificationEnvironment: 'inherit' }),
+    'blocked',
+    'inherit: the command sees the secret',
+  );
+  assert.equal(
+    await run({ verificationInheritEnv: ['ORCH_0061_NAMED'] }),
+    'completed',
+    'by default the command sees only the minimal environment and the named variables',
+  );
   assert.equal(
     await run({ verificationEnvironment: 'minimal', verificationInheritEnv: ['ORCH_0061_NAMED'] }),
     'completed',

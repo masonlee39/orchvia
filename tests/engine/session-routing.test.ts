@@ -121,7 +121,7 @@ test('AC-F02 busy reuse expiry is durable, retry does not renew it, and no late 
   try {
     const first = await create(f.engine);
     await wait(f.engine, first.id, 'waiting_approval');
-    const extra = { parentTaskId: first.id, contextPlan: plan(first.sessionId, 20) };
+    const extra = { parentTaskId: first.id, contextPlan: plan(first.sessionId!, 20) };
     const second = await create(f.engine, extra, 'busy');
     const expired = await wait(f.engine, second.id, 'blocked');
     assert.equal(expired.reason, 'SCHEDULING_BLOCKED');
@@ -143,7 +143,7 @@ test('AC-F02 only a declared fresh fallback creates another session', async () =
     await wait(f.engine, first.id, 'waiting_approval');
     const second = await create(f.engine, {
       parentTaskId: first.id,
-      contextPlan: { ...plan(first.sessionId, 0), fallbackModes: ['fresh'] },
+      contextPlan: { ...plan(first.sessionId!, 0), fallbackModes: ['fresh'] },
     });
     await wait(f.engine, second.id, 'waiting_approval');
     assert.notEqual(

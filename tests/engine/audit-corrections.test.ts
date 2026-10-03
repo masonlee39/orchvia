@@ -295,7 +295,7 @@ test('0017-A05 approving a task whose session was stopped with a pending message
     await wait(engine, task.id, 'waiting_approval');
     const message = await send(engine, task, 'finding');
     assert.equal(message.status, 'persisted');
-    await stopSession(engine, task.sessionId);
+    await stopSession(engine, task.sessionId!);
     const completed = await approve(engine, task.id);
     assert.equal(completed.status, 'completed');
     const after = (await engine.call('messages.get', { messageId: message.id })) as {
@@ -316,7 +316,7 @@ test('0017-A05 stopping an idle session expires its pending messages at once', a
     const task = await create(engine, 'reviewed');
     await wait(engine, task.id, 'waiting_approval');
     const message = await send(engine, task, 'finding');
-    await stopSession(engine, task.sessionId);
+    await stopSession(engine, task.sessionId!);
     const after = (await engine.call('messages.get', { messageId: message.id })) as {
       status: string;
     };
@@ -358,7 +358,7 @@ test('0017-A05 stopping a running session expires messages sent during the run w
     });
     await wait(engine, task.id, 'running');
     const late = await send(engine, task, 'late');
-    await stopSession(engine, task.sessionId);
+    await stopSession(engine, task.sessionId!);
     const during = (await engine.call('messages.get', { messageId: late.id })) as {
       status: string;
     };
@@ -393,7 +393,7 @@ test('0017-A05 messages to a stopped session are refused with SESSION_CLOSED', a
   try {
     const task = await create(engine, 'reviewed');
     await wait(engine, task.id, 'waiting_approval');
-    await stopSession(engine, task.sessionId);
+    await stopSession(engine, task.sessionId!);
     await assert.rejects(send(engine, task, 'late'), { code: 'SESSION_CLOSED' });
     await assert.rejects(send(engine, task, 'late'), { code: 'SESSION_CLOSED' }, 'nothing stored');
     const types = ((await engine.call('events.read', { limit: 1000 })) as EventPage).events.map(
@@ -497,7 +497,7 @@ async function handoffHost(prefix: string, clock: ManualClock, hold?: Promise<vo
     tools: { enabled: true, handoffs: true, handoffTtlMs: 60000 },
   });
   const engine = await createEngine(w.config);
-  targetSession = (await approve(engine, (await create(engine, 'agent b')).id)).sessionId;
+  targetSession = (await approve(engine, (await create(engine, 'agent b')).id)).sessionId!;
   return { w, engine, requested };
 }
 /** Expired handoffs as events report them; unlike handoff reads, events.read expires nothing. */

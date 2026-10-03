@@ -205,7 +205,7 @@ test(
     const waiting = await client.tasks.get(task.id);
     assert.equal(waiting.status, 'waiting_approval');
     const approval = await client.approvals.get(waiting.approvalId!);
-    const session = await client.sessions.get(waiting.sessionId);
+    const session = await client.sessions.get(waiting.sessionId!);
     // SPEC-0020 K04: a socket client that is not the owner may check context references.
     const refCheck = await client.context.checkRefs([
       { artifactRef: waiting.artifactRefs[0], version: 1 },

@@ -125,7 +125,7 @@ async function setup(t: any, answer?: Steer) {
         idempotencyKey: goal,
       })) as TaskSnapshot;
       const current = await until(
-        () => session(task.sessionId),
+        () => session(task.sessionId!),
         (s) => !!s.activeDispatchId && !!s.providerSessionId,
       );
       return { task, session: current };

@@ -84,6 +84,7 @@ export const TERMINAL_TASK_STATUSES = Object.freeze(['completed', 'failed', 'can
 export const ACTIVE_TASK_STATUSES = Object.freeze([
   'queued',
   'waiting_dependency',
+  'waiting_host',
   'running',
   'verifying',
   'waiting_approval',

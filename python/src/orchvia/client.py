@@ -46,7 +46,8 @@ else:
 
 class SettledTask(NamedTuple):
     """Where settling a task stopped (SPEC-0044 T01): `reason` is terminal, waiting_approval, paused
-    or blocked; `approval` is the undecided pending approval, `session` a blocked task's session."""
+    blocked, or waiting_host for a host task; `approval` is the undecided pending approval, `session` a
+    blocked task's session, None for a host task."""
     task: TaskSnapshotView
     reason: str
     approval: ApprovalRequestView | None = None
@@ -67,6 +68,11 @@ class TaskHandle(_TaskBase):
 
     async def resume(self, *, idempotency_key: str | None = None):
         return await self._client.tasks.resume(self.id, idempotency_key=idempotency_key)
+
+    async def complete(self, *, outcome: str, result: str | None = None, idempotency_key: str | None = None):
+        """Ends this host task with the host's result (SPEC-0065 H04)."""
+        return await self._client.tasks.complete(self.id, outcome=outcome, result=result,
+                                                 idempotency_key=idempotency_key)
 
     async def wait(self, *, timeout: float | None = None) -> TaskSnapshotView:
         return cast(TaskSnapshotView, await self._client._wait(lambda: self._client.tasks.get(self.id), _TASK_TERMINAL, timeout))
@@ -90,7 +96,11 @@ class TaskHandle(_TaskBase):
                     if task.status == "paused":
                         return SettledTask(task, "paused")
                     if task.status == "blocked":
-                        return SettledTask(task, "blocked", session=await client.sessions.get(task.session_id))
+                        # A host task has no session (SPEC-0065 H02).
+                        return SettledTask(task, "blocked", session=None if task.session_id is None
+                                           else await client.sessions.get(task.session_id))
+                    if task.status == "waiting_host":
+                        return SettledTask(task, "waiting_host")
                     approval_id = getattr(task, "approval_id", None)
                     if task.status == "waiting_approval" and approval_id:
                         approval = await client.approvals.get(approval_id)
@@ -143,6 +153,8 @@ class _Tasks:
             await self._client._require_workflow("write_path")
         if "label" in wire or "metadata" in wire:
             await self._client._require_workflow("labels")
+        if "executor" in wire:
+            await self._client._require_workflow("host_tasks")
         return TaskHandle(self._client, await self._client._mutate("tasks.create", {"spec": wire}, idempotency_key))
 
     async def get(self, task_id: str) -> TaskSnapshotView:
@@ -173,6 +185,17 @@ class _Tasks:
 
     async def cancel(self, task_id: str, *, idempotency_key: str | None = None) -> OperationHandle:
         return OperationHandle(self._client, await self._client._mutate("tasks.cancel", {"taskId": task_id}, idempotency_key))
+
+    async def complete(self, task_id: str, *, outcome: str, result: str | None = None,
+                       idempotency_key: str | None = None) -> OperationHandle:
+        """Ends a host task (executor="host") that waits for the host, with the host's result
+        (SPEC-0065 H04). outcome is "completed" or "failed". Fails with TASK_NOT_READY while its
+        dependencies are unfinished, TASK_EXPIRED after its expires_at, STALE_TARGET once it ended."""
+        await self._client._require_workflow("host_tasks")
+        params: dict[str, Any] = {"taskId": task_id, "outcome": outcome}
+        if result is not None:
+            params["result"] = result
+        return OperationHandle(self._client, await self._client._mutate("tasks.complete", params, idempotency_key))
 
 
 class _Sessions:
@@ -692,7 +715,7 @@ class Orchestrator:
             raise OrchestrationError("VALIDATION_ERROR", "idempotency_key must be a nonempty string")
         key = key or str(uuid4())
         scope = "local"
-        if method in {"tasks.resume", "tasks.cancel"}:
+        if method in {"tasks.resume", "tasks.cancel", "tasks.complete"}:
             scope = params.get("taskId")
         elif method in {"sessions.control", "sessions.reconcile", "sessions.fork", "sessions.compact", "sessions.rotate"}:
             target = params.get("target")

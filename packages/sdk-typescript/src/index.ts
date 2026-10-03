@@ -53,6 +53,7 @@ import type {
   VerificationRule,
   WorkflowFeature,
   ContextPlan,
+  TaskCompletion,
 } from '../../engine/src/types.ts';
 import { OrchestratorError, UnixRpcClient, type Caller, type RequestOptions } from './transport.ts';
 export { OrchestratorError } from './transport.ts';
@@ -225,7 +226,8 @@ async function waitFor<T extends { status: string }>(
 /** SPEC-0044 T01: where settling a task stopped, with what the caller needs to act. */
 export interface SettledTask {
   task: TaskSnapshot;
-  reason: 'terminal' | 'waiting_approval' | 'paused' | 'blocked';
+  /** `'waiting_host'`: a host task waits for `tasks.complete` (SPEC-0065). */
+  reason: 'terminal' | 'waiting_approval' | 'paused' | 'blocked' | 'waiting_host';
   /** The pending approval, when the task waits for one that no handler decided. */
   approval?: ApprovalRequest;
   /** The task's session, when the task is blocked: its status may be `outcome_unknown`. */
@@ -265,6 +267,10 @@ export class TaskHandle {
   cancel(options: MutationOptions = {}) {
     return this.client.tasks.cancel(this.id, options);
   }
+  /** Ends this host task with the host's result (SPEC-0065 H04). */
+  complete(completion: TaskCompletion, options: MutationOptions = {}) {
+    return this.client.tasks.complete(this.id, completion, options);
+  }
   resume(options: MutationOptions = {}) {
     return this.client.tasks.resume(this.id, options);
   }
@@ -285,8 +291,12 @@ export class TaskHandle {
           outcome = {
             task,
             reason: 'blocked',
-            session: await this.client.sessions.get(task.sessionId, request),
+            // A host task has no session (SPEC-0065 H02).
+            ...(task.sessionId !== null
+              ? { session: await this.client.sessions.get(task.sessionId, request) }
+              : {}),
           };
+        else if (task.status === 'waiting_host') outcome = { task, reason: 'waiting_host' };
         else if (task.status === 'waiting_approval' && task.approvalId) {
           const approval = await this.client.approvals.get(task.approvalId, request);
           const identity = `${approval.approvalId}:${approval.revision}`;
@@ -555,6 +565,7 @@ export class Orchestrator {
     create: async (spec: TaskSpecInput, options?: MutationOptions) => {
       if (spec.writePath !== undefined) this.requireWorkflow('writePath');
       if (spec.label !== undefined || spec.metadata !== undefined) this.requireWorkflow('labels');
+      if (spec.executor !== undefined) this.requireWorkflow('hostTasks');
       return new TaskHandle(
         this,
         await this.mutation<TaskSnapshot>('tasks.create', 'local', { spec }, options),
@@ -582,6 +593,15 @@ export class Orchestrator {
       this.operation('tasks.resume', taskId, { taskId }, options),
     cancel: (taskId: string, options?: MutationOptions) =>
       this.operation('tasks.cancel', taskId, { taskId }, options),
+    /**
+     * SPEC-0065 H04: ends a host task (`executor: 'host'`) that waits for the host, with the
+     * host's result. Fails with TASK_NOT_READY while its dependencies are unfinished, with
+     * TASK_EXPIRED after its `expiresAt`, and with STALE_TARGET once it ended.
+     */
+    complete: async (taskId: string, completion: TaskCompletion, options?: MutationOptions) => {
+      this.requireWorkflow('hostTasks');
+      return this.operation('tasks.complete', taskId, { taskId, ...completion }, options);
+    },
   };
   readonly sessions = {
     inspect: (sessionId: string, options: { timeoutMs?: number; limit?: number } = {}) =>

@@ -139,6 +139,7 @@ test('0014-X02 workflow methods round-trip over a Unix host with schema-valid pa
       reasoningEfforts: true,
       reconcileRecordedResult: true,
       steer: true,
+      hostTasks: true,
     });
     const agent = await client.tasks.create(spec('agent b'));
     let pending = await waitFor(agent.id, 'waiting_approval');
@@ -160,7 +161,7 @@ test('0014-X02 workflow methods round-trip over a Unix host with schema-valid pa
     });
     const done = await waitFor(agent.id, 'completed');
     validateWire('TaskSnapshot', done);
-    target = done.sessionId;
+    target = done.sessionId!;
     const requester = await client.tasks.create(spec('requester'));
     await waitFor(requester.id, 'waiting_approval');
     if (failure) throw failure;

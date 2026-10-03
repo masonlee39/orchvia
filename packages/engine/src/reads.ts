@@ -86,6 +86,7 @@ function pageCursor(value: unknown): number {
 const TASK_STATUSES = new Set<TaskStatus>([
   'queued',
   'waiting_dependency',
+  'waiting_host',
   'running',
   'verifying',
   'waiting_approval',

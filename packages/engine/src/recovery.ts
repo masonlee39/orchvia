@@ -64,6 +64,8 @@ export function closedSessionsWithMessages(store: Store): string[] {
 export function recoveryPending(store: Store): boolean {
   if (pendingRuntimeApprovals(store).length || pendingSteers(store).length) return true;
   for (const task of store.all<TaskSnapshot>('tasks')) {
+    // A host task has no session and nothing to recover (SPEC-0065, invariant 6).
+    if (task.sessionId === null) continue;
     const session = store.get<SessionSnapshot>('sessions', task.sessionId);
     if (session && recoveryAction(task, session)) return true;
   }

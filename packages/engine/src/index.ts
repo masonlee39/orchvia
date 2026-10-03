@@ -116,6 +116,11 @@ const realClock: EngineClock = {
   },
 };
 
+/** The session of a task that a runtime runs; a host task has none (SPEC-0065 H02, H07). */
+function sessionIdOf(task: TaskSnapshot): string {
+  if (task.sessionId === null) fail('UNSUPPORTED_CAPABILITY', 'A host task has no session');
+  return task.sessionId;
+}
 function resultText(value: unknown): string {
   if (typeof value !== 'string' || value.length > 524288)
     fail(
@@ -344,6 +349,7 @@ class LocalEngine implements Engine {
     integer(config.limits?.maxTurnsPerTask ?? 20, 'maxTurnsPerTask', 1, 1000);
     integer(config.limits?.maxLogicalSessions ?? 10000, 'maxLogicalSessions', 1, 100000);
     integer(config.limits?.maxQueuedTasks ?? 1000, 'maxQueuedTasks', 1, 10000);
+    integer(config.limits?.maxHostTasks ?? 1000, 'maxHostTasks', 1, 10000);
     integer(
       config.limits?.defaultMaxQueueWaitMs ?? 30000,
       'defaultMaxQueueWaitMs',
@@ -498,6 +504,7 @@ class LocalEngine implements Engine {
     } catch (error) {
       if (this.storageTimer) clearInterval(this.storageTimer);
       this.handoffTimer?.();
+      this.hostTaskTimer?.();
       this.store.close();
       this.controlPlane?.close();
       this.closed = true;
@@ -625,7 +632,9 @@ class LocalEngine implements Engine {
   private task(id: string): TaskSnapshot {
     return this.store.require('tasks', id);
   }
-  private dependencyState(spec: TaskSpec): 'queued' | 'waiting_dependency' | 'blocked' {
+  private dependencyState(
+    spec: TaskSpec,
+  ): 'queued' | 'waiting_host' | 'waiting_dependency' | 'blocked' {
     const visiting = new Set<string>();
     const seen = new Set<string>();
     const walk = (id: string) => {
@@ -641,7 +650,90 @@ class LocalEngine implements Engine {
     for (const id of dependencies) walk(id);
     const tasks = dependencies.map((id) => this.task(id));
     if (tasks.some((t) => ['failed', 'cancelled'].includes(t.status))) return 'blocked';
-    return tasks.every((t) => t.status === 'completed') ? 'queued' : 'waiting_dependency';
+    if (!tasks.every((t) => t.status === 'completed')) return 'waiting_dependency';
+    // Invariant 1 of SPEC-0065: a host task whose dependencies completed waits for the host.
+    return spec.executor === 'host' ? 'waiting_host' : 'queued';
+  }
+  /** SPEC-0065 H01–H03, H09: a task without a runtime, a session or a dispatch. */
+  private createHostTask(
+    method: string,
+    spec: TaskSpec,
+    payload: TaskSpec,
+    idempotencyKey: unknown,
+  ): OperationSnapshot {
+    return this.operation(
+      method,
+      'local',
+      string(idempotencyKey, 'idempotencyKey'),
+      payload,
+      (op) => {
+        this.admitWork();
+        const wall = this.wall();
+        if (spec.expiresAt !== undefined) {
+          const at = Date.parse(spec.expiresAt);
+          if (at <= wall || at > wall + 365 * 86400000)
+            fail('VALIDATION_ERROR', 'expiresAt must be later than now and within 365 days');
+        }
+        const waiting = (status: string) =>
+          (
+            this.store.db
+              .prepare(
+                `SELECT COUNT(*) AS n FROM tasks WHERE json_extract(data,'$.status') IN (${status})`,
+              )
+              .get() as { n: number }
+          ).n;
+        if (
+          waiting("'queued','waiting_dependency'") >= (this.config.limits?.maxQueuedTasks ?? 1000)
+        )
+          fail('QUEUE_CAPACITY_EXHAUSTED', 'Queued task capacity reached');
+        if (waiting("'waiting_host'") >= (this.config.limits?.maxHostTasks ?? 1000))
+          fail('QUEUE_CAPACITY_EXHAUSTED', 'Host task capacity reached');
+        const status = this.dependencyState(spec);
+        const parent = spec.parentTaskId ? this.task(spec.parentTaskId) : undefined;
+        if (parent?.spec.budget && !spec.budget) spec.budget = structuredClone(parent.spec.budget);
+        if (
+          parent?.spec.budget &&
+          spec.budget &&
+          (parent.spec.budget.currency !== spec.budget.currency ||
+            moneyUnits(spec.budget.maxCost) > moneyUnits(parent.spec.budget.maxCost))
+        )
+          fail('UNAUTHORIZED', 'Child budget exceeds its parent');
+        const id = randomUUID(),
+          time = this.time();
+        const rootTaskId = parent?.rootTaskId ?? parent?.id ?? id;
+        const task: TaskSnapshot = {
+          retryIdentity: requestIdentity.getStore(),
+          id,
+          sessionId: null,
+          spec,
+          status,
+          revision: 1,
+          artifactRefs: [],
+          result: null,
+          reason: status === 'blocked' ? 'dependency_failed' : null,
+          approvalId: null,
+          createdAt: time,
+          updatedAt: time,
+          rootTaskId,
+        };
+        // SPEC-0065 R01: an engine that does not know host tasks refuses the store.
+        this.store.recordFeature('hostTasks');
+        this.store.put('tasks', id, task);
+        op.targetId = id;
+        op.result = { taskId: id };
+        this.store.event(
+          'task.created',
+          {
+            status,
+            parentTaskId: spec.parentTaskId ?? null,
+            rootTaskId,
+            executor: 'host',
+            ...(spec.label !== undefined ? { label: spec.label } : {}),
+          },
+          { taskId: id, operationId: op.id },
+        );
+      },
+    );
   }
   /**
    * Bounded, JSON-encoded results of completed dependencies, in declared order (SPEC-0014 D01).
@@ -700,7 +792,7 @@ class LocalEngine implements Engine {
   }
   private writePaths(spec: TaskSpec): string[] {
     const writable =
-      this.config.providers?.[spec.runtime.provider]?.permissionProfile === 'workspace-write';
+      this.config.providers?.[spec.runtime!.provider]?.permissionProfile === 'workspace-write';
     if (spec.writeScope !== undefined) {
       const paths = this.config.writeScopes?.[spec.writeScope];
       if (!paths) fail('INVALID_WORKSPACE_SCOPE', 'Write scope is not registered');
@@ -815,7 +907,7 @@ class LocalEngine implements Engine {
     if (reasons.includes('RESOURCE_CLEANUP_PENDING')) return { reason: 'resource_cleanup' };
     if (reasons.includes('EXECUTION_EVIDENCE_CONFLICT')) return { reason: 'execution_conflict' };
     if (storageBlocked()) return { reason: 'storage' };
-    const session = this.session(task.sessionId);
+    const session = this.session(sessionIdOf(task));
     if (!this.sessionReady(task, session)) {
       const holders = new Set(
         (this.store.activeDispatches(session.id) as Dispatch[]).map((d) => d.taskId),
@@ -999,7 +1091,7 @@ class LocalEngine implements Engine {
     const plan = spec.contextPlan;
     if (!plan) {
       // A session the engine opens for a task takes the task's labels (SPEC-0027 L02).
-      const session = this.newSession(spec.runtime, writePaths, taskId, rootTaskId, {
+      const session = this.newSession(spec.runtime!, writePaths, taskId, rootTaskId, {
         label: spec.label,
         metadata: spec.metadata,
       });
@@ -1037,16 +1129,16 @@ class LocalEngine implements Engine {
             string(plan.snapshotRef, 'snapshotRef', 128),
           )
         : plan.requestedMode === 'fresh'
-          ? this.newSession(spec.runtime, writePaths, taskId, rootTaskId, {
+          ? this.newSession(spec.runtime!, writePaths, taskId, rootTaskId, {
               label: spec.label,
               metadata: spec.metadata,
             })
           : this.session(plan.candidateSessionId!);
     if (
-      session.provider !== spec.runtime.provider ||
-      session.model !== spec.runtime.model ||
+      session.provider !== spec.runtime!.provider ||
+      session.model !== spec.runtime!.model ||
       (session.permissionProfile ?? 'read-only') !==
-        (this.config.providers?.[spec.runtime.provider]?.permissionProfile ?? 'read-only') ||
+        (this.config.providers?.[spec.runtime!.provider]?.permissionProfile ?? 'read-only') ||
       digest(session.writePaths ?? []) !== digest(writePaths)
     )
       fail(
@@ -1246,6 +1338,58 @@ class LocalEngine implements Engine {
       },
       Math.min(Math.max(0, next - this.wall()), 2147483647),
     );
+  }
+  private hostTaskTimer?: () => void;
+  /**
+   * Fails the host tasks whose `expiresAt` passed, by the store's wall time, and arms one timer for
+   * the earliest remaining one (SPEC-0065 E02, E03). Through tasks_host_expiry.
+   */
+  private expireHostTasks(): void {
+    this.hostTaskTimer?.();
+    this.hostTaskTimer = undefined;
+    // The stored times are canonical ISO strings, which sort as their times do.
+    const now = this.time();
+    const open =
+      "FROM tasks WHERE json_extract(data,'$.spec.expiresAt') IS NOT NULL AND json_extract(data,'$.status') NOT IN ('completed','failed','cancelled') AND json_extract(data,'$.spec.expiresAt')";
+    const due = (
+      this.store.db.prepare(`SELECT rowid AS ordinal,data ${open}<=?`).all(now) as {
+        ordinal: number;
+        data: string;
+      }[]
+    )
+      .sort((a, b) => a.ordinal - b.ordinal)
+      .map((row) => JSON.parse(row.data) as TaskSnapshot);
+    if (due.length) {
+      this.store.transaction(() => {
+        for (const task of due) {
+          this.saveTask(task, 'failed', 'host_task_expired');
+          this.taskEvent(task);
+        }
+      });
+      // Invariant 5: what depended on them is blocked without another call.
+      this.kick();
+    }
+    if (this.closing || this.closed) return;
+    const next = (
+      this.store.db
+        .prepare(`SELECT MIN(json_extract(data,'$.spec.expiresAt')) AS at ${open}>?`)
+        .get(now) as { at: string | null }
+    ).at;
+    if (next === null) return;
+    this.hostTaskTimer = this.clock.setTimer(
+      () => {
+        this.hostTaskTimer = undefined;
+        this.kick();
+      },
+      Math.min(Math.max(0, Date.parse(next) - this.wall()), 2147483647),
+    );
+  }
+  private tryExpireHostTasks(): void {
+    try {
+      this.expireHostTasks();
+    } catch {
+      // Due tasks are retried by the next scheduler pass or completion.
+    }
   }
   private inSubtree(taskId: string, rootId: string): boolean {
     const seen = new Set<string>();
@@ -2241,6 +2385,7 @@ class LocalEngine implements Engine {
         reason: task.reason,
         revision: task.revision,
         ...(task.spec.label !== undefined ? { label: task.spec.label } : {}),
+        ...(task.spec.executor !== undefined ? { executor: task.spec.executor } : {}),
       },
       { taskId: task.id, sessionId: task.sessionId, operationId },
     );
@@ -2318,25 +2463,6 @@ class LocalEngine implements Engine {
     this.retiredRules = new Map(
       loaded.retired.map((rule) => [ruleKey(rule.id, rule.version), rule]),
     );
-    this.warnVerificationDefault();
-  }
-  private warnedVerificationDefault = false;
-  /**
-   * SPEC-0063 W: a host with checks that does not say what their commands inherit is told, once,
-   * that the default changes. It changes nothing else.
-   */
-  private warnVerificationDefault(): void {
-    if (
-      this.warnedVerificationDefault ||
-      !this.verificationRules.length ||
-      this.config.verificationEnvironment !== undefined
-    )
-      return;
-    this.warnedVerificationDefault = true;
-    process.emitWarning(
-      "verificationEnvironment is not set: the commands of verification rules inherit the host's whole environment. With the next minor version the default becomes 'minimal'. Set verificationEnvironment to 'inherit' or 'minimal' (and verificationInheritEnv for the variables the checks need).",
-      { code: 'ORCHVIA_VERIFICATION_ENVIRONMENT_DEFAULT' },
-    );
   }
   private recover(): void {
     this.store.transaction(() => {
@@ -2360,6 +2486,8 @@ class LocalEngine implements Engine {
         );
       }
       for (const task of this.store.all<TaskSnapshot>('tasks')) {
+        // A host task has nothing to reconcile (SPEC-0065, invariant 6).
+        if (task.sessionId === null) continue;
         const session = this.session(task.sessionId);
         const action = recoveryAction(task, session);
         if (action === 'pause_task') {
@@ -2476,7 +2604,7 @@ class LocalEngine implements Engine {
         }
         if (task.approvalId === approval.approvalId && task.status === 'waiting_approval') {
           this.saveTask(task, 'paused', 'approval_expired');
-          this.saveSession(this.session(task.sessionId), 'paused');
+          this.saveSession(this.session(sessionIdOf(task)), 'paused');
           this.taskEvent(task);
         }
         this.store.event(
@@ -2690,7 +2818,7 @@ class LocalEngine implements Engine {
     if (session.taskId === task.id) this.saveSession(session, 'idle');
     if (task.status !== 'paused') return;
     if (
-      task.spec.acceptance.mode === 'human' &&
+      task.spec.acceptance!.mode === 'human' &&
       ['approval_expired', 'reconciled_result'].includes(task.reason ?? '') &&
       task.result !== null
     ) {
@@ -2806,6 +2934,8 @@ class LocalEngine implements Engine {
     if (!this.store.degraded) {
       if (!['scheduler.get', 'scheduler.getConflict'].includes(method)) this.expireApprovals();
       this.expireMessages();
+      // SPEC-0065, invariant 6: a read after a restart applies what came due while down.
+      this.tryExpireHostTasks();
     }
     // SPEC-0027 R03: the reads that a read-only view answers go through the same code.
     if (SHARED_READS.has(method))
@@ -2941,6 +3071,7 @@ class LocalEngine implements Engine {
               reasoningEfforts: true,
               reconcileRecordedResult: true,
               steer: true,
+              hostTasks: true,
             },
             providers: [...this.adapters.keys()],
             lifecycle: { version: 1, reconcile: 'owner-attestation', durableDeadlines: true },
@@ -2957,11 +3088,18 @@ class LocalEngine implements Engine {
       case 'tasks.create': {
         fields(p, ['spec', 'idempotencyKey']);
         const spec = taskSpec(p.spec, this.defaultQueueWaitMs);
-        const adapter = this.adapters.get(spec.runtime.provider);
+        if (spec.executor === 'host') {
+          const op = this.createHostTask(method, spec, taskSpec(p.spec), p.idempotencyKey);
+          this.kick();
+          return this.task(op.targetId);
+        }
+        const runtime = spec.runtime!,
+          acceptance = spec.acceptance!;
+        const adapter = this.adapters.get(runtime.provider);
         if (!adapter) fail('VALIDATION_ERROR', 'Provider is not configured');
         const capabilities = readRuntimeCapabilities(adapter);
-        const configured = this.config.providers?.[spec.runtime.provider];
-        this.requireAllowedModel(spec.runtime);
+        const configured = this.config.providers?.[runtime.provider];
+        this.requireAllowedModel(runtime);
         if (!capabilities.permissionProfiles.includes(configured?.permissionProfile ?? 'read-only'))
           fail('UNSUPPORTED_CAPABILITY', 'Permission profile is unsupported');
         const op = this.operation(
@@ -2999,8 +3137,8 @@ class LocalEngine implements Engine {
               fail('UNAUTHORIZED', 'Child budget exceeds its parent');
             const writePaths = this.writePaths(spec);
             const rules =
-              spec.acceptance.mode === 'checks'
-                ? spec.acceptance.ruleRefs.map((ref) => {
+              acceptance.mode === 'checks'
+                ? acceptance.ruleRefs.map((ref) => {
                     const rule = this.verificationRules.find(
                       (r) => r.id === ref.id && r.version === ref.version,
                     );
@@ -3126,7 +3264,6 @@ class LocalEngine implements Engine {
         // Admission sees the rule only after its registration committed.
         if (registered) {
           this.verificationRules.push(registered);
-          this.warnVerificationDefault();
           this.runtimeRuleKeys.add(key);
           this.retiredRules.delete(key);
         }
@@ -3360,7 +3497,7 @@ class LocalEngine implements Engine {
           { taskId: id },
           (op) => {
             const task = this.task(id),
-              session = this.session(task.sessionId);
+              session = this.session(sessionIdOf(task));
             op.targetId = id;
             if (session.status === 'closed')
               fail('SESSION_CLOSED', 'Stopped sessions cannot resume an old task');
@@ -3393,7 +3530,13 @@ class LocalEngine implements Engine {
               op.status = 'noop';
               return;
             }
-            const session = this.session(task.sessionId),
+            if (task.sessionId === null) {
+              // SPEC-0065 H07: a host task has no session, turn or message to stop.
+              this.saveTask(task, 'cancelled', 'cancelled_by_client');
+              this.taskEvent(task, op.id);
+              return;
+            }
+            const session = this.session(sessionIdOf(task)),
               activeFlight = this.flights.get(session.id),
               flight = activeFlight?.taskId === task.id ? activeFlight : undefined;
             if (session.taskId === task.id && session.status === 'outcome_unknown')
@@ -3444,7 +3587,7 @@ class LocalEngine implements Engine {
           },
         );
         if (op.status === 'persisted') {
-          const flight = this.flights.get(this.task(id).sessionId);
+          const flight = this.flights.get(this.task(id).sessionId ?? '');
           if (flight?.taskId === id) {
             flight.intent = 'cancel';
             if (!flight.controlIds.includes(op.id)) {
@@ -3454,6 +3597,62 @@ class LocalEngine implements Engine {
             flight.controller.abort();
           }
         }
+        return op;
+      }
+      case 'tasks.complete': {
+        fields(p, ['taskId', 'outcome', 'result', 'idempotencyKey']);
+        const id = string(p.taskId, 'taskId', 128);
+        const outcome = p.outcome;
+        if (outcome !== 'completed' && outcome !== 'failed')
+          fail('VALIDATION_ERROR', "outcome must be 'completed' or 'failed'");
+        const result = p.result;
+        if (
+          result !== undefined &&
+          (typeof result !== 'string' || Buffer.byteLength(result) > 262144)
+        )
+          fail('VALIDATION_ERROR', 'result must be a string of at most 262144 UTF-8 bytes');
+        const key = string(p.idempotencyKey, 'idempotencyKey');
+        // Invariant 4: the file is written before the transaction that registers it.
+        if (result !== undefined) await this.store.prepareArtifact(result).catch(() => {});
+        // Invariant 3: every call expires what is due before it starts; the transaction below
+        // compares its own time, because the write above takes time.
+        const op = this.operation(
+          method,
+          id,
+          key,
+          { taskId: id, outcome, ...(result !== undefined ? { result } : {}) },
+          (op) => {
+            const task = this.task(id);
+            op.targetId = id;
+            if (task.spec.executor !== 'host')
+              fail('VALIDATION_ERROR', 'Only a host task is completed by the host');
+            if (
+              (task.status === 'failed' && task.reason === 'host_task_expired') ||
+              (!terminalTasks.has(task.status) &&
+                task.spec.expiresAt !== undefined &&
+                Date.parse(task.spec.expiresAt) <= this.wall())
+            )
+              fail('TASK_EXPIRED', 'The host task expired', { expiresAt: task.spec.expiresAt! });
+            if (terminalTasks.has(task.status)) fail('STALE_TARGET', 'Task is terminal');
+            if (task.status !== 'waiting_host')
+              fail('TASK_NOT_READY', 'The host task waits for its dependencies', {
+                status: task.status,
+              });
+            if (result !== undefined) {
+              task.artifactRefs = [this.store.artifact(result)];
+              task.result = resultPreview(result, task.artifactRefs[0]);
+            }
+            this.saveTask(
+              task,
+              outcome,
+              outcome === 'failed' ? 'host_reported_failure' : null,
+              outcome === 'completed',
+            );
+            this.taskEvent(task, op.id);
+            op.result = { taskId: id, status: outcome };
+          },
+        );
+        this.kick();
         return op;
       }
       case 'sessions.control':
@@ -3472,6 +3671,7 @@ class LocalEngine implements Engine {
           this.admitWork();
           const task = this.task(spec.taskId),
             session = this.session(spec.toSessionId);
+          if (task.sessionId === null) fail('UNSUPPORTED_CAPABILITY', 'A host task has no session');
           if (session.taskId !== task.id || task.sessionId !== session.id)
             fail('UNAUTHORIZED', 'Session is outside the target task');
           if (session.generation !== spec.expectedGeneration)
@@ -3572,7 +3772,7 @@ class LocalEngine implements Engine {
               if (decision.choice === 'revise')
                 fail('VALIDATION_ERROR', 'revise applies only to task acceptance');
               const target = approval.target;
-              const session = this.session(task.sessionId);
+              const session = this.session(sessionIdOf(task));
               if (
                 approval.status !== 'pending' ||
                 approval.revision !== decision.expectedRevision ||
@@ -3614,7 +3814,7 @@ class LocalEngine implements Engine {
             )
               fail('STALE_TARGET', 'Approval is no longer current');
             // A revision needs a session that can run it (SPEC-0017 A03).
-            if (decision.choice === 'revise' && this.session(task.sessionId).status === 'closed')
+            if (decision.choice === 'revise' && this.session(sessionIdOf(task)).status === 'closed')
               fail('SESSION_CLOSED', 'The task session is closed; approve or deny the result');
             approval.status =
               decision.choice === 'approve'
@@ -3630,8 +3830,8 @@ class LocalEngine implements Engine {
             // The request rides on the task until a dispatch that carried it returns a result.
             if (decision.choice === 'revise')
               task.revisionRequest = { approvalId: id, comment: comment! };
-            const pending = this.pendingMessages(task.sessionId);
-            const session = this.session(task.sessionId);
+            const pending = this.pendingMessages(sessionIdOf(task));
+            const session = this.session(sessionIdOf(task));
             const nextStatus =
               decision.choice === 'deny'
                 ? 'failed'
@@ -3771,10 +3971,11 @@ class LocalEngine implements Engine {
           goal: 'Open a logical session',
           acceptance: { mode: 'human', criteria: ['Logical session only'] },
         });
-        const adapter = this.adapters.get(spec.runtime.provider);
+        const runtime = spec.runtime!;
+        const adapter = this.adapters.get(runtime.provider);
         if (!adapter) fail('VALIDATION_ERROR', 'Provider is not configured');
         readRuntimeCapabilities(adapter);
-        this.requireAllowedModel(spec.runtime);
+        this.requireAllowedModel(runtime);
         const op = this.operation(
           method,
           'local',
@@ -3782,7 +3983,7 @@ class LocalEngine implements Engine {
           raw,
           (op) => {
             this.admitWork();
-            const session = this.newSession(spec.runtime, this.writePaths(spec), null, undefined, {
+            const session = this.newSession(runtime, this.writePaths(spec), null, undefined, {
               label: spec.label,
               metadata: spec.metadata,
             });
@@ -4876,13 +5077,14 @@ class LocalEngine implements Engine {
       try {
         this.expireMessages();
         this.tryExpireHandoffs();
+        this.tryExpireHostTasks();
         this.refreshDependencies();
         const queued = this.store.queuedTasks();
         if (!queued.length) return;
         let canDispatch = this.scheduler().canDispatch && !this.storage.status().backpressured;
         for (const task of queued) {
           this.armQueue(task);
-          let session = this.session(task.sessionId);
+          let session = this.session(sessionIdOf(task));
           for (
             let attempts = 0;
             attempts < 5 && task.routing && !task.routing.submittedAt;
@@ -4900,7 +5102,7 @@ class LocalEngine implements Engine {
             if (remaining > 0 || (task.routing.maxQueueWaitMs === 0 && ready)) break;
             this.expireQueue(task);
             if (task.status === 'blocked') break;
-            session = this.session(task.sessionId);
+            session = this.session(sessionIdOf(task));
           }
           if (task.status !== 'queued' || !canDispatch || !this.sessionReady(task, session))
             continue;
@@ -5467,7 +5669,7 @@ class LocalEngine implements Engine {
               { sessionId: current.id, taskId: task.id },
             );
             this.taskEvent(task);
-          } else if (task.spec.acceptance.mode === 'checks') {
+          } else if (task.spec.acceptance!.mode === 'checks') {
             const passed =
               verification?.length === task.verificationRules?.length &&
               verification?.every((r) => r.passed);
@@ -5484,7 +5686,7 @@ class LocalEngine implements Engine {
             task.verificationAttempts = (task.verificationAttempts ?? 0) + 1;
             const repair =
               !passed &&
-              task.verificationAttempts <= (task.spec.acceptance.maxRepairs ?? 0) &&
+              task.verificationAttempts <= (task.spec.acceptance!.maxRepairs ?? 0) &&
               flight.intent !== 'pause';
             this.saveTask(
               task,
@@ -5658,7 +5860,7 @@ class LocalEngine implements Engine {
           if (task.status === 'queued') {
             task.pausedByClose = { operationId: this.shutdownId!, wasRunning: false };
             this.saveTask(task, 'paused', 'owner_shutdown');
-            const session = this.session(task.sessionId);
+            const session = this.session(sessionIdOf(task));
             if (session.taskId === task.id) this.saveSession(session, 'paused');
             this.taskEvent(task);
           }
@@ -5747,6 +5949,7 @@ class LocalEngine implements Engine {
       for (const { cancel } of this.queueTimers.values()) cancel();
       this.queueTimers.clear();
       this.handoffTimer?.();
+      this.hostTaskTimer?.();
       if (this.storageTimer) clearInterval(this.storageTimer);
       this.store.close();
       this.controlPlane?.close();
@@ -5779,6 +5982,7 @@ class LocalEngine implements Engine {
     for (const { cancel } of this.queueTimers.values()) cancel();
     this.queueTimers.clear();
     this.handoffTimer?.();
+    this.hostTaskTimer?.();
     if (this.storageTimer) clearInterval(this.storageTimer);
     await this.storage.settled();
     await this.store.writesSettled();

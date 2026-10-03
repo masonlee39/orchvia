@@ -34,7 +34,7 @@ async function run(task: Spec | TaskSnapshot) {
 
 try {
   const editor = await run({ goal: 'Keep a consistent tone', runtime, acceptance });
-  const lead = await run({ goal: leadGoal(editor.sessionId), runtime, acceptance });
+  const lead = await run({ goal: leadGoal(editor.sessionId!), runtime, acceptance });
 
   const [helper] = (await orch.tasks.list({ parentTaskId: lead.id })).tasks;
   console.log(`1. The lead delegated "${helper!.spec.goal}": ${helper!.status} for the host`);
@@ -53,7 +53,7 @@ try {
     contextPlan: {
       requestedMode: 'reuse',
       independent: true,
-      candidateSessionId: editor.sessionId,
+      candidateSessionId: editor.sessionId!,
     },
   });
   await orch.handoffs.resolve(request!.handoffId, {

@@ -1,4 +1,4 @@
-"""Generated from schemas/protocol.schema.json; SHA-256 c4a45635e60dce32d08b7f600e16f1d00cf7f3d1eacb97b099ee3bd858c90569. Do not edit.
+"""Generated from schemas/protocol.schema.json; SHA-256 c2cc7235c644e0319266c1e63ace0887678270d212eabf2f2230f46d4f4917d6. Do not edit.
 Wire dictionaries use camelCase. Use the SDK dataclasses for snake_case requests.
 """
 from __future__ import annotations
@@ -26,8 +26,9 @@ class TaskSpecMetadata(TypedDict):
 
 class TaskSpec(TypedDict):
     goal: str
-    runtime: RuntimeSpec
-    acceptance: Union["TaskSpecAcceptanceChoice1", "TaskSpecAcceptanceChoice2"]
+    executor: NotRequired[Literal["host"]]
+    runtime: NotRequired[RuntimeSpec]
+    acceptance: NotRequired[Union["TaskSpecAcceptanceChoice1", "TaskSpecAcceptanceChoice2"]]
     dependencyTaskIds: NotRequired[list[str]]
     parentTaskId: NotRequired[str]
     writeScope: NotRequired[str]
@@ -37,6 +38,7 @@ class TaskSpec(TypedDict):
     writePath: NotRequired[str]
     label: NotRequired[str]
     metadata: NotRequired[TaskSpecMetadata]
+    expiresAt: NotRequired[str]
 
 class TaskSnapshotRevisionRequest(TypedDict):
     approvalId: str
@@ -50,7 +52,7 @@ class TaskSnapshot(TypedDict):
     id: str
     status: TaskStatus
     revision: int
-    sessionId: str
+    sessionId: str | None
     spec: TaskSpec
     artifactRefs: list[str]
     result: str | None
@@ -223,6 +225,7 @@ class EngineLimits(TypedDict):
     maxTurnsPerTask: NotRequired[int]
     maxLogicalSessions: NotRequired[int]
     maxQueuedTasks: NotRequired[int]
+    maxHostTasks: NotRequired[int]
     defaultMaxQueueWaitMs: NotRequired[int]
 
 class LifecycleTimeouts(TypedDict):
@@ -642,6 +645,18 @@ class TaskMutationParams(TypedDict):
     idempotencyKey: str
     requestDigest: NotRequired[str]
 
+class TaskCompleteParams(TypedDict):
+    taskId: str
+    outcome: Literal["completed", "failed"]
+    result: NotRequired[str]
+    expectedStoreId: NotRequired[str]
+    idempotencyKey: str
+    requestDigest: NotRequired[str]
+
+class TaskCompleteResult(TypedDict):
+    taskId: str
+    status: Literal["completed", "failed"]
+
 class SessionSteerParamsTarget(TypedDict):
     sessionId: str
     expectedGeneration: int
@@ -831,6 +846,7 @@ class WorkflowCapability(TypedDict):
     reasoningEfforts: NotRequired[Literal[True]]
     reconcileRecordedResult: NotRequired[Literal[True]]
     steer: NotRequired[Literal[True]]
+    hostTasks: NotRequired[Literal[True]]
 
 class SteerTurnEndedData(TypedDict):
     dispatchId: str
@@ -870,7 +886,7 @@ class DispatchProgressData(TypedDict):
     durationMs: NotRequired[int | None]
     exitCode: NotRequired[int | None]
 
-TaskStatus: TypeAlias = Literal["queued", "running", "waiting_approval", "paused", "blocked", "completed", "failed", "cancelled", "waiting_dependency", "verifying"]
+TaskStatus: TypeAlias = Literal["queued", "running", "waiting_approval", "paused", "blocked", "completed", "failed", "cancelled", "waiting_dependency", "verifying", "waiting_host"]
 SessionStatus: TypeAlias = Literal["idle", "running", "pausing", "paused", "closed", "outcome_unknown"]
 OperationStatus: TypeAlias = Literal["persisted", "completed", "noop", "rejected", "failed", "outcome_unknown"]
 RoutingMode: TypeAlias = Literal["continue", "parallel_tools", "reuse", "fork", "fresh"]

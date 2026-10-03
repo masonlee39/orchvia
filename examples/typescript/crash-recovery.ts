@@ -66,7 +66,7 @@ try {
   });
   try {
     const task = await orch.tasks.get(taskId);
-    const session = await orch.sessions.get(task.sessionId);
+    const session = await orch.sessions.get(task.sessionId!);
     console.log(`2. After the restart: task ${task.status}, session ${session.status}`);
 
     // A real owner first checks that the runtime's processes ended and what they changed.
